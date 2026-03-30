@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0f1020" />
+  
+  <!-- 预加载关键资源 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+  
+  <!-- 缓存控制 -->
+  <meta http-equiv="Cache-Control" content="max-age=3600, must-revalidate" />
+  <title>miss</title>
+  <!--
+    ============================================================
+    aifriend/index.html — H5 MVP 前端入口（当前直连本地 FastAPI 后端）
+    ============================================================
+    当前已落地：
+    - 角色广场 / 角色详情 / 聊天页 / 我的页面
+    - 邮箱登录 / 自动注册 / 登录态恢复
+    - SSE 流式打字机输出
+    - 结构化长期记忆 + 最近消息窗口
+    - 聊天页右上角微信风格更多菜单
+    - 查看聊天记录 / 清空聊天记录 / 修改备注
+    ============================================================
+    结构设计原则（不变）：
+    1. 页面 = 独立 <section id="page-*">，每个页面自包含
+    2. 底部导航 = NAV_CONFIG 数据驱动
+    3. 角色卡 = CHARACTERS 数组数据驱动
+    4. 聊天页 = 最小核心容器，可后续挂入语音/历史等
+    5. 我的页面 = .setting-card 可插拔卡片区
+    6. CSS 变量集中在 :root，换肤一处改全局
+    ============================================================
+  -->
+  <link rel="stylesheet" href="frontend/style.css?v=20260330a" />
+</head>
+<body>
+  <!-- ============================================================
+       手机外壳
+  ============================================================ -->
+  <div class="phone-shell">
+
+    <!-- ============================================================
+         PAGE 1: 首页
+    ============================================================ -->
+    <section class="page active" id="page-home">
+      <div class="page-topbar">
+        <h1>miss</h1>
+        <div class="subtitle">沉浸陪伴 · 长期记忆 · 微信打开即用</div>
+      </div>
+
+      <div style="padding:16px 16px 0">
+        <!-- Hero 介绍 -->
+        <div class="hero-card">
+          <div class="hero-badge">✦ 4个免费角色 · 可先试聊</div>
+          <h2>那个会慢慢懂你的他<br/>正在等你开口</h2>
+          <p>选择一位专属角色，他会逐步记住你的偏好、关系进展和重要话题，让下一次打开不再像第一次见面。</p>
+          <div class="hero-actions">
+            <button class="btn btn-primary" onclick="App.nav('square')">选择角色</button>
+            <button class="btn btn-ghost"   onclick="App.navToLastChat()">开始聊天</button>
+          </div>
+        </div>
+
+        <!-- 核心特性列表 -->
+        <div class="section-title">为什么选这里 <span class="hint">核心优势</span></div>
+        <div class="feature-list">
+          <div class="feature-item">
+            <div class="feature-icon">💬</div>
+            <div>
+              <h4>角色感稳定，不失忆</h4>
+              <p>每个角色有独立人设、说话风格、禁忌和开场白，不是普通聊天机器人。</p>
+            </div>
+          </div>
+          <div class="feature-item">
+            <div class="feature-icon">🧠</div>
+            <div>
+              <h4>记住关键偏好和进展</h4>
+              <p>会整理你在意的人、事和互动变化，把真正影响后续聊天的内容留下来，而不是堆一堆流水账。</p>
+            </div>
+          </div>
+          <div class="feature-item">
+            <div class="feature-icon">📱</div>
+            <div>
+              <h4>微信打开即用，不折腾</h4>
+              <p>不用下载 App，打开网页就能先试聊；登录后再持续保存聊天记录和长期记忆。</p>
+            </div>
+          </div>
+          <!-- 扩展位：后续可加 TTS语音、会员特权等 feature-item -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         PAGE 2: 角色广场
+    ============================================================ -->
+    <section class="page" id="page-square">
+      <div class="page-topbar">
+        <h1>选择角色</h1>
+        <div class="subtitle">点击查看详情 · 开启专属陪伴</div>
+      </div>
+      <div style="padding:0 16px">
+        <!-- 推荐横幅（动态渲染，有角色时展示第一个） -->
+        <div id="featured-banner" style="display:none;margin-top:14px"></div>
+        <!-- 角色卡网格 -->
+        <div id="char-grid" class="char-grid" style="margin-top:14px;"></div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         PAGE 3: 聊天页
+    ============================================================ -->
+    <section class="page" id="page-chat">
+      <!-- 聊天顶栏 -->
+      <div class="chat-topbar">
+        <div class="chat-back" onclick="App.nav('square')">←</div>
+        <div id="chat-avatar" class="chat-avatar">顾</div>
+        <div class="chat-meta">
+          <div id="chat-name" class="chat-name">顾沉</div>
+          <div id="chat-raw-name" class="chat-secondary-name">原名：顾沉</div>
+          <div id="chat-sign" class="chat-sign">冷感总裁，控制欲强，但只对你温柔。</div>
+        </div>
+        <div class="chat-topbar-right" onclick="ChatMenu.toggle()" title="更多">···</div>
+      </div>
+
+      <!-- 关系状态栏（好感度 + 阶段 + 心情，AI 每轮自动更新） -->
+      <div id="chat-state-bar" class="chat-state-bar" style="display:none">
+        <div class="state-bar-inner">
+          <div class="state-affection">
+            <span class="state-label">好感度</span>
+            <div class="affection-bar-wrap">
+              <div class="affection-bar-bg">
+                <div id="affection-bar-fill" class="affection-bar-fill" style="width:30%"></div>
+              </div>
+              <span id="affection-value" class="affection-value">30</span>
+            </div>
+          </div>
+          <div id="state-phase" class="state-pill state-phase">陌生人</div>
+          <div id="state-mood" class="state-pill state-mood">平静</div>
+        </div>
+      </div>
+
+      <!-- 角色状态面板（从 AI 输出的状态栏文字里解析，可折叠） -->
+      <div id="char-status-panel" class="char-status-panel" style="display:none">
+        <div class="csp-header" onclick="Chat.toggleStatusPanel()">
+          <span class="csp-title">📋 角色状态</span>
+          <span class="csp-arrow" id="csp-arrow">▲</span>
+        </div>
+        <div class="csp-body" id="csp-body">
+          <!-- 字段由 JS 动态渲染 -->
+        </div>
+      </div>
+
+      <!-- 消息列表 -->
+      <div class="chat-messages" id="chat-messages"></div>
+
+      <!-- 输入区 -->
+      <div class="chat-composer">
+        <div class="composer-inner">
+          <textarea
+            id="chat-input"
+            class="composer-input"
+            placeholder="和他说说话……"
+            rows="1"
+          ></textarea>
+          <button class="send-btn" id="send-btn" onclick="Chat.send()"><span class="send-icon">➤</span></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         PAGE 4: 我的
+    ============================================================ -->
+    <section class="page" id="page-mine">
+      <div class="page-topbar">
+        <h1>我的</h1>
+      </div>
+      <div style="padding:16px 16px 0">
+
+        <div id="profile-header" class="profile-header" style="display:none">
+          <div class="profile-avatar" id="profile-avatar-char">你</div>
+          <div>
+            <div class="profile-name" id="profile-name">用户昵称</div>
+            <div class="profile-sub"  id="profile-email">账号信息</div>
+          </div>
+        </div>
+
+        <div class="auth-row" id="auth-row">
+          <button class="btn btn-primary" id="login-btn"  onclick="Auth.openLogin()">登录 / 注册</button>
+          <button class="btn btn-ghost"   id="logout-btn" onclick="Auth.logout()" style="display:none">退出登录</button>
+        </div>
+
+        <div class="setting-card">
+          <div class="setting-row static">
+            <div class="setting-row-icon">🧠</div>
+            <div class="setting-row-text">
+              <div class="row-label">聊天记录与长期记忆</div>
+              <div class="row-hint">登录后会持续保存聊天记录、备注和关键记忆；游客模式更适合先快速试聊。</div>
+            </div>
+          </div>
+          <div class="setting-row static">
+            <div class="setting-row-icon">💬</div>
+            <div class="setting-row-text">
+              <div class="row-label">试聊说明</div>
+              <div class="row-hint">未登录可先试聊 5 句，确认喜欢这个角色后，再登录继续长期聊天体验。</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 扩展位：会员状态卡片 / 消费记录 / 邀请好友 / 联系客服 -->
+
+      </div>
+    </section>
+
+  </div><!-- /phone-shell -->
+
+  <!-- 复制成功 Toast -->
+  <div class="copy-toast" id="copy-toast">已复制</div>
+
+  <!-- 通用消息 Toast（替代 alert，不破坏氛围感） -->
+  <div class="ui-toast" id="ui-toast"></div>
+
+  <!-- 通用确认 Modal（替代 window.confirm） -->
+  <div class="modal-overlay" id="confirm-modal">
+    <div class="modal-sheet confirm-sheet">
+      <div class="modal-handle"></div>
+      <div class="confirm-title" id="confirm-title"></div>
+      <div class="confirm-body"  id="confirm-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost"   id="confirm-cancel-btn">取消</button>
+        <button class="btn btn-danger"  id="confirm-ok-btn">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       底部导航
+  ============================================================ -->
+  <nav class="bottom-nav" id="bottom-nav"></nav>
+
+  <!-- 聊天页右上角更多菜单 -->
+  <div class="wechat-menu-overlay" id="chat-menu-overlay" onclick="ChatMenu.close(event)">
+    <div class="wechat-menu">
+      <div class="wechat-menu-group">
+        <button class="wechat-menu-item" onclick="ChatMenu.openHistory()">
+          <span class="wechat-menu-icon">🕘</span>
+          <span>查看聊天记录</span>
+        </button>
+        <button class="wechat-menu-item danger" onclick="ChatMenu.clearChat()">
+          <span class="wechat-menu-icon">🗑</span>
+          <span>清空聊天记录</span>
+        </button>
+      </div>
+      <div class="wechat-menu-group">
+        <button class="wechat-menu-item" onclick="ChatMenu.openRemark()">
+          <span class="wechat-menu-icon">🏷</span>
+          <span>修改备注</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 聊天记录弹窗 -->
+  <div class="modal-overlay" id="history-modal" onclick="ChatMenu.closeHistory(event)">
+    <div class="modal-sheet history-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-title">回忆记录</div>
+      <div class="modal-sub">按时间顺序查看你们之间完整的聊天过程。</div>
+      <div id="history-list" class="history-list"></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" onclick="ChatMenu.closeHistory()">我知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 修改备注弹窗 -->
+  <div class="modal-overlay" id="remark-modal" onclick="ChatMenu.closeRemark(event)">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <div class="modal-title">修改备注</div>
+      <div class="modal-sub">备注是你自己看到的名字，会优先显示在聊天页顶部。</div>
+      <input class="input-field" id="input-remark" type="text" maxlength="40" placeholder="比如：阿沉 / 哥哥 / 1号男友" />
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="ChatMenu.closeRemark()">取消</button>
+        <button class="btn btn-primary" onclick="ChatMenu.saveRemark()">保存备注</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       登录弹窗
+  ============================================================ -->
+  <div class="modal-overlay" id="login-modal" onclick="Auth.closeLogin(event)">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <!-- Tab 切换：登录 / 注册 -->
+      <div class="auth-tabs">
+        <button class="auth-tab active" id="tab-login"    onclick="Auth.switchTab('login')">登录</button>
+        <button class="auth-tab"        id="tab-register" onclick="Auth.switchTab('register')">注册</button>
+      </div>
+      <div class="modal-sub" id="auth-modal-sub">欢迎回来，登录后聊天记录持续保存。</div>
+      <input class="input-field" id="input-email"    type="email"    placeholder="邮箱" />
+      <input class="input-field" id="input-nickname" type="text"     placeholder="昵称（可选，不填用邮箱前缀）" style="display:none" />
+      <input class="input-field" id="input-password" type="password" placeholder="密码（至少 6 位）" />
+      <!-- 忘记密码链接 -->
+      <div style="text-align: right; margin: -8px 0 16px;">
+        <a href="/forgot-password.html" style="font-size: 13px; color: var(--pink); text-decoration: none; opacity: 0.9; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.9'">忘记密码？</a>
+      </div>
+      <!-- 扩展位：微信/手机号一键登录 -->
+      <div class="modal-actions">
+        <button class="btn btn-ghost"   onclick="Auth.closeLogin()">取消</button>
+        <button class="btn btn-primary" id="auth-submit-btn" onclick="Auth.doSubmit()">确认登录</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       剧情线选择弹窗（多开场白角色专用）
+  ============================================================ -->
+  <div class="modal-overlay" id="greeting-select-modal" onclick="GreetingSelect.close(event)">
+    <div class="modal-sheet greeting-select-sheet">
+      <div class="modal-handle"></div>
+      <div class="greeting-select-header">
+        <div class="greeting-select-title">选择一条剧情线开始</div>
+        <div class="greeting-select-desc">每条剧情线都是不同的开始，选择后将重置当前聊天记录。</div>
+      </div>
+      <div id="greeting-list" class="greeting-list"></div>
+      <div class="char-detail-actions" style="padding-top:0">
+        <button class="btn btn-ghost" onclick="GreetingSelect.close()">返回</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       角色详情弹窗
+  ============================================================ -->
+  <div class="modal-overlay" id="char-detail-modal" onclick="CharDetail.close(event)">
+    <div class="modal-sheet">
+      <div class="modal-handle"></div>
+      <!-- 封面 -->
+      <div class="char-detail-cover" id="detail-cover">
+        <div class="char-detail-cover-inner">
+          <div class="char-detail-name" id="detail-name">角色名</div>
+          <div class="char-detail-sign" id="detail-sign">签名</div>
+        </div>
+      </div>
+      <!-- 标签 -->
+      <div class="char-detail-tags" id="detail-tags"></div>
+      <!-- 人物简介 -->
+      <div class="char-detail-section">
+        <div class="char-detail-section-title">关于他</div>
+        <p id="detail-bio"></p>
+      </div>
+      <!-- 开场白预览 -->
+      <div class="char-detail-section" id="detail-opening-section" style="display:none">
+        <div class="char-detail-section-title">他会这样和你说话</div>
+        <div id="detail-opening" class="detail-opening-preview"></div>
+      </div>
+      <!-- 行动按钮 -->
+      <div class="char-detail-actions">
+        <button class="btn btn-ghost" onclick="CharDetail.close()">再看看</button>
+        <button class="btn btn-primary" id="detail-chat-btn" onclick="CharDetail.startChat()">开始聊天 →</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============================================================
+       JS 逻辑
+       ============================================================
+       模块：
+       - App        ：路由 / 导航 / 初始化
+       - API        ：统一请求本地 FastAPI 后端
+       - Chat       ：聊天页逻辑（消息渲染、SSE 流式输出、typing 动画）
+       - Auth       ：登录 / 退出 / 登录态恢复
+       - CharDetail ：角色详情弹窗
+       - ChatMenu   ：聊天页右上角更多菜单（历史 / 清空 / 备注 / 签名）
+       - Mine 信息区：展示登录与保存规则，避免无效入口和占位功能
+
+       数据：
+       - NAV_CONFIG ：底部导航配置
+       - CHARACTERS ：角色运行时数组（从后端加载）
+  -->
+  <script src="frontend/app.js?v=20260330a"></script>
+</body>
+</html>

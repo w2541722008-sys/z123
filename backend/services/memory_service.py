@@ -1,0 +1,835 @@
+"""
+记忆服务 - 管理聊天历史摘要和长期记忆
+
+核心功能：
+    - 读取最近消息（用于 AI 上下文窗口）
+    - 读取/更新记忆摘要
+    - 触发摘要生成（当未摘要消息达到阈值）
+    - 文本清理和格式化
+    - 流式响应内容过滤
+
+摘要触发机制：
+    - 当未摘要消息达到 SUMMARY_TRIGGER_COUNT（默认 24 条）时触发
+    - 后台异步生成摘要，不阻塞用户对话
+    - 降级策略：AI 失败时使用简单提取方案
+
+主要导出：
+    - get_recent_messages: 获取最近消息
+    - get_unsummarized_messages: 获取未摘要消息
+    - get_summary_text: 获取摘要文本
+    - get_structured_summary: 获取结构化摘要
+    - refresh_memory_summary: 刷新摘要（后台调用）
+    - run_memory_summary_background: 后台线程启动摘要生成
+    - parse_state_update_tag: 解析 AI 状态更新标签
+    - sanitize_stream_chunk: 流式响应内容过滤
+"""
+
+from __future__ import annotations
+
+# 标准库导入
+import json
+import os
+import re
+import sqlite3
+import threading
+from typing import Any
+
+# 本地模块导入
+from config import SUMMARY_MAX_TOKENS, SUMMARY_TRIGGER_COUNT, logger, utc_now_iso
+from database import get_conn
+from model_adapter import get_ai_config, request_chat_completion
+from prompt_assembler import RECENT_MESSAGE_WINDOW, build_memory_summary_messages
+
+
+_SUMMARY_SECTION_TITLES: list[tuple[str, str]] = [
+    ("profile", "用户画像"),
+    ("preferences", "用户偏好"),
+    ("events", "近期事件"),
+    ("relationship", "关系状态"),
+    ("pending", "待跟进事项"),
+]
+
+_SUMMARY_SECTION_ALIASES: dict[str, str] = {
+    "用户画像": "profile",
+    "用户偏好": "preferences",
+    "近期事件": "events",
+    "关系状态": "relationship",
+    "待跟进事项": "pending",
+    "待跟进": "pending",
+    "未完成话题": "pending",
+}
+
+_SUMMARY_SECTION_LIMITS: dict[str, int] = {
+    "profile": 8,
+    "preferences": 8,
+    "events": 10,
+    "relationship": 6,
+    "pending": 6,
+}
+
+
+# ============================================================
+# JSON 解析工具
+# ============================================================
+def parse_json_object(text: str, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
+    """
+    安全解析 JSON 对象。
+
+    Args:
+        text: JSON 字符串
+        fallback: 解析失败时的默认值
+
+    Returns:
+        解析后的字典，或 fallback
+    """
+    fallback = fallback or {}
+    raw = (text or "").strip()
+    if not raw:
+        return dict(fallback)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return dict(fallback)
+    return value if isinstance(value, dict) else dict(fallback)
+
+
+def parse_json_list(text: str, fallback: list[Any] | None = None) -> list[Any]:
+    """
+    安全解析 JSON 数组。
+
+    Args:
+        text: JSON 字符串
+        fallback: 解析失败时的默认值
+
+    Returns:
+        解析后的列表，或 fallback
+    """
+    fallback = fallback or []
+    raw = (text or "").strip()
+    if not raw:
+        return list(fallback)
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return list(fallback)
+    return value if isinstance(value, list) else list(fallback)
+
+
+# ============================================================
+# 消息查询
+# ============================================================
+def get_recent_messages(
+    conn: sqlite3.Connection,
+    user_id: int,
+    character_id: str,
+    limit: int = RECENT_MESSAGE_WINDOW,
+) -> list[dict[str, str]]:
+    """
+    获取最近的聊天消息。
+
+    查询策略：
+        - 按 id 倒序取 limit 条（最新消息）
+        - 返回时反转，保持时间正序（旧 → 新）
+
+    Args:
+        conn: 数据库连接
+        user_id: 用户 ID
+        character_id: 角色 ID
+        limit: 返回消息数量，默认 RECENT_MESSAGE_WINDOW
+
+    Returns:
+        消息列表，每条包含 role 和 content
+    """
+    rows = conn.execute(
+        """
+        SELECT role, content
+        FROM chat_messages
+        WHERE user_id = ? AND character_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (user_id, character_id, limit),
+    ).fetchall()
+    # 反转列表，保持时间正序（旧消息在前，新消息在后）
+    return [
+        {"role": row["role"], "content": row["content"]}
+        for row in reversed(rows)
+    ]
+
+
+def get_unsummarized_messages(
+    conn: sqlite3.Connection,
+    user_id: int,
+    character_id: str,
+) -> list[sqlite3.Row]:
+    """
+    获取所有未摘要的消息。
+
+    Args:
+        conn: 数据库连接
+        user_id: 用户 ID
+        character_id: 角色 ID
+
+    Returns:
+        未摘要消息列表（按时间正序）
+    """
+    return conn.execute(
+        """
+        SELECT id, role, content, created_at
+        FROM chat_messages
+        WHERE user_id = ? AND character_id = ? AND is_summarized = 0
+        ORDER BY id ASC
+        """,
+        (user_id, character_id),
+    ).fetchall()
+
+
+# ============================================================
+# 摘要管理
+# ============================================================
+def get_summary_record(
+    conn: sqlite3.Connection,
+    user_id: int,
+    character_id: str,
+) -> sqlite3.Row | None:
+    """
+    获取摘要记录。
+
+    Args:
+        conn: 数据库连接
+        user_id: 用户 ID
+        character_id: 角色 ID
+
+    Returns:
+        摘要记录行，如果不存在则返回 None
+    """
+    return conn.execute(
+        "SELECT * FROM chat_summaries WHERE user_id = ? AND character_id = ?",
+        (user_id, character_id),
+    ).fetchone()
+
+
+def get_summary_text(
+    conn: sqlite3.Connection,
+    user_id: int,
+    character_id: str,
+) -> str:
+    """
+    获取摘要文本内容。
+
+    Args:
+        conn: 数据库连接
+        user_id: 用户 ID
+        character_id: 角色 ID
+
+    Returns:
+        摘要文本，如果不存在则返回空字符串
+    """
+    row = get_summary_record(conn, user_id, character_id)
+    if not row:
+        return ""
+    return (row["summary"] or "").strip()
+
+
+def _parse_structured_summary_text(summary_text: str) -> dict[str, list[str]]:
+    """把摘要文本拆成结构化分区，兼容旧格式和轻微标题变体。"""
+    result = {key: [] for key, _ in _SUMMARY_SECTION_TITLES}
+    current_key: str | None = None
+
+    for raw_line in (summary_text or "").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        matched_key = None
+        if line.startswith("[") and "]" in line:
+            title = line[1:line.find("]")].strip()
+            matched_key = _SUMMARY_SECTION_ALIASES.get(title)
+
+        if matched_key:
+            current_key = matched_key
+            continue
+
+        if current_key is None:
+            continue
+
+        if line.startswith(("- ", "• ", "* ")):
+            item = line[2:].strip()
+        else:
+            item = line.strip()
+
+        if item:
+            result[current_key].append(item)
+
+    return result
+
+
+def _dedupe_summary_items(items: list[str], limit: int) -> list[str]:
+    """按文本归一化去重，同时保留原始表述顺序。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        text = re.sub(r"\s+", " ", str(item or "").strip())
+        if not text:
+            continue
+        norm = text.lower()
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _render_structured_summary(summary: dict[str, list[str]]) -> str:
+    """把结构化摘要渲染回统一文本格式，便于存库与复用。"""
+    blocks: list[str] = []
+    for key, title in _SUMMARY_SECTION_TITLES:
+        items = _dedupe_summary_items(summary.get(key, []), _SUMMARY_SECTION_LIMITS[key])
+        if not items:
+            items = ["暂无稳定信息"]
+        block = [f"[{title}]"]
+        block.extend(f"- {item}" for item in items)
+        blocks.append("\n".join(block))
+    return "\n\n".join(blocks).strip()
+
+
+def get_summary_for_prompt(
+    conn: sqlite3.Connection,
+    user_id: int,
+    character_id: str,
+) -> str:
+    """返回给 Prompt 使用的长期记忆文本，优先走结构化整理后的格式。"""
+    structured = get_structured_summary(conn, user_id, character_id)
+    formatted = format_structured_summary(structured)
+    if formatted:
+        return formatted
+    return get_summary_text(conn, user_id, character_id)
+
+
+def should_refresh_summary(
+    conn: sqlite3.Connection,
+    user_id: int,
+    character_id: str,
+) -> bool:
+    """
+    判断是否需要刷新摘要。
+
+    触发条件：未摘要消息数量 >= SUMMARY_TRIGGER_COUNT（默认 24 条）
+
+    Args:
+        conn: 数据库连接
+        user_id: 用户 ID
+        character_id: 角色 ID
+
+    Returns:
+        True 表示需要刷新摘要
+    """
+    rows = get_unsummarized_messages(conn, user_id, character_id)
+    return len(rows) >= SUMMARY_TRIGGER_COUNT
+
+
+def get_structured_summary(
+    conn: sqlite3.Connection,
+    user_id: int,
+    character_id: str,
+) -> dict[str, Any]:
+    """
+    解析结构化的摘要内容。
+
+    解析格式：
+        [用户画像]
+        - 用户特征描述
+        [用户偏好]
+        - 用户喜好描述
+        [近期事件]
+        - 最近发生的事情
+        [关系状态]
+        - 角色关系描述
+        [待跟进事项]
+        - 后续值得回收的话题/承诺
+
+    Args:
+        conn: 数据库连接
+        user_id: 用户 ID
+        character_id: 角色 ID
+
+    Returns:
+        结构化摘要字典，包含：
+        - profile: 用户画像列表
+        - preferences: 用户偏好列表
+        - events: 近期事件列表
+        - relationship: 关系状态列表
+        - pending: 待跟进事项列表
+        - raw_summary: 原始摘要文本
+    """
+    row = get_summary_record(conn, user_id, character_id)
+    if not row:
+        return {
+            "profile": [],
+            "preferences": [],
+            "events": [],
+            "relationship": [],
+            "pending": [],
+            "raw_summary": "",
+        }
+
+    summary_text = (row["summary"] or "").strip()
+    parsed = _parse_structured_summary_text(summary_text)
+
+    return {
+        "profile": parsed.get("profile", []),
+        "preferences": parsed.get("preferences", []),
+        "events": parsed.get("events", []),
+        "relationship": parsed.get("relationship", []),
+        "pending": parsed.get("pending", []),
+        "raw_summary": summary_text,
+    }
+
+
+def format_structured_summary(summary: dict[str, Any]) -> str:
+    """
+    将结构化摘要格式化为可读文本。
+
+    用于将解析后的结构化摘要重新格式化为带标题的文本，
+    方便在提示词中使用。
+
+    Args:
+        summary: 结构化摘要字典（来自 get_structured_summary）
+
+    Returns:
+        格式化后的文本，每个段落带【标题】前缀
+    """
+    blocks: list[str] = []
+    mapping = [
+        ("用户画像", summary.get("profile", [])),
+        ("用户偏好", summary.get("preferences", [])),
+        ("近期事件", summary.get("events", [])),
+        ("关系状态", summary.get("relationship", [])),
+        ("待跟进事项", summary.get("pending", [])),
+    ]
+    for title, items in mapping:
+        if not items:
+            continue
+        rows = []
+        for item in items:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            rows.append(text if text.startswith("- ") else f"- {text}")
+        if rows:
+            blocks.append(f"【{title}】\n" + "\n".join(rows))
+    return "\n\n".join(blocks).strip()
+
+
+# ============================================================
+# 摘要生成
+# ============================================================
+def normalize_reply_text(text: str) -> str:
+    """
+    清理 AI 回复文本。
+
+    清理规则：
+        1. 统一换行符（\r\n、\r → \n）
+        2. 移除 <think>...</think> 思考过程标签
+        3. 去除空行，每行去除首尾空格
+
+    Args:
+        text: 原始 AI 回复文本
+
+    Returns:
+        清理后的文本
+    """
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+
+    # 移除 <think> 思考过程
+    while "<think>" in text and "</think>" in text:
+        start = text.find("<think>")
+        end = text.find("</think>", start)
+        if end == -1:
+            break
+        text = text[:start] + text[end + len("</think>"):]
+
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    return "\n".join(lines).strip()
+
+
+def build_structured_memory_summary_fallback(
+    existing_summary: str,
+    unsummarized_messages: list[sqlite3.Row],
+) -> str:
+    """
+    AI 摘要失败时的降级方案：简单提取关键信息。
+
+    当调用 AI 生成摘要失败（网络错误、超时等）时，使用此函数
+    简单提取用户消息作为摘要，保证功能不中断。
+
+    提取策略：
+        - 用户画像：取前 2 条用户消息
+        - 用户偏好：取最后 1 条用户消息
+        - 近期事件：取最后 3 条用户消息
+        - 关系状态：根据是否有 AI 回复判断
+
+    Args:
+        existing_summary: 已有摘要文本
+        unsummarized_messages: 未摘要的消息列表
+
+    Returns:
+        格式化的摘要文本
+    """
+    user_lines = [row["content"].strip() for row in unsummarized_messages if row["role"] == "user" and row["content"].strip()]
+    assistant_lines = [row["content"].strip() for row in unsummarized_messages if row["role"] == "assistant" and row["content"].strip()]
+
+    def pick(items: list[str], limit: int = 3) -> list[str]:
+        """从列表中选取最后 limit 项，格式化为列表项。"""
+        return [f"- {item[:60]}" for item in items[-limit:]] or ["- 暂无稳定信息"]
+
+    # 构建结构化摘要
+    structured = [
+        "[用户画像]",
+        *pick(user_lines[:2], limit=2),
+        "[用户偏好]",
+        *(["- 从近期对话中暂未提炼出稳定偏好"] if not user_lines else [f"- 用户最近反复提到：{user_lines[-1][:60]}"]),
+        "[近期事件]",
+        *pick(user_lines, limit=3),
+        "[待跟进事项]",
+        *( ["- 暂无明确待跟进事项"] if not user_lines else [f"- 可在后续对话跟进：{user_lines[-1][:60]}"] ),
+        "[关系状态]",
+        *(["- 角色持续与用户保持对话，关系在稳定推进"] if assistant_lines else ["- 暂无稳定信息"]),
+    ]
+
+    # 合并已有摘要和新摘要
+    if existing_summary.strip():
+        return existing_summary.strip() + "\n" + "\n".join(structured)
+    return "\n".join(structured)
+
+
+def merge_summary_text(existing_summary: str, new_summary_text: str) -> str:
+    """
+    合并新旧摘要（优先使用新摘要）。
+
+    合并策略：
+        - 如果新摘要非空，使用新摘要
+        - 否则保留旧摘要
+
+    Args:
+        existing_summary: 已有摘要文本
+        new_summary_text: 新生成的摘要文本
+
+    Returns:
+        合并后的摘要文本
+    """
+    new_text = normalize_reply_text(new_summary_text)
+    old_text = normalize_reply_text(existing_summary)
+
+    if not new_text:
+        return old_text
+    if not old_text:
+        return new_text
+
+    old_structured = _parse_structured_summary_text(old_text)
+    new_structured = _parse_structured_summary_text(new_text)
+
+    has_old_sections = any(old_structured.get(key) for key, _ in _SUMMARY_SECTION_TITLES)
+    has_new_sections = any(new_structured.get(key) for key, _ in _SUMMARY_SECTION_TITLES)
+    if not has_old_sections or not has_new_sections:
+        return new_text or old_text
+
+    merged: dict[str, list[str]] = {}
+    for key, _ in _SUMMARY_SECTION_TITLES:
+        merged[key] = _dedupe_summary_items(
+            list(new_structured.get(key, [])) + list(old_structured.get(key, [])),
+            _SUMMARY_SECTION_LIMITS[key],
+        )
+
+    return _render_structured_summary(merged)
+
+
+def save_summary(
+    conn: sqlite3.Connection,
+    user_id: int,
+    character_id: str,
+    summary_text: str,
+    last_message_id: int | None,
+) -> None:
+    """
+    保存或更新摘要记录。
+
+    如果该用户-角色组合已有摘要记录，则更新；
+    否则插入新记录。
+
+    Args:
+        conn: 数据库连接
+        user_id: 用户 ID
+        character_id: 角色 ID
+        summary_text: 摘要文本内容
+        last_message_id: 最后摘要的消息 ID
+    """
+    now = utc_now_iso()
+    existing = get_summary_record(conn, user_id, character_id)
+    if existing:
+        # 更新已有记录：版本号 +1，更新时间戳
+        conn.execute(
+            """
+            UPDATE chat_summaries
+            SET summary = ?,
+                memory_version = memory_version + 1,
+                last_message_id = ?,
+                last_summarized_at = ?,
+                updated_at = ?
+            WHERE user_id = ? AND character_id = ?
+            """,
+            (summary_text, last_message_id, now, now, user_id, character_id),
+        )
+    else:
+        # 插入新记录：版本号从 1 开始
+        conn.execute(
+            """
+            INSERT INTO chat_summaries(
+                user_id, character_id, summary, memory_version,
+                last_message_id, last_summarized_at, created_at, updated_at
+            ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+            """,
+            (user_id, character_id, summary_text, last_message_id, now, now, now),
+        )
+
+
+def mark_messages_summarized(conn: sqlite3.Connection, message_ids: list[int]) -> None:
+    """
+    将指定消息标记为已摘要。
+
+    Args:
+        conn: 数据库连接
+        message_ids: 要标记的消息 ID 列表
+    """
+    if not message_ids:
+        return
+    placeholders = ",".join("?" for _ in message_ids)
+    conn.execute(
+        f"UPDATE chat_messages SET is_summarized = 1 WHERE id IN ({placeholders})",
+        message_ids,
+    )
+
+
+def refresh_memory_summary(
+    conn: sqlite3.Connection,
+    user_id: int,
+    character_id: str,
+    character: Any,
+) -> None:
+    """
+    刷新记忆摘要。
+
+    当未摘要消息达到阈值时，调用 AI 生成新的摘要。
+    这个函数应该在后台线程中调用，避免阻塞主线程。
+
+    摘要策略：
+        1. 获取所有未摘要消息
+        2. 保留最近 RECENT_MESSAGE_WINDOW 条不摘要（保持上下文完整）
+        3. 调用 AI 生成摘要（失败时使用降级方案）
+        4. 保存摘要并标记消息为已摘要
+
+    Args:
+        conn: 数据库连接
+        user_id: 用户 ID
+        character_id: 角色 ID
+        character: 角色数据字典
+    """
+    # 步骤 1：获取未摘要消息
+    unsummarized_rows = get_unsummarized_messages(conn, user_id, character_id)
+    if len(unsummarized_rows) < SUMMARY_TRIGGER_COUNT:
+        return
+
+    # 步骤 2：保留最近消息不摘要（RECENT_MESSAGE_WINDOW 条）
+    summary_target_rows = unsummarized_rows[:-RECENT_MESSAGE_WINDOW]
+    if len(summary_target_rows) < RECENT_MESSAGE_WINDOW:
+        return
+
+    # 步骤 3：获取已有摘要，构建提示词
+    existing_summary = get_summary_text(conn, user_id, character_id)
+    prompt_messages = build_memory_summary_messages(character, existing_summary, summary_target_rows)
+
+    # 步骤 4：调用 AI 生成摘要（带异常降级）
+    try:
+        summary_text = request_chat_completion(
+            prompt_messages,
+            get_ai_config(os.environ),
+            normalize_reply_text,
+            max_tokens=SUMMARY_MAX_TOKENS,
+        )
+    except Exception:
+        # AI 失败时使用降级方案
+        summary_text = build_structured_memory_summary_fallback(existing_summary, summary_target_rows)
+
+    # 步骤 5：合并新旧摘要
+    summary_text = merge_summary_text(existing_summary, summary_text)
+
+    # 步骤 6：保存摘要并标记消息
+    last_message_id = summary_target_rows[-1]["id"] if summary_target_rows else None
+    save_summary(conn, user_id, character_id, summary_text, last_message_id)
+    mark_messages_summarized(conn, [row["id"] for row in summary_target_rows])
+
+
+def run_memory_summary_background(
+    user_id: int,
+    character_id: int,
+    character_row_data: dict,
+) -> None:
+    """
+    在后台线程中运行记忆摘要生成。
+
+    使用方式：
+        >>> threading.Thread(
+        ...     target=run_memory_summary_background,
+        ...     args=(user_id, character_id, dict(character_row)),
+        ...     daemon=True
+        ... ).start()
+
+    设计说明：
+        - 使用守护线程（daemon=True），主进程退出时自动终止
+        - 捕获所有异常，防止后台线程崩溃影响主服务
+        - 每个连接独立获取和关闭，避免连接泄漏
+
+    Args:
+        user_id: 用户 ID
+        character_id: 角色 ID
+        character_row_data: 角色数据字典
+    """
+    def target():
+        try:
+            conn = get_conn()
+            try:
+                refresh_memory_summary(conn, user_id, character_id, character_row_data)
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"后台记忆摘要失败: {e}")
+
+    threading.Thread(target=target, daemon=True).start()
+
+
+# ============================================================
+# 状态更新标签解析
+# ============================================================
+def parse_state_update_tag(reply: str) -> tuple[str, dict[str, Any] | None]:
+    """
+    从 AI 回复里提取 [STATE_UPDATE]...[/STATE_UPDATE] 标签内的状态增量。
+
+    标签格式：
+        [STATE_UPDATE]
+        {"affection_delta": 5, "mood_delta": 3}
+        [/STATE_UPDATE]
+
+    Args:
+        reply: AI 原始回复文本
+
+    Returns:
+        tuple: (cleaned_reply, delta_dict)
+        - cleaned_reply: 去掉标签后的纯净回复文本
+        - delta_dict: 解析到的状态增量字典，未找到则为 None
+
+    示例：
+        >>> reply = "你好呀！[STATE_UPDATE]{\"affection_delta\": 5}[/STATE_UPDATE]"
+        >>> cleaned, delta = parse_state_update_tag(reply)
+        >>> print(cleaned)
+        你好呀！
+        >>> print(delta)
+        {'affection_delta': 5}
+    """
+    pattern = re.compile(r'\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]', re.DOTALL | re.IGNORECASE)
+    match = pattern.search(reply)
+    if not match:
+        return reply, None
+
+    raw_json = match.group(1).strip()
+    cleaned = pattern.sub("", reply).strip()
+
+    try:
+        delta = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return cleaned, None
+
+    if not isinstance(delta, dict):
+        return cleaned, None
+
+    return cleaned, delta
+
+
+# ============================================================
+# 流式响应工具
+# ============================================================
+def sanitize_stream_chunk(chunk: str, state: dict[str, Any]) -> str:
+    """
+    按增量片段过滤 <think> 内容，处理跨 chunk 截断。
+
+    为什么需要这个函数：
+        AI 模型（如 DeepSeek）会在回复中包含 <think>...</think> 标签
+        包裹思考过程。流式响应时，这些标签可能跨多个 chunk，
+        需要状态机来正确处理。
+
+    state 用于保存跨 chunk 的状态：
+        - buffer: 未处理的残留文本（可能是标签的一部分）
+        - in_think: 是否处于 <think> 标签内
+
+    Args:
+        chunk: 当前收到的文本片段
+        state: 跨 chunk 的状态字典（会被修改）
+
+    Returns:
+        过滤后的文本片段
+
+    示例：
+        >>> state = {"buffer": "", "in_think": False}
+        >>> sanitize_stream_chunk("你好<think>", state)
+        '你好'
+        >>> sanitize_stream_chunk("思考过程", state)
+        ''
+        >>> sanitize_stream_chunk("</think>世界", state)
+        '世界'
+    """
+    if not chunk:
+        return ""
+
+    # 合并残留 buffer 和新 chunk
+    buf = state.get("buffer", "") + chunk
+    state["buffer"] = ""
+    in_think = state.get("in_think", False)
+    output = ""
+    partial_tag = "<think>"
+
+    # 状态机处理 buffer
+    while buf:
+        if in_think:
+            # 在 <think> 标签内，寻找结束标签
+            end_idx = buf.find("</think>")
+            if end_idx == -1:
+                # 结束标签不在当前 buffer，全部丢弃，保留到下次处理
+                state["buffer"] = buf
+                buf = ""
+            else:
+                # 找到结束标签，跳过这段内容
+                in_think = False
+                buf = buf[end_idx + len("</think>"):]
+        else:
+            # 不在 <think> 标签内，寻找开始标签
+            start_idx = buf.find("<think>")
+            if start_idx == -1:
+                # 没有开始标签，但要检查是否以标签的一部分结尾
+                safe_end = len(buf)
+                for i in range(1, len(partial_tag)):
+                    if buf.endswith(partial_tag[:i]):
+                        # 以 "<", "<t", "<th"... 结尾，可能是标签的一部分
+                        safe_end = len(buf) - i
+                        break
+                output += buf[:safe_end]
+                state["buffer"] = buf[safe_end:]
+                buf = ""
+            else:
+                # 找到开始标签，输出之前的内容，进入 think 状态
+                output += buf[:start_idx]
+                in_think = True
+                buf = buf[start_idx + len("<think>"):]
+
+    state["in_think"] = in_think
+    return output
