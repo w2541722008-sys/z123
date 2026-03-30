@@ -21,6 +21,12 @@ import os
 import sqlite3
 from typing import Any
 
+
+class AIChatError(Exception):
+    """AI 调用失败时抛出的异常，由调用方决定如何向用户展示错误。"""
+
+    pass
+
 from fastapi import HTTPException
 
 from config import AI_CHAT_MAX_OUTPUT_TOKENS, utc_now_iso
@@ -243,18 +249,20 @@ def build_reply_with_fallback(
     conn: sqlite3.Connection | None = None,
     user_id: int | None = None,
     ai_config: dict[str, str] | None = None,
-) -> tuple[str, dict[str, Any] | None, bool]:
+) -> tuple[str, dict[str, Any] | None]:
     """
     组装 Prompt → 调用 AI → 解析状态增量 → 返回 (cleaned_reply, new_state)。
+    
+    AI 调用失败时抛出 AIChatError，由调用方决定如何向用户展示错误。
+    不再静默降级为 mock 回复，避免用户误以为假回复是真回复。
     
     参数：
         conn, user_id — 可选，用于读取/写入关系状态
     
     返回：
-        (reply_text, new_state, used_fallback)
+        (reply_text, new_state)
         reply_text — 去掉 [STATE_UPDATE] 标签后的纯净回复
         new_state  — 更新后的关系状态字典，若未处理则为 None
-        used_fallback — 是否走了 mock 降级
     """
     # 读取当前关系状态
     character_state: dict[str, Any] | None = None
@@ -274,10 +282,10 @@ def build_reply_with_fallback(
             normalize_reply_text,
             max_tokens=AI_CHAT_MAX_OUTPUT_TOKENS,
         )
-        used_fallback = False
-    except Exception:
-        user_message = recent_messages[-1]["content"] if recent_messages else ""
-        return build_mock_reply(character, user_message), None, True
+    except Exception as e:
+        # AI 调用失败时直接抛出异常，由调用方决定如何处理
+        # 不再静默降级返回 mock，避免用户误以为假回复是真回复
+        raise AIChatError(f"AI 调用失败: {e}") from e
 
     # 解析状态增量
     cleaned_reply, delta = parse_state_update_tag(raw_reply)
@@ -290,7 +298,7 @@ def build_reply_with_fallback(
         except Exception:
             pass  # 状态更新失败不影响正常回复
 
-    return cleaned_reply, new_state, used_fallback
+    return cleaned_reply, new_state
 
 
 def build_mock_reply(character: sqlite3.Row, user_message: str) -> str:

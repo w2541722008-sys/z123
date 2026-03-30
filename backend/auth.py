@@ -43,7 +43,7 @@ import bcrypt
 from fastapi import Header, HTTPException
 
 # 本地模块导入
-from config import APP_SECRET, TOKEN_EXPIRE_DAYS
+from config import ADMIN_EMAILS, APP_SECRET, TOKEN_EXPIRE_DAYS
 from database import get_conn
 from services.plan_service import serialize_plan_info
 
@@ -144,6 +144,13 @@ class CurrentUser:
     plan_type: str = "free"
     effective_plan: str = "free"
     plan_expires_at: str = ""
+    is_admin: bool = False
+
+
+def _is_admin_email(email: str) -> bool:
+    """判断邮箱是否属于管理后台白名单。"""
+    normalized = (email or "").strip().lower()
+    return bool(normalized) and normalized in ADMIN_EMAILS
 
 
 # ============================================================
@@ -301,6 +308,7 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> Curre
         plan_type=plan_info["plan_type"],
         effective_plan=plan_info["effective_plan"],
         plan_expires_at=plan_info["plan_expires_at"],
+        is_admin=_is_admin_email(row["email"]),
     )
 
 
@@ -328,4 +336,12 @@ def get_current_user(authorization: str | None = Header(default=None)) -> Curren
     user = get_optional_user(authorization)
     if not user:
         raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    return user
+
+
+def get_admin_user(authorization: str | None = Header(default=None)) -> CurrentUser:
+    """要求当前登录用户必须属于管理员邮箱白名单。"""
+    user = get_current_user(authorization)
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="你没有管理后台权限")
     return user

@@ -111,8 +111,15 @@ SUMMARY_MAX_TOKENS = 500
 
 
 # ============================================================
-# Token 有效期配置
+# 认证与后台管理员配置
 # ============================================================
+# 管理后台管理员邮箱白名单，多个邮箱用英文逗号分隔
+ADMIN_EMAILS = {
+    item.strip().lower()
+    for item in os.environ.get("ADMIN_EMAILS", "").split(",")
+    if item.strip()
+}
+
 # Token 默认有效 30 天。超过这个时间用户需要重新登录。
 # 可通过 .env 中的 TOKEN_EXPIRE_DAYS 覆盖。
 TOKEN_EXPIRE_DAYS = _int_env("TOKEN_EXPIRE_DAYS", 30, minimum=1)

@@ -52,8 +52,8 @@ from services.usage_guard import (
 )
 from services.character_state import get_character_state
 from services.chat_service import (
+    AIChatError,
     build_layered_chat_messages,
-    build_mock_reply,
     build_reply_with_fallback,
     count_chat_messages,
     format_sse,
@@ -179,13 +179,28 @@ def chat_send(
         # 预算通过后再落库
         store_user_message(conn, user.id, payload.character_id, clean_text)
 
-        # 步骤 3：生成回复（带降级策略）
-        reply, new_state, used_fallback = build_reply_with_fallback(
-            character, recent_messages, memory_summary,
-            related_assets=related_assets, user_name=user.nickname,
-            conn=conn, user_id=user.id,
-            ai_config=ai_config,
-        )
+        # 步骤 3：生成回复
+        # AI 失败时抛出 AIChatError，此时用户消息已写但AI回复未写，
+        # 需要回滚用户消息以保持数据一致性
+        try:
+            reply, new_state = build_reply_with_fallback(
+                character, recent_messages, memory_summary,
+                related_assets=related_assets, user_name=user.nickname,
+                conn=conn, user_id=user.id,
+                ai_config=ai_config,
+            )
+        except AIChatError:
+            # AI 调用失败：回滚用户消息，保证数据一致性
+            conn.execute(
+                "DELETE FROM chat_messages WHERE user_id = ? AND character_id = ? "
+                "AND role = 'user' AND created_at = ("
+                "  SELECT created_at FROM chat_messages WHERE user_id = ? AND character_id = ? "
+                "  AND role = 'user' ORDER BY created_at DESC LIMIT 1"
+                ")",
+                (user.id, payload.character_id, user.id, payload.character_id),
+            )
+            conn.commit()
+            raise HTTPException(status_code=503, detail="网络波动，请稍后再试")
 
         # 步骤 4：保存消息
         save_assistant_message(conn, user.id, payload.character_id, reply)
@@ -206,8 +221,8 @@ def chat_send(
             estimated_input_tokens=estimate["tokens"],
             estimated_output_tokens=actual_output_tokens,
             total_estimated_tokens=estimate["tokens"] + actual_output_tokens,
-            used_fallback=used_fallback,
-            status="fallback" if used_fallback else "success",
+            used_fallback=False,
+            status="success",
         )
     finally:
         conn.close()
@@ -286,7 +301,7 @@ def chat_stream(
     def event_generator():
         full_reply = ""
         stream_state = {"buffer": "", "in_think": False}
-        used_mock = False
+        stream_error: str | None = None
 
         try:
             for chunk in stream_chat_completion(
@@ -309,10 +324,11 @@ def chat_stream(
             final_reply_raw = normalize_reply_text(full_reply)
             if not final_reply_raw:
                 raise RuntimeError("模型返回了空内容")
-        except Exception:
-            used_mock = True
-            final_reply_raw = build_mock_reply(_character, clean_text)
-            yield format_sse("chunk", {"text": final_reply_raw})
+        except Exception as e:
+            stream_error = str(e)
+            # 告知前端发生了网络错误，不要显示任何 mock 内容
+            yield format_sse("error", {"message": "网络波动，请稍后再试"})
+            return
 
         # 解析状态增量
         final_reply, delta = parse_state_update_tag(final_reply_raw)
@@ -333,8 +349,8 @@ def chat_stream(
                 estimated_input_tokens=_estimate["tokens"],
                 estimated_output_tokens=actual_output_tokens,
                 total_estimated_tokens=_estimate["tokens"] + actual_output_tokens,
-                used_fallback=used_mock,
-                status="fallback" if used_mock else "success",
+                used_fallback=False,
+                status="success",
             )
             if delta:
                 from services.character_state import apply_state_delta
@@ -354,7 +370,7 @@ def chat_stream(
 
         yield format_sse("done", {
             "reply": final_reply,
-            "fallback": used_mock,
+            "fallback": False,
             "summary_enabled": True,
             "character_state": new_state,
         })
@@ -453,7 +469,6 @@ def chat_guest_stream(payload: GuestChatPayload, request: Request) -> StreamingR
     def event_generator():
         full_reply = ""
         stream_state = {"buffer": "", "in_think": False}
-        used_mock = False
         try:
             for chunk in stream_chat_completion(
                 stream_messages,
@@ -475,10 +490,10 @@ def chat_guest_stream(payload: GuestChatPayload, request: Request) -> StreamingR
             final_reply_raw = normalize_reply_text(full_reply)
             if not final_reply_raw:
                 raise RuntimeError("模型返回了空内容")
-        except Exception:
-            used_mock = True
-            final_reply_raw = build_mock_reply(_character, _clean_text)
-            yield format_sse("chunk", {"text": final_reply_raw})
+        except Exception as e:
+            # 游客接口：AI 失败时告知前端，不走 mock
+            yield format_sse("error", {"message": "网络波动，请稍后再试"})
+            return
 
         # 游客接口：不解析 STATE_UPDATE，不写库
         final_reply, _ = parse_state_update_tag(final_reply_raw)
@@ -496,15 +511,15 @@ def chat_guest_stream(payload: GuestChatPayload, request: Request) -> StreamingR
                 estimated_input_tokens=_estimate["tokens"],
                 estimated_output_tokens=actual_output_tokens,
                 total_estimated_tokens=_estimate["tokens"] + actual_output_tokens,
-                used_fallback=used_mock,
-                status="fallback" if used_mock else "success",
+                used_fallback=False,
+                status="success",
             )
         finally:
             log_conn.close()
 
         yield format_sse("done", {
             "reply": final_reply,
-            "fallback": used_mock,
+            "fallback": False,
             "guest": True,
         })
 

@@ -33,6 +33,7 @@ from auth import (
     get_current_user,
     hash_password_bcrypt,
     verify_password,
+    _is_admin_email,
 )
 from config import (
     LOGIN_RATE_LIMIT_COUNT,
@@ -70,6 +71,7 @@ def _build_user_payload(
     nickname: str,
     plan_type: str = "free",
     plan_expires_at: str = "",
+    is_admin: bool = False,
 ) -> dict[str, Any]:
     """统一构造登录态用户信息返回。"""
     plan_info = serialize_plan_info(plan_type, plan_expires_at)
@@ -77,6 +79,7 @@ def _build_user_payload(
         "id": user_id,
         "email": email,
         "nickname": nickname,
+        "is_admin": is_admin,
         **plan_info,
     }
 
@@ -155,6 +158,7 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
                 nickname=nickname,
                 plan_type="free",
                 plan_expires_at="",
+                is_admin=_is_admin_email(normalized_email),
             ),
         }
     finally:
@@ -244,6 +248,7 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
                 nickname=nickname,
                 plan_type=row["plan_type"],
                 plan_expires_at=row["plan_expires_at"],
+                is_admin=_is_admin_email(row["email"]),
             ),
         }
     finally:
@@ -267,6 +272,7 @@ def auth_me(user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
         nickname=user.nickname,
         plan_type=user.plan_type,
         plan_expires_at=user.plan_expires_at,
+        is_admin=user.is_admin,
     )
 
 

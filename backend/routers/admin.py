@@ -60,7 +60,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from auth import CurrentUser, get_current_user
+from auth import CurrentUser, get_admin_user, get_current_user
 from config import utc_now_iso
 from database import get_conn
 from models import (
@@ -78,7 +78,7 @@ from services.memory_service import get_summary_for_prompt, parse_json_list, par
 from services.plan_service import plan_display_name, serialize_plan_info
 from prompt_assembler import build_message_preview
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_admin_user)])
 
 # 管理后台可编辑的字段白名单
 _ADMIN_EDITABLE_FIELDS = {
@@ -476,6 +476,18 @@ def _split_csv_ids(raw: str | None) -> list[int]:
     return out
 
 
+def _affection_rules_use_default(raw: Any) -> bool:
+    """判断是否处于“留空即使用系统默认规则”的状态。"""
+    text = str(raw or "").strip()
+    if not text:
+        return True
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(parsed, dict) and len(parsed) == 0
+
+
 def _basic_config_warnings(character: dict[str, Any], runtime_layers: dict[str, Any]) -> list[str]:
     warnings: list[str] = []
     if not (character.get("name") or "").strip():
@@ -491,10 +503,13 @@ def _basic_config_warnings(character: dict[str, Any], runtime_layers: dict[str, 
     if character.get("is_visible") and not (character.get("subtitle") or "").strip():
         warnings.append("角色已设为可见，但副标题为空")
     if character.get("affection_enabled"):
-        rules = parse_json_object(character.get("affection_rules_json"), fallback={})
-        if not rules:
-            warnings.append("已启用好感度系统，但 affection_rules_json 为空")
+        raw_rules = character.get("affection_rules_json")
+        if not _affection_rules_use_default(raw_rules):
+            rules = parse_json_object(raw_rules, fallback={})
+            if not rules:
+                warnings.append("已启用好感度系统，但好感度规则 JSON 无法解析，请检查格式")
     return warnings
+
 
 
 @router.get("/admin/character/{character_id}/config-summary")
@@ -587,7 +602,7 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
                     warnings.append(f"剧情事件 #{event['id']} 存在失效的解锁对象引用")
                     break
         if empty_unlock_event_count:
-            warnings.append(f"有 {empty_unlock_event_count} 个剧情事件没有配置任何解锁内容")
+            warnings.append(f"有 {empty_unlock_event_count} 个剧情事件还没有配置任何解锁内容。")
         if empty_event_content_count:
             warnings.append(f"有 {empty_event_content_count} 个剧情事件没有触发文案，剧情衔接可能偏生硬")
 
@@ -600,7 +615,7 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
             active_counts["memory_count"] > 0,
             active_counts["greeting_count"] > 0,
             (row["card_type"] == "world") or greeting_phase_coverage >= 2,
-            (not row["affection_enabled"]) or bool(parse_json_object(row["affection_rules_json"], fallback={})),
+            (not row["affection_enabled"]) or _affection_rules_use_default(row["affection_rules_json"]) or bool(parse_json_object(row["affection_rules_json"], fallback={})),
             counts["storyline_count"] == 0 or bool(default_storyline_id_row),
             counts["story_event_count"] == 0 or empty_unlock_event_count == 0,
         ]

@@ -258,6 +258,7 @@
             try { payloadData = JSON.parse(dataLine); } catch (_) { continue; }
             if (event === 'chunk' && handlers.onChunk) handlers.onChunk(payloadData.text || '');
             if (event === 'done' && handlers.onDone) handlers.onDone(payloadData);
+            if (event === 'error' && handlers.onError) handlers.onError(payloadData);
           }
         }
       }
@@ -1015,6 +1016,12 @@
                   history.push({ role: 'user', content: text, created_at: new Date().toISOString() });
                   history.push({ role: 'assistant', content: aiText, created_at: new Date().toISOString() });
                 },
+                // AI 调用失败时，后端不发 chunk/done，只发 error 事件
+                onError(payload) {
+                  removeTyping();
+                  if (bubbleEl) { bubbleEl.remove(); bubbleEl = null; }
+                  UI.toast(payload?.message || '网络波动，请稍后再试', 'warn', 3000);
+                },
               }
             );
             await refreshGuestQuota();
@@ -1050,6 +1057,12 @@
                   if (payload?.character_state) {
                     renderStateBar(payload.character_state);
                   }
+                },
+                // AI 调用失败时，后端不发 chunk/done，只发 error 事件
+                onError(payload) {
+                  removeTyping();
+                  if (bubbleEl) { bubbleEl.remove(); bubbleEl = null; }
+                  UI.toast(payload?.message || '网络波动，请稍后再试', 'warn', 3000);
                 },
               }
             );

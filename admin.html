@@ -911,6 +911,11 @@ const API = (() => {
   }
   return `${protocol}//${hostname}:8000/api/admin`;
 })();
+const API_BASE = (() => API.replace(/\/admin$/, ''))();
+const TOKEN_KEY = 'aifriend_token';
+const USER_KEY = 'aifriend_user';
+let adminBootstrapped = false;
+let currentAdminUser = null;
 let currentCharId = null;
 let currentCharData = null;
 let currentCharSummary = null;
@@ -1030,16 +1035,71 @@ function toast(msg, duration = 2500) {
 }
 
 async function apiFetch(url, opts = {}) {
+  const token = localStorage.getItem(TOKEN_KEY) || '';
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(opts.headers || {}),
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
     ...opts,
+    headers,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
+    if (res.status === 401) {
+      throw new Error('请先登录普通前台账号，再进入管理后台');
+    }
+    if (res.status === 403) {
+      throw new Error(err.detail || '你没有管理后台权限');
+    }
     throw new Error(err.detail || res.statusText);
   }
   return res.json();
 }
+function renderAccessDenied(message) {
+  document.body.innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f0f13;padding:24px;">
+      <div style="max-width:560px;width:100%;background:#1a1a24;border:1px solid #2a2a3a;border-radius:18px;padding:28px;color:#e8e8f0;box-shadow:0 12px 40px rgba(0,0,0,.35);">
+        <div style="font-size:28px;margin-bottom:12px;">🔐</div>
+        <h1 style="font-size:22px;margin-bottom:10px;">管理后台已拦截</h1>
+        <p style="font-size:14px;line-height:1.8;color:#b6bac7;margin-bottom:18px;">${escHtml(message || '你暂时没有管理后台权限。')}</p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <a href="/" style="display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:10px;background:#7c3aed;color:#fff;text-decoration:none;font-size:14px;font-weight:600;">返回前台首页</a>
+          <button onclick="location.reload()" style="padding:10px 16px;border-radius:10px;border:1px solid #3a3a4a;background:#2a2a3a;color:#e8e8f0;font-size:14px;cursor:pointer;">重新检查权限</button>
+        </div>
+        <div style="margin-top:16px;font-size:12px;line-height:1.7;color:#888;">如果你本来就是管理员，请先在前台登录已授权邮箱，然后再回来打开这个页面。</div>
+      </div>
+    </div>
+  `;
+}
+
+async function bootstrapAdminPage() {
+  if (adminBootstrapped) return true;
+  const token = localStorage.getItem(TOKEN_KEY) || '';
+  if (!token) {
+    renderAccessDenied('还没检测到登录令牌。请先在前台登录管理员账号，再进入管理后台。');
+    return false;
+  }
+
+  try {
+    const me = await apiFetch(`${API_BASE}/auth/me`);
+    currentAdminUser = me || null;
+    localStorage.setItem(USER_KEY, JSON.stringify(me || null));
+    if (!me?.is_admin) {
+      renderAccessDenied('当前账号已登录，但不在管理员白名单里，所以后台不会继续加载。');
+      return false;
+    }
+    adminBootstrapped = true;
+    return true;
+  } catch (e) {
+    renderAccessDenied(e.message || '管理员权限检查失败，请重新登录后再试。');
+    return false;
+  }
+}
+
 // ============================================================
 // 标签页切换
 // ============================================================
@@ -2101,6 +2161,28 @@ function splitCsvIds(raw) {
     .filter(Boolean);
 }
 
+function parseAffectionRules(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return null;
+  }
+}
+
+function hasUsableAffectionRules(raw) {
+  const parsed = parseAffectionRules(raw);
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return false;
+  return Object.values(parsed).some(value => {
+    if (value == null) return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'object') return Object.keys(value).length > 0;
+    if (typeof value === 'string') return value.trim() !== '';
+    return true;
+  });
+}
+
 function getMemoryNameById(id) {
   const item = (advancedData.memories || []).find(x => String(x.id) === String(id));
   if (!item) return `记忆#${id}`;
@@ -2133,8 +2215,10 @@ function buildExtraWarnings(summary) {
   const activeGreetings = stats.active_greetings ?? stats.greetings ?? 0;
   const activePostRules = stats.active_post_rules ?? stats.post_rules ?? 0;
   const phaseCoverage = stats.greeting_phase_coverage ?? phases.size;
+  const affectionEnabled = currentCharData?.affection_enabled === 1 || currentCharData?.affection_enabled === '1';
+  const hasAffectionRules = hasUsableAffectionRules(currentCharData?.affection_rules_json);
 
-  if ((currentCharData?.affection_enabled === 1 || currentCharData?.affection_enabled === '1') && !String(currentCharData?.affection_rules_json || '').trim()) {
+  if (affectionEnabled && !hasAffectionRules) {
     extra.push('已启用好感度系统，但好感度规则还是空的。');
   }
   if (activeMemories > 0 && activeMemories < 3) {
@@ -2146,7 +2230,7 @@ function buildExtraWarnings(summary) {
   if ((stats.post_rules || 0) > 0 && activePostRules === 0) {
     extra.push('后置规则虽然配置了，但目前全部处于禁用状态。');
   }
-  if (storylines.length > 0 && !storylines.some(x => x.is_default)) {
+  if (storylines.length > 0 && !summary.default_storyline_id) {
     extra.push('已有剧情线，但还没有设置默认剧情线。');
   }
   if ((stats.events || 0) > 0 && (stats.storylines || 0) === 0) {
@@ -2177,6 +2261,8 @@ function buildChecklist(summary) {
   const emptyUnlockEvents = stats.empty_unlock_events ?? events.filter(e => !(splitCsvIds(e.unlocked_memory_ids).length || splitCsvIds(e.unlocked_greeting_ids).length || e.unlocked_storyline_id)).length;
   const emptyEventContentEvents = stats.empty_event_content_events ?? events.filter(e => !String(e.event_content || '').trim()).length;
   const isWorldCard = (currentCharData?.card_type || 'intimate') === 'world';
+  const affectionEnabled = currentCharData?.affection_enabled === 1 || currentCharData?.affection_enabled === '1';
+  const hasAffectionRules = hasUsableAffectionRules(currentCharData?.affection_rules_json);
 
   return [
     {
@@ -2203,11 +2289,11 @@ function buildChecklist(summary) {
             : `当前只有 ${activeGreetings || 0} 条启用中的开场白，建议至少覆盖“陌生人 + 熟人”两档。`)
     },
     {
-      ok: activeStorylines === 0 || storylines.some(x => x.is_default),
+      ok: activeStorylines === 0 || Boolean(summary.default_storyline_id),
       title: '默认剧情线',
       text: activeStorylines === 0
         ? '目前还没配剧情线，可以暂时先不配。'
-        : (storylines.some(x => x.is_default) ? '已设置默认剧情线。' : '已有剧情线，但还没指定默认剧情线。')
+        : (summary.default_storyline_id ? '已设置默认剧情线。' : '已有剧情线，但还没指定默认剧情线。')
     },
     {
       ok: activeEvents === 0 || (emptyUnlockEvents === 0 && emptyEventContentEvents === 0),
@@ -2228,12 +2314,12 @@ function buildChecklist(summary) {
             : '虽然后置规则已配置，但现在全部是禁用状态。')
     },
     {
-      ok: !(currentCharData?.affection_enabled === 1 || currentCharData?.affection_enabled === '1') || Boolean(String(currentCharData?.affection_rules_json || '').trim()),
+      ok: !affectionEnabled || hasAffectionRules,
       title: '好感度规则',
-      text: !(currentCharData?.affection_enabled === 1 || currentCharData?.affection_enabled === '1')
+      text: !affectionEnabled
         ? '当前角色未启用好感度系统。'
-        : (String(currentCharData?.affection_rules_json || '').trim()
-            ? '好感度系统已启用，且已有规则配置。'
+        : (hasAffectionRules
+            ? '好感度系统已启用，且已有有效规则配置。'
             : '好感度已启用，但规则还是空的。')
     }
   ];
@@ -3219,7 +3305,11 @@ function formatDate(iso) {
 // ============================================================
 // 初始化
 // ============================================================
-loadCharList();
+bootstrapAdminPage().then(ok => {
+  if (ok) {
+    loadCharList();
+  }
+});
 </script>
 
 </body>
