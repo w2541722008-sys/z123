@@ -40,6 +40,7 @@ from typing import Any
 
 # 本地模块导入
 from config import utc_now_iso
+from utils.json_utils import parse_json_object
 
 # ============================================================
 # 全局配置常量
@@ -128,23 +129,6 @@ _AFFECTION_DELTA_MAX = 10
 def _get_today_date() -> str:
     """返回 UTC 日期字符串 YYYY-MM-DD（与数据库字段保持一致）。"""
     return datetime.now(timezone.utc).date().isoformat()
-
-
-def parse_json_object(text, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
-    """安全解析 JSON 对象（兼容 psycopg2 自动解析的 dict）。"""
-    fallback = fallback or {}
-    if isinstance(text, dict):
-        return text
-    if isinstance(text, list):
-        return dict(fallback)
-    raw = (text or "").strip() if isinstance(text, str) else ""
-    if not raw:
-        return dict(fallback)
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return dict(fallback)
-    return value if isinstance(value, dict) else dict(fallback)
 
 
 def _get_affection_rules(conn: Any, character_id: str) -> dict[str, int]:

@@ -38,6 +38,7 @@ from config import SUMMARY_MAX_TOKENS, SUMMARY_TRIGGER_COUNT, logger, utc_now_is
 from database import get_conn
 from model_adapter import get_ai_config, request_chat_completion
 from prompt_assembler import RECENT_MESSAGE_WINDOW, build_memory_summary_messages
+from utils.json_utils import parse_json_list, parse_json_object
 
 
 _SUMMARY_SECTION_TITLES: list[tuple[str, str]] = [
@@ -86,63 +87,6 @@ def _release_summary_job(user_id: int, character_id: str) -> None:
     key = (user_id, character_id)
     with _SUMMARY_JOB_LOCK:
         _SUMMARY_RUNNING_KEYS.discard(key)
-
-
-# ============================================================
-# JSON 解析工具
-# ============================================================
-def parse_json_object(text, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
-    """
-    安全解析 JSON 对象。
-
-    Args:
-        text: JSON 字符串，或者已经被 psycopg2 自动解析的 dict/list
-        fallback: 解析失败时的默认值
-
-    Returns:
-        解析后的字典，或 fallback
-    """
-    fallback = fallback or {}
-    # psycopg2 对 json/jsonb 类型会自动解析为 Python 对象，直接判断类型即可
-    if isinstance(text, dict):
-        return text
-    if isinstance(text, list):
-        return dict(fallback)
-    raw = (text or "").strip() if isinstance(text, str) else ""
-    if not raw:
-        return dict(fallback)
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return dict(fallback)
-    return value if isinstance(value, dict) else dict(fallback)
-
-
-def parse_json_list(text, fallback: list[Any] | None = None) -> list[Any]:
-    """
-    安全解析 JSON 数组。
-
-    Args:
-        text: JSON 字符串，或者已经被 psycopg2 自动解析的 list/dict
-        fallback: 解析失败时的默认值
-
-    Returns:
-        解析后的列表，或 fallback
-    """
-    fallback = fallback or []
-    # psycopg2 对 json/jsonb 类型会自动解析为 Python 对象，直接判断类型即可
-    if isinstance(text, list):
-        return text
-    if isinstance(text, dict):
-        return list(fallback)
-    raw = (text or "").strip() if isinstance(text, str) else ""
-    if not raw:
-        return list(fallback)
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return list(fallback)
-    return value if isinstance(value, list) else list(fallback)
 
 
 # ============================================================
@@ -710,7 +654,7 @@ def refresh_memory_summary(
 
 def run_memory_summary_background(
     user_id: int,
-    character_id: int,
+    character_id: str,
     character_row_data: dict,
 ) -> None:
     """

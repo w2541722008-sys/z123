@@ -23,7 +23,7 @@ from database import get_conn
 from models import CharacterProfileUpdatePayload, ClearChatPayload
 from services.character_state import get_character_state
 from services.chat_service import ensure_opening_message, get_character_or_404
-from services.memory_service import parse_json_list, parse_json_object
+from utils.json_utils import parse_json_list, parse_json_object
 from services.cache_service import cache_get, cache_set, cache_delete
 from services.plan_service import (
     GUEST_PLAN,

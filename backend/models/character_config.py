@@ -88,7 +88,7 @@ class MemoryCategoryUpdate(BaseModel):
 class MemoryCategory(MemoryCategoryBase):
     """记忆分类完整模型"""
     id: int
-    character_id: int
+    character_id: str
     created_at: datetime
     updated_at: datetime
     
@@ -157,7 +157,7 @@ class CharacterMemoryUpdate(BaseModel):
 class CharacterMemory(CharacterMemoryBase):
     """角色记忆条目完整模型"""
     id: int
-    character_id: int
+    character_id: str
     created_at: datetime
     updated_at: datetime
     
@@ -228,7 +228,7 @@ class CharacterGreetingUpdate(BaseModel):
 class CharacterGreeting(CharacterGreetingBase):
     """角色开场白完整模型"""
     id: int
-    character_id: int
+    character_id: str
     created_at: datetime
     updated_at: datetime
     
@@ -285,7 +285,7 @@ class CharacterStorylineUpdate(BaseModel):
 class CharacterStoryline(CharacterStorylineBase):
     """角色剧情线完整模型"""
     id: int
-    character_id: int
+    character_id: str
     created_at: datetime
     updated_at: datetime
     
@@ -334,7 +334,7 @@ class CharacterPostRuleUpdate(BaseModel):
 class CharacterPostRule(CharacterPostRuleBase):
     """角色后置规则完整模型"""
     id: int
-    character_id: int
+    character_id: str
     created_at: datetime
     updated_at: datetime
     
@@ -407,7 +407,7 @@ class StoryEventUpdate(BaseModel):
 class StoryEvent(StoryEventBase):
     """剧情事件完整模型"""
     id: int
-    character_id: int
+    character_id: str
     created_at: datetime
     updated_at: datetime
     

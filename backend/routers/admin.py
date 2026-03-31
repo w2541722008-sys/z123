@@ -70,7 +70,8 @@ from models import (
     StoryEventPayload,
     MemoryCategoryPayload,
 )
-from services.memory_service import get_summary_for_prompt, parse_json_list, parse_json_object
+from services.memory_service import get_summary_for_prompt
+from utils.json_utils import parse_json_list, parse_json_object
 from services.plan_service import plan_display_name, serialize_plan_info
 from services.cache_service import cache_delete, invalidate_character
 from services.db_monitor import get_stats, reset_stats
