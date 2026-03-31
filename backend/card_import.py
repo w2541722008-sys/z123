@@ -22,25 +22,27 @@ card_import.py —— 手动导入单张 PNG 角色卡
 
 import argparse
 import json
-import sqlite3
+import os
 import sys
 from pathlib import Path
 
 # ── 路径设置 ────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
-DB_PATH = BASE_DIR / "data" / "aifriend.db"
 
 # 把 backend/ 加入模块搜索路径
 sys.path.insert(0, str(BASE_DIR))
 
+# 加载环境变量（必须在导入 database 之前）
+from config import load_env_file
+
+load_env_file()
+
 from card_asset_parser import build_import_record, canonical_card_stem  # noqa: E402
+from database import get_conn  # noqa: E402
 
 
 # ── 连接数据库 ───────────────────────────────────────────────────────────────
-def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+# 现在使用 database.py 中的 PostgreSQL 连接
 
 
 def list_characters() -> None:
@@ -121,7 +123,7 @@ def import_png(png_path: Path, dry_run: bool = False) -> None:
     # 检查是否已存在
     conn = get_conn()
     existing = conn.execute(
-        "select id, name, import_locked from characters where id = ?",
+        "select id, name, import_locked from characters where id = %s",
         (record["id"],)
     ).fetchone()
 
@@ -152,7 +154,7 @@ def import_png(png_path: Path, dry_run: bool = False) -> None:
             asset_type, source_kind, source_path, embedded_format, raw_card_json,
             structured_asset_json, runtime_cache_json, import_diagnostics,
             is_visible, home_priority, card_type, import_locked
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)
         on conflict(id) do update set
             -- 技术字段：始终跟随 PNG 更新（原始素材）
             name=excluded.name,
@@ -230,8 +232,8 @@ def main() -> None:
         epilog="""
 示例：
   python card_import.py --list
-  python card_import.py --path ../角色卡/新角色.png
-  python card_import.py --dry-run --path ../角色卡/新角色.png
+  python card_import.py --path ../character_cards/新角色.png
+  python card_import.py --dry-run --path ../character_cards/新角色.png
         """,
     )
     parser.add_argument("--path", type=Path, help="要导入的 PNG 文件路径")

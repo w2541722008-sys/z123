@@ -791,7 +791,7 @@ def get_character_memories_from_db(
             """
             SELECT keywords, trigger_logic, content, position, priority
             FROM character_memories
-            WHERE character_id = ? AND is_active = 1
+            WHERE character_id = %s AND is_active = 1
             ORDER BY priority ASC, id ASC
             """,
             (character_id,),
@@ -890,17 +890,17 @@ def get_character_post_rules_from_db(
     conn = get_conn()
     try:
         # 构建查询条件
-        conditions = ["character_id = ?", "is_active = 1"]
+        conditions = ["character_id = %s", "is_active = 1"]
         params: list[Any] = [character_id]
-        
+
         #  storyline_id 过滤：规则未指定 storyline_id（通用）或匹配当前 storyline_id
         if storyline_id is not None:
-            conditions.append("(storyline_id IS NULL OR storyline_id = ?)")
+            conditions.append("(storyline_id IS NULL OR storyline_id = %s)")
             params.append(storyline_id)
-        
+
         # story_phase 过滤：规则未指定 story_phase（通用）或匹配当前 story_phase
         if story_phase:
-            conditions.append("(story_phase IS NULL OR story_phase = ?)")
+            conditions.append("(story_phase IS NULL OR story_phase = %s)")
             params.append(story_phase)
         
         where_clause = " AND ".join(conditions)

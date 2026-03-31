@@ -46,10 +46,6 @@
     
     # 高级配置 - 关键词测试
     POST /api/admin/character/{id}/test-keywords  - 测试关键词匹配
-    
-    GET  /api/debug/card                          - 调试角色卡资源
-    GET  /api/debug/cards                         - 调试所有角色卡
-    GET  /api/debug/message-preview               - 调试消息预览
 """
 
 from __future__ import annotations
@@ -76,6 +72,8 @@ from models import (
 )
 from services.memory_service import get_summary_for_prompt, parse_json_list, parse_json_object
 from services.plan_service import plan_display_name, serialize_plan_info
+from services.cache_service import cache_delete, invalidate_character
+from services.db_monitor import get_stats, reset_stats
 from prompt_assembler import build_message_preview
 
 router = APIRouter(dependencies=[Depends(get_admin_user)])
@@ -154,7 +152,7 @@ def admin_create_character(body: dict[str, Any]) -> dict[str, Any]:
     try:
         # 检查ID是否已存在
         existing = conn.execute(
-            "SELECT id FROM characters WHERE id = ?",
+            "SELECT id FROM characters WHERE id = %s",
             (char_id,)
         ).fetchone()
         if existing:
@@ -183,7 +181,7 @@ def admin_create_character(body: dict[str, Any]) -> dict[str, Any]:
                 mock_reply_style, asset_type, source_kind, source_path,
                 embedded_format, raw_card_json, structured_asset_json,
                 import_diagnostics, import_locked, affection_enabled, affection_rules_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 char_id, name, abbr, subtitle, avatar_url, cover_url, description,
@@ -195,6 +193,9 @@ def admin_create_character(body: dict[str, Any]) -> dict[str, Any]:
             )
         )
         conn.commit()
+        
+        # 清除角色列表缓存
+        cache_delete("character_list_all")
         
         return {
             "ok": True,
@@ -211,16 +212,19 @@ def admin_get_character(character_id: str) -> dict[str, Any]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT * FROM characters WHERE id = ?",
+            "SELECT * FROM characters WHERE id = %s",
             (character_id,),
         ).fetchone()
 
         if not row:
             raise HTTPException(status_code=404, detail="角色不存在")
 
-        # 解析结构化数据
-        structured = parse_json_object(row["structured_asset_json"], fallback={})
-        runtime_layers = structured.get("runtime_layers", {})
+        # 解析结构化数据 - 优先使用 runtime_cache_json（这是真正用于 Prompt 组装的数据）
+        runtime_layers = parse_json_object(row.get("runtime_cache_json"), fallback={})
+        if not runtime_layers:
+            # 如果没有 runtime_cache_json，尝试从 structured_asset_json 读取
+            structured = parse_json_object(row.get("structured_asset_json"), fallback={})
+            runtime_layers = structured.get("runtime_layers", {})
 
         # 把 runtime_layers 的列表值转成字符串（方便编辑）
         runtime_layers_str = {}
@@ -302,7 +306,7 @@ def admin_update_user_plan(
     conn = get_conn()
     try:
         user_row = conn.execute(
-            "SELECT id, email, COALESCE(nickname, '') AS nickname FROM users WHERE id = ?",
+            "SELECT id, email, COALESCE(nickname, '') AS nickname FROM users WHERE id = %s",
             (user_id,),
         ).fetchone()
         if not user_row:
@@ -314,7 +318,7 @@ def admin_update_user_plan(
             plan_expires_at = (datetime.now(timezone.utc) + timedelta(days=body.duration_days)).isoformat()
 
         conn.execute(
-            "UPDATE users SET plan_type = ?, plan_expires_at = ?, updated_at = ? WHERE id = ?",
+            "UPDATE users SET plan_type = %s, plan_expires_at = %s, updated_at = %s WHERE id = %s",
             (body.plan_type, plan_expires_at, utc_now_iso(), user_id),
         )
         conn.commit()
@@ -350,7 +354,7 @@ def admin_list_membership_orders(limit: int = 100) -> dict[str, Any]:
             FROM membership_orders o
             LEFT JOIN users u ON u.id = o.user_id
             ORDER BY o.id DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (safe_limit,),
         ).fetchall()
@@ -391,14 +395,19 @@ def admin_delete_character(character_id: str) -> dict[str, Any]:
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, name FROM characters WHERE id = ?",
+            "SELECT id, name FROM characters WHERE id = %s",
             (character_id,),
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="角色不存在")
 
-        conn.execute("DELETE FROM characters WHERE id = ?", (character_id,))
+        conn.execute("DELETE FROM characters WHERE id = %s", (character_id,))
         conn.commit()
+        
+        # 清除缓存
+        invalidate_character(character_id)
+        cache_delete("character_list_all")
+        
         return {"ok": True, "id": character_id, "name": row["name"]}
     finally:
         conn.close()
@@ -424,7 +433,7 @@ def admin_update_character(
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, structured_asset_json FROM characters WHERE id = ?",
+            "SELECT id, structured_asset_json FROM characters WHERE id = %s",
             (character_id,),
         ).fetchone()
         if not row:
@@ -432,16 +441,25 @@ def admin_update_character(
 
         # 1. 直接更新普通字段
         if safe_direct:
-            set_clause = ", ".join(f"{k} = ?" for k in safe_direct)
+            set_clause = ", ".join(f"{k} = %s" for k in safe_direct)
             conn.execute(
-                f"UPDATE characters SET {set_clause} WHERE id = ?",
+                f"UPDATE characters SET {set_clause} WHERE id = %s",
                 list(safe_direct.values()) + [character_id],
             )
 
-        # 2. 更新 structured_asset_json 里的 runtime_layers
-        if rl_updates and row["structured_asset_json"]:
+        # 2. 更新 structured_asset_json 和 runtime_cache_json 里的 runtime_layers
+        if rl_updates:
             try:
-                sj = json.loads(row["structured_asset_json"])
+                # 优先从 structured_asset_json 读取，没有则从 runtime_cache_json 读取
+                sj_raw = row.get("structured_asset_json") or "{}"
+                sj = json.loads(sj_raw) if sj_raw else {}
+                
+                # 如果没有 structured_asset_json，尝试从 runtime_cache_json 构建
+                if not sj:
+                    rc_raw = row.get("runtime_cache_json") or "{}"
+                    rc = json.loads(rc_raw) if rc_raw else {}
+                    sj = {"runtime_layers": rc}
+                
                 rl = sj.setdefault("runtime_layers", {})
                 for k, v in rl_updates.items():
                     orig = rl.get(k)
@@ -449,15 +467,24 @@ def admin_update_character(
                         rl[k] = [x.strip() for x in v.split("\n---\n") if x.strip()]
                     else:
                         rl[k] = v
-                new_json = json.dumps(sj, ensure_ascii=False)
+                
+                # 同时更新两个字段，确保一致性
+                new_structured_json = json.dumps(sj, ensure_ascii=False)
+                new_runtime_json = json.dumps(rl, ensure_ascii=False)
+                
                 conn.execute(
-                    "UPDATE characters SET structured_asset_json = ? WHERE id = ?",
-                    (new_json, character_id),
+                    "UPDATE characters SET structured_asset_json = %s, runtime_cache_json = %s WHERE id = %s",
+                    (new_structured_json, new_runtime_json, character_id),
                 )
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"更新 runtime_layers 失败: {e}")
 
         conn.commit()
+        
+        # 清除缓存
+        invalidate_character(character_id)
+        cache_delete("character_list_all")
+        
         return {"ok": True, "updated": list(safe_direct.keys()) + [f"rl__{k}" for k in rl_updates]}
     finally:
         conn.close()
@@ -523,7 +550,7 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
                    card_type,
                    affection_enabled, affection_rules_json, structured_asset_json
             FROM characters
-            WHERE id = ?
+            WHERE id = %s
             """,
             (character_id,),
         ).fetchone()
@@ -534,31 +561,31 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
         runtime_layers = structured.get("runtime_layers", {}) or {}
 
         counts = {
-            "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = ?", (character_id,)).fetchone()[0],
-            "memory_category_count": conn.execute("SELECT COUNT(*) FROM memory_categories WHERE character_id = ?", (character_id,)).fetchone()[0],
-            "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = ?", (character_id,)).fetchone()[0],
-            "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = ?", (character_id,)).fetchone()[0],
-            "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = ?", (character_id,)).fetchone()[0],
-            "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = ?", (character_id,)).fetchone()[0],
+            "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = %s", (character_id,)).fetchone()[0],
+            "memory_category_count": conn.execute("SELECT COUNT(*) FROM memory_categories WHERE character_id = %s", (character_id,)).fetchone()[0],
+            "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = %s", (character_id,)).fetchone()[0],
+            "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = %s", (character_id,)).fetchone()[0],
+            "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = %s", (character_id,)).fetchone()[0],
+            "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = %s", (character_id,)).fetchone()[0],
         }
         active_counts = {
-            "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = ? AND is_active = 1", (character_id,)).fetchone()[0],
-            "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = ? AND is_active = 1", (character_id,)).fetchone()[0],
-            "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = ? AND is_active = 1", (character_id,)).fetchone()[0],
-            "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = ? AND is_active = 1", (character_id,)).fetchone()[0],
-            "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = ? AND is_active = 1", (character_id,)).fetchone()[0],
+            "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
+            "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
+            "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
+            "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
+            "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
         }
         greeting_phase_coverage = len(conn.execute(
-            "SELECT DISTINCT story_phase FROM character_greetings WHERE character_id = ? AND is_active = 1",
+            "SELECT DISTINCT story_phase FROM character_greetings WHERE character_id = %s AND is_active = 1",
             (character_id,),
         ).fetchall())
 
         default_storyline_id_row = conn.execute(
-            "SELECT id FROM character_storylines WHERE character_id = ? AND is_default = 1 ORDER BY id ASC LIMIT 1",
+            "SELECT id FROM character_storylines WHERE character_id = %s AND is_default = 1 ORDER BY id ASC LIMIT 1",
             (character_id,),
         ).fetchone()
         active_greetings = conn.execute(
-            "SELECT COUNT(*) FROM character_greetings WHERE character_id = ? AND is_active = 1",
+            "SELECT COUNT(*) FROM character_greetings WHERE character_id = %s AND is_active = 1",
             (character_id,),
         ).fetchone()[0]
 
@@ -582,12 +609,12 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
         empty_event_content_count = 0
         if counts["story_event_count"] > 0:
             events = conn.execute(
-                "SELECT id, unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id, event_content FROM story_events WHERE character_id = ?",
+                "SELECT id, unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id, event_content FROM story_events WHERE character_id = %s",
                 (character_id,),
             ).fetchall()
-            valid_memory_ids = {r[0] for r in conn.execute("SELECT id FROM character_memories WHERE character_id = ?", (character_id,)).fetchall()}
-            valid_greeting_ids = {r[0] for r in conn.execute("SELECT id FROM character_greetings WHERE character_id = ?", (character_id,)).fetchall()}
-            valid_storyline_ids = {r[0] for r in conn.execute("SELECT id FROM character_storylines WHERE character_id = ?", (character_id,)).fetchall()}
+            valid_memory_ids = {r[0] for r in conn.execute("SELECT id FROM character_memories WHERE character_id = %s", (character_id,)).fetchall()}
+            valid_greeting_ids = {r[0] for r in conn.execute("SELECT id FROM character_greetings WHERE character_id = %s", (character_id,)).fetchall()}
+            valid_storyline_ids = {r[0] for r in conn.execute("SELECT id FROM character_storylines WHERE character_id = %s", (character_id,)).fetchall()}
             for event in events:
                 bad_m = [x for x in _split_csv_ids(event["unlocked_memory_ids"]) if x not in valid_memory_ids]
                 bad_g = [x for x in _split_csv_ids(event["unlocked_greeting_ids"]) if x not in valid_greeting_ids]
@@ -623,7 +650,7 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
 
         last_updated_candidates = []
         for table in ["character_memories", "memory_categories", "character_greetings", "character_storylines", "character_post_rules", "story_events"]:
-            r = conn.execute(f"SELECT MAX(updated_at) FROM {table} WHERE character_id = ?", (character_id,)).fetchone()
+            r = conn.execute(f"SELECT MAX(updated_at) FROM {table} WHERE character_id = %s", (character_id,)).fetchone()
             if r and r[0]:
                 last_updated_candidates.append(r[0])
 
@@ -662,7 +689,7 @@ def admin_message_preview(character_id: str) -> dict[str, Any]:
     """管理后台：预览组装后的 Prompt 消息（无登录态，使用空上下文）。"""
     conn = get_conn()
     try:
-        char_row = conn.execute("SELECT * FROM characters WHERE id = ?", (character_id,)).fetchone()
+        char_row = conn.execute("SELECT * FROM characters WHERE id = %s", (character_id,)).fetchone()
         if not char_row:
             raise HTTPException(status_code=404, detail="角色不存在")
 
@@ -686,100 +713,6 @@ def admin_message_preview(character_id: str) -> dict[str, Any]:
 
 
 
-# ============================================================
-# 调试接口
-# ============================================================
-@router.get("/debug/card")
-def debug_card_asset(
-    character_id: str,
-    user: CurrentUser = Depends(get_current_user),
-) -> dict[str, Any]:
-    """调试接口：查看角色卡的运行时层数据。"""
-    conn = get_conn()
-    try:
-        row = conn.execute(
-            "SELECT structured_asset_json FROM characters WHERE id = ?",
-            (character_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="角色不存在")
-
-        structured = parse_json_object(row["structured_asset_json"], fallback={})
-        return {
-            "character_id": character_id,
-            "runtime_layers": structured.get("runtime_layers", {}),
-            "raw": structured,
-        }
-    finally:
-        conn.close()
-
-
-@router.get("/debug/cards")
-def debug_cards(user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
-    """调试接口：查看所有角色卡的运行时层结构。"""
-    conn = get_conn()
-    try:
-        rows = conn.execute(
-            "SELECT id, name, structured_asset_json FROM characters ORDER BY id"
-        ).fetchall()
-
-        cards = []
-        for row in rows:
-            structured = parse_json_object(row["structured_asset_json"], fallback={})
-            runtime_layers = structured.get("runtime_layers", {})
-            layer_names = list(runtime_layers.keys())
-
-            cards.append({
-                "id": row["id"],
-                "name": row["name"],
-                "layer_count": len(layer_names),
-                "layer_names": layer_names,
-            })
-
-        return {"total": len(cards), "cards": cards}
-    finally:
-        conn.close()
-
-
-@router.get("/debug/message-preview")
-def debug_message_preview(
-    character_id: str,
-    user: CurrentUser = Depends(get_current_user),
-) -> dict[str, Any]:
-    """调试接口：预览组装后的 Prompt 消息。"""
-    conn = get_conn()
-    try:
-        from services.memory_service import get_recent_messages
-        from services.character_state import get_character_state
-
-        char_row = conn.execute(
-            "SELECT * FROM characters WHERE id = ?",
-            (character_id,),
-        ).fetchone()
-        if not char_row:
-            raise HTTPException(status_code=404, detail="角色不存在")
-
-        recent = get_recent_messages(conn, user.id, character_id)
-        summary = get_summary_for_prompt(conn, user.id, character_id)
-        state = get_character_state(conn, user.id, character_id)
-
-        preview = build_message_preview(
-            character=char_row,
-            recent_messages=recent,
-            memory_summary=summary,
-            user_name=user.nickname,
-            character_state=state,
-        )
-
-        return {
-            "character_id": character_id,
-            "message_count": preview.get("message_count", 0),
-            "messages": preview.get("messages", []),
-            "runtime_layers": preview.get("runtime_layers", {}),
-            "related_assets": preview.get("related_assets", []),
-        }
-    finally:
-        conn.close()
 
 
 # ============================================================
@@ -794,7 +727,7 @@ def _assert_memory_category_owned(
     if category_id is None:
         return
     row = conn.execute(
-        "SELECT id FROM memory_categories WHERE id = ? AND character_id = ?",
+        "SELECT id FROM memory_categories WHERE id = %s AND character_id = %s",
         (category_id, character_id),
     ).fetchone()
     if not row:
@@ -810,7 +743,7 @@ def _assert_storyline_owned(
     if storyline_id is None:
         return
     row = conn.execute(
-        "SELECT id FROM character_storylines WHERE id = ? AND character_id = ?",
+        "SELECT id FROM character_storylines WHERE id = %s AND character_id = %s",
         (storyline_id, character_id),
     ).fetchone()
     if not row:
@@ -831,7 +764,7 @@ def _assert_story_event_unlock_refs_owned(
     if memory_ids:
         valid_memory_ids = {
             r[0] for r in conn.execute(
-                "SELECT id FROM character_memories WHERE character_id = ?",
+                "SELECT id FROM character_memories WHERE character_id = %s",
                 (character_id,),
             ).fetchall()
         }
@@ -842,7 +775,7 @@ def _assert_story_event_unlock_refs_owned(
     if greeting_ids:
         valid_greeting_ids = {
             r[0] for r in conn.execute(
-                "SELECT id FROM character_greetings WHERE character_id = ?",
+                "SELECT id FROM character_greetings WHERE character_id = %s",
                 (character_id,),
             ).fetchall()
         }
@@ -860,7 +793,7 @@ def list_memories(character_id: str) -> list[dict[str, Any]]:
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -870,7 +803,7 @@ def list_memories(character_id: str) -> list[dict[str, Any]]:
             SELECT id, keywords, trigger_logic, content, category_id, position,
                    priority, is_active, comment, created_at, updated_at
             FROM character_memories
-            WHERE character_id = ?
+            WHERE character_id = %s
             ORDER BY priority ASC, id ASC
             """,
             (character_id,),
@@ -906,7 +839,7 @@ def create_memory(
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -919,7 +852,8 @@ def create_memory(
             INSERT INTO character_memories
             (character_id, keywords, trigger_logic, content, category_id, position,
              priority, is_active, comment, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 character_id,
@@ -936,8 +870,8 @@ def create_memory(
             ),
         )
         conn.commit()
-
-        return {"id": cur.lastrowid, "ok": True}
+        new_id = cur.fetchone()[0]
+        return {"id": new_id, "ok": True}
     finally:
         conn.close()
 
@@ -953,7 +887,7 @@ def update_memory(
     try:
         # 检查记忆条目是否存在且属于该角色
         mem = conn.execute(
-            "SELECT id FROM character_memories WHERE id = ? AND character_id = ?",
+            "SELECT id FROM character_memories WHERE id = %s AND character_id = %s",
             (memory_id, character_id),
         ).fetchone()
         if not mem:
@@ -965,16 +899,16 @@ def update_memory(
         conn.execute(
             """
             UPDATE character_memories SET
-                keywords = ?,
-                trigger_logic = ?,
-                content = ?,
-                category_id = ?,
-                position = ?,
-                priority = ?,
-                is_active = ?,
-                comment = ?,
-                updated_at = ?
-            WHERE id = ?
+                keywords = %s,
+                trigger_logic = %s,
+                content = %s,
+                category_id = %s,
+                position = %s,
+                priority = %s,
+                is_active = %s,
+                comment = %s,
+                updated_at = %s
+            WHERE id = %s
             """,
             (
                 body.keywords,
@@ -1006,14 +940,14 @@ def delete_memory(
     try:
         # 检查记忆条目是否存在且属于该角色
         mem = conn.execute(
-            "SELECT id FROM character_memories WHERE id = ? AND character_id = ?",
+            "SELECT id FROM character_memories WHERE id = %s AND character_id = %s",
             (memory_id, character_id),
         ).fetchone()
         if not mem:
             raise HTTPException(status_code=404, detail="记忆条目不存在")
 
         conn.execute(
-            "DELETE FROM character_memories WHERE id = ?",
+            "DELETE FROM character_memories WHERE id = %s",
             (memory_id,),
         )
         conn.commit()
@@ -1033,7 +967,7 @@ def list_greetings(character_id: str) -> list[dict[str, Any]]:
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1043,7 +977,7 @@ def list_greetings(character_id: str) -> list[dict[str, Any]]:
             SELECT id, story_phase, mood, content, storyline_id,
                    priority, is_active, use_count, comment, created_at, updated_at
             FROM character_greetings
-            WHERE character_id = ?
+            WHERE character_id = %s
             ORDER BY story_phase, priority ASC, id ASC
             """,
             (character_id,),
@@ -1079,7 +1013,7 @@ def create_greeting(
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1092,7 +1026,8 @@ def create_greeting(
             INSERT INTO character_greetings
             (character_id, story_phase, mood, content, storyline_id,
              priority, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 character_id,
@@ -1107,8 +1042,8 @@ def create_greeting(
             ),
         )
         conn.commit()
-
-        return {"id": cur.lastrowid, "ok": True}
+        new_id = cur.fetchone()[0]
+        return {"id": new_id, "ok": True}
     finally:
         conn.close()
 
@@ -1124,7 +1059,7 @@ def update_greeting(
     try:
         # 检查开场白是否存在且属于该角色
         g = conn.execute(
-            "SELECT id FROM character_greetings WHERE id = ? AND character_id = ?",
+            "SELECT id FROM character_greetings WHERE id = %s AND character_id = %s",
             (greeting_id, character_id),
         ).fetchone()
         if not g:
@@ -1136,14 +1071,14 @@ def update_greeting(
         conn.execute(
             """
             UPDATE character_greetings SET
-                story_phase = ?,
-                mood = ?,
-                content = ?,
-                storyline_id = ?,
-                priority = ?,
-                is_active = ?,
-                updated_at = ?
-            WHERE id = ?
+                story_phase = %s,
+                mood = %s,
+                content = %s,
+                storyline_id = %s,
+                priority = %s,
+                is_active = %s,
+                updated_at = %s
+            WHERE id = %s
             """,
             (
                 body.story_phase,
@@ -1173,14 +1108,14 @@ def delete_greeting(
     try:
         # 检查开场白是否存在且属于该角色
         g = conn.execute(
-            "SELECT id FROM character_greetings WHERE id = ? AND character_id = ?",
+            "SELECT id FROM character_greetings WHERE id = %s AND character_id = %s",
             (greeting_id, character_id),
         ).fetchone()
         if not g:
             raise HTTPException(status_code=404, detail="开场白不存在")
 
         conn.execute(
-            "DELETE FROM character_greetings WHERE id = ?",
+            "DELETE FROM character_greetings WHERE id = %s",
             (greeting_id,),
         )
         conn.commit()
@@ -1200,7 +1135,7 @@ def list_storylines(character_id: str) -> list[dict[str, Any]]:
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1210,7 +1145,7 @@ def list_storylines(character_id: str) -> list[dict[str, Any]]:
             SELECT id, name, description, unlock_score, is_default,
                    is_active, sort_order, created_at, updated_at
             FROM character_storylines
-            WHERE character_id = ?
+            WHERE character_id = %s
             ORDER BY sort_order ASC, id ASC
             """,
             (character_id,),
@@ -1244,7 +1179,7 @@ def create_storyline(
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1252,7 +1187,7 @@ def create_storyline(
         # 如果设为默认，先取消其他默认
         if body.is_default:
             conn.execute(
-                "UPDATE character_storylines SET is_default = 0 WHERE character_id = ?",
+                "UPDATE character_storylines SET is_default = 0 WHERE character_id = %s",
                 (character_id,),
             )
 
@@ -1262,7 +1197,8 @@ def create_storyline(
             INSERT INTO character_storylines
             (character_id, name, description, unlock_score, is_default,
              is_active, sort_order, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 character_id,
@@ -1277,8 +1213,8 @@ def create_storyline(
             ),
         )
         conn.commit()
-
-        return {"id": cur.lastrowid, "ok": True}
+        new_id = cur.fetchone()[0]
+        return {"id": new_id, "ok": True}
     finally:
         conn.close()
 
@@ -1294,7 +1230,7 @@ def update_storyline(
     try:
         # 检查剧情线是否存在且属于该角色
         sl = conn.execute(
-            "SELECT id FROM character_storylines WHERE id = ? AND character_id = ?",
+            "SELECT id FROM character_storylines WHERE id = %s AND character_id = %s",
             (storyline_id, character_id),
         ).fetchone()
         if not sl:
@@ -1304,7 +1240,7 @@ def update_storyline(
         if body.is_default:
             conn.execute(
                 """UPDATE character_storylines SET is_default = 0 
-                   WHERE character_id = ? AND id != ?""",
+                   WHERE character_id = %s AND id != %s""",
                 (character_id, storyline_id),
             )
 
@@ -1312,14 +1248,14 @@ def update_storyline(
         conn.execute(
             """
             UPDATE character_storylines SET
-                name = ?,
-                description = ?,
-                unlock_score = ?,
-                is_default = ?,
-                is_active = ?,
-                sort_order = ?,
-                updated_at = ?
-            WHERE id = ?
+                name = %s,
+                description = %s,
+                unlock_score = %s,
+                is_default = %s,
+                is_active = %s,
+                sort_order = %s,
+                updated_at = %s
+            WHERE id = %s
             """,
             (
                 body.name,
@@ -1349,14 +1285,14 @@ def delete_storyline(
     try:
         # 检查剧情线是否存在且属于该角色
         sl = conn.execute(
-            "SELECT id FROM character_storylines WHERE id = ? AND character_id = ?",
+            "SELECT id FROM character_storylines WHERE id = %s AND character_id = %s",
             (storyline_id, character_id),
         ).fetchone()
         if not sl:
             raise HTTPException(status_code=404, detail="剧情线不存在")
 
         conn.execute(
-            "DELETE FROM character_storylines WHERE id = ?",
+            "DELETE FROM character_storylines WHERE id = %s",
             (storyline_id,),
         )
         conn.commit()
@@ -1378,7 +1314,7 @@ def storyline_delete_impact(
             """
             SELECT id, name, is_default
             FROM character_storylines
-            WHERE id = ? AND character_id = ?
+            WHERE id = %s AND character_id = %s
             """,
             (storyline_id, character_id),
         ).fetchone()
@@ -1389,7 +1325,7 @@ def storyline_delete_impact(
             """
             SELECT id, story_phase, content
             FROM character_greetings
-            WHERE character_id = ? AND storyline_id = ?
+            WHERE character_id = %s AND storyline_id = %s
             ORDER BY id ASC
             """,
             (character_id, storyline_id),
@@ -1398,7 +1334,7 @@ def storyline_delete_impact(
             """
             SELECT id, name
             FROM character_post_rules
-            WHERE character_id = ? AND storyline_id = ?
+            WHERE character_id = %s AND storyline_id = %s
             ORDER BY id ASC
             """,
             (character_id, storyline_id),
@@ -1407,7 +1343,7 @@ def storyline_delete_impact(
             """
             SELECT id, title
             FROM story_events
-            WHERE character_id = ? AND unlocked_storyline_id = ?
+            WHERE character_id = %s AND unlocked_storyline_id = %s
             ORDER BY id ASC
             """,
             (character_id, storyline_id),
@@ -1470,7 +1406,7 @@ def test_keywords(
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1480,7 +1416,7 @@ def test_keywords(
             """
             SELECT id, keywords, trigger_logic, content
             FROM character_memories
-            WHERE character_id = ? AND is_active = 1
+            WHERE character_id = %s AND is_active = 1
             ORDER BY priority ASC
             """,
             (character_id,),
@@ -1529,7 +1465,7 @@ def list_post_rules(character_id: str) -> list[dict[str, Any]]:
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1539,7 +1475,7 @@ def list_post_rules(character_id: str) -> list[dict[str, Any]]:
             SELECT id, name, content, storyline_id, story_phase,
                    priority, is_active, created_at, updated_at
             FROM character_post_rules
-            WHERE character_id = ?
+            WHERE character_id = %s
             ORDER BY priority ASC, id ASC
             """,
             (character_id,),
@@ -1573,7 +1509,7 @@ def create_post_rule(
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1586,7 +1522,8 @@ def create_post_rule(
             INSERT INTO character_post_rules
             (character_id, name, content, storyline_id, story_phase,
              priority, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 character_id,
@@ -1601,8 +1538,8 @@ def create_post_rule(
             ),
         )
         conn.commit()
-
-        return {"ok": True, "id": cur.lastrowid}
+        new_id = cur.fetchone()[0]
+        return {"ok": True, "id": new_id}
     finally:
         conn.close()
 
@@ -1618,7 +1555,7 @@ def update_post_rule(
     try:
         # 检查规则是否存在且属于该角色
         rule = conn.execute(
-            "SELECT id FROM character_post_rules WHERE id = ? AND character_id = ?",
+            "SELECT id FROM character_post_rules WHERE id = %s AND character_id = %s",
             (rule_id, character_id),
         ).fetchone()
         if not rule:
@@ -1630,14 +1567,14 @@ def update_post_rule(
         conn.execute(
             """
             UPDATE character_post_rules SET
-                name = ?,
-                content = ?,
-                storyline_id = ?,
-                story_phase = ?,
-                priority = ?,
-                is_active = ?,
-                updated_at = ?
-            WHERE id = ?
+                name = %s,
+                content = %s,
+                storyline_id = %s,
+                story_phase = %s,
+                priority = %s,
+                is_active = %s,
+                updated_at = %s
+            WHERE id = %s
             """,
             (
                 body.name,
@@ -1667,14 +1604,14 @@ def delete_post_rule(
     try:
         # 检查规则是否存在且属于该角色
         rule = conn.execute(
-            "SELECT id FROM character_post_rules WHERE id = ? AND character_id = ?",
+            "SELECT id FROM character_post_rules WHERE id = %s AND character_id = %s",
             (rule_id, character_id),
         ).fetchone()
         if not rule:
             raise HTTPException(status_code=404, detail="后置规则不存在")
 
         conn.execute(
-            "DELETE FROM character_post_rules WHERE id = ?",
+            "DELETE FROM character_post_rules WHERE id = %s",
             (rule_id,),
         )
         conn.commit()
@@ -1694,7 +1631,7 @@ def list_story_events(character_id: str) -> list[dict[str, Any]]:
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1705,7 +1642,7 @@ def list_story_events(character_id: str) -> list[dict[str, Any]]:
                    unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
                    event_content, sort_order, is_active, created_at, updated_at
             FROM story_events
-            WHERE character_id = ?
+            WHERE character_id = %s
             ORDER BY trigger_score ASC, sort_order ASC, id ASC
             """,
             (character_id,),
@@ -1742,7 +1679,7 @@ def create_story_event(
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1762,7 +1699,8 @@ def create_story_event(
             (character_id, title, description, trigger_score,
              unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
              event_content, sort_order, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 character_id,
@@ -1780,8 +1718,8 @@ def create_story_event(
             ),
         )
         conn.commit()
-
-        return {"ok": True, "id": cur.lastrowid}
+        new_id = cur.fetchone()[0]
+        return {"ok": True, "id": new_id}
     finally:
         conn.close()
 
@@ -1797,7 +1735,7 @@ def update_story_event(
     try:
         # 检查事件是否存在且属于该角色
         event = conn.execute(
-            "SELECT id FROM story_events WHERE id = ? AND character_id = ?",
+            "SELECT id FROM story_events WHERE id = %s AND character_id = %s",
             (event_id, character_id),
         ).fetchone()
         if not event:
@@ -1815,17 +1753,17 @@ def update_story_event(
         conn.execute(
             """
             UPDATE story_events SET
-                title = ?,
-                description = ?,
-                trigger_score = ?,
-                unlocked_memory_ids = ?,
-                unlocked_greeting_ids = ?,
-                unlocked_storyline_id = ?,
-                event_content = ?,
-                sort_order = ?,
-                is_active = ?,
-                updated_at = ?
-            WHERE id = ?
+                title = %s,
+                description = %s,
+                trigger_score = %s,
+                unlocked_memory_ids = %s,
+                unlocked_greeting_ids = %s,
+                unlocked_storyline_id = %s,
+                event_content = %s,
+                sort_order = %s,
+                is_active = %s,
+                updated_at = %s
+            WHERE id = %s
             """,
             (
                 body.title,
@@ -1858,14 +1796,14 @@ def delete_story_event(
     try:
         # 检查事件是否存在且属于该角色
         event = conn.execute(
-            "SELECT id FROM story_events WHERE id = ? AND character_id = ?",
+            "SELECT id FROM story_events WHERE id = %s AND character_id = %s",
             (event_id, character_id),
         ).fetchone()
         if not event:
             raise HTTPException(status_code=404, detail="剧情事件不存在")
 
         conn.execute(
-            "DELETE FROM story_events WHERE id = ?",
+            "DELETE FROM story_events WHERE id = %s",
             (event_id,),
         )
         conn.commit()
@@ -1885,7 +1823,7 @@ def list_memory_categories(character_id: str) -> list[dict[str, Any]]:
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1894,7 +1832,7 @@ def list_memory_categories(character_id: str) -> list[dict[str, Any]]:
             """
             SELECT id, name, description, color, sort_order, created_at, updated_at
             FROM memory_categories
-            WHERE character_id = ?
+            WHERE character_id = %s
             ORDER BY sort_order ASC, id ASC
             """,
             (character_id,),
@@ -1926,7 +1864,7 @@ def create_memory_category(
     try:
         # 检查角色是否存在
         char = conn.execute(
-            "SELECT id FROM characters WHERE id = ?", (character_id,)
+            "SELECT id FROM characters WHERE id = %s", (character_id,)
         ).fetchone()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -1936,7 +1874,8 @@ def create_memory_category(
             """
             INSERT INTO memory_categories
             (character_id, name, description, color, sort_order, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 character_id,
@@ -1949,8 +1888,8 @@ def create_memory_category(
             ),
         )
         conn.commit()
-
-        return {"ok": True, "id": cur.lastrowid}
+        new_id = cur.fetchone()[0]
+        return {"ok": True, "id": new_id}
     finally:
         conn.close()
 
@@ -1966,7 +1905,7 @@ def update_memory_category(
     try:
         # 检查分类是否存在且属于该角色
         cat = conn.execute(
-            "SELECT id FROM memory_categories WHERE id = ? AND character_id = ?",
+            "SELECT id FROM memory_categories WHERE id = %s AND character_id = %s",
             (category_id, character_id),
         ).fetchone()
         if not cat:
@@ -1976,12 +1915,12 @@ def update_memory_category(
         conn.execute(
             """
             UPDATE memory_categories SET
-                name = ?,
-                description = ?,
-                color = ?,
-                sort_order = ?,
-                updated_at = ?
-            WHERE id = ?
+                name = %s,
+                description = %s,
+                color = %s,
+                sort_order = %s,
+                updated_at = %s
+            WHERE id = %s
             """,
             (
                 body.name,
@@ -2009,7 +1948,7 @@ def delete_memory_category(
     try:
         # 检查分类是否存在且属于该角色
         cat = conn.execute(
-            "SELECT id FROM memory_categories WHERE id = ? AND character_id = ?",
+            "SELECT id FROM memory_categories WHERE id = %s AND character_id = %s",
             (category_id, character_id),
         ).fetchone()
         if not cat:
@@ -2017,7 +1956,7 @@ def delete_memory_category(
 
         # 检查是否有记忆条目使用此分类
         mem_count = conn.execute(
-            "SELECT COUNT(*) FROM character_memories WHERE category_id = ?",
+            "SELECT COUNT(*) FROM character_memories WHERE category_id = %s",
             (category_id,),
         ).fetchone()[0]
         
@@ -2028,7 +1967,7 @@ def delete_memory_category(
             )
 
         conn.execute(
-            "DELETE FROM memory_categories WHERE id = ?",
+            "DELETE FROM memory_categories WHERE id = %s",
             (category_id,),
         )
         conn.commit()
@@ -2050,7 +1989,7 @@ def memory_category_delete_impact(
             """
             SELECT id, name
             FROM memory_categories
-            WHERE id = ? AND character_id = ?
+            WHERE id = %s AND character_id = %s
             """,
             (category_id, character_id),
         ).fetchone()
@@ -2061,7 +2000,7 @@ def memory_category_delete_impact(
             """
             SELECT id, keywords, comment
             FROM character_memories
-            WHERE character_id = ? AND category_id = ?
+            WHERE character_id = %s AND category_id = %s
             ORDER BY priority ASC, id ASC
             """,
             (character_id, category_id),
@@ -2088,3 +2027,22 @@ def memory_category_delete_impact(
         }
     finally:
         conn.close()
+
+
+# ============================================================
+# 数据库性能监控
+# ============================================================
+@router.get("/admin/db-stats")
+def get_db_stats() -> dict[str, Any]:
+    """获取数据库查询性能统计。"""
+    return {
+        "ok": True,
+        "stats": get_stats(),
+    }
+
+
+@router.post("/admin/db-stats/reset")
+def reset_db_stats() -> dict[str, Any]:
+    """重置数据库性能统计。"""
+    reset_stats()
+    return {"ok": True, "message": "性能统计已重置"}

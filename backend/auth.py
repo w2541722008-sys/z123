@@ -128,6 +128,35 @@ def _hash_token_value(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _cleanup_expired_tokens(
+    conn,
+    *,
+    token_candidates: tuple[str, ...] | None = None,
+    user_id: int | None = None,
+    now_iso: str,
+    commit: bool = True,
+) -> int:
+    """清理已过期 token，支持按 token 候选或按用户范围删除。"""
+    if not token_candidates and user_id is None:
+        return 0
+
+    if token_candidates:
+        placeholders = ", ".join(["%s"] * len(token_candidates))
+        cursor = conn.execute(
+            f"DELETE FROM auth_tokens WHERE token IN ({placeholders}) AND expires_at IS NOT NULL AND expires_at <= %s",
+            (*token_candidates, now_iso),
+        )
+    else:
+        cursor = conn.execute(
+            "DELETE FROM auth_tokens WHERE user_id = %s AND expires_at IS NOT NULL AND expires_at <= %s",
+            (user_id, now_iso),
+        )
+
+    if commit and cursor.rowcount > 0:
+        conn.commit()
+    return cursor.rowcount
+
+
 # ============================================================
 # 当前用户数据类
 # ============================================================
@@ -156,7 +185,12 @@ def _is_admin_email(email: str) -> bool:
 # ============================================================
 # Token 管理
 # ============================================================
-def create_token(user_id: int) -> str:
+def create_token(
+    user_id: int,
+    *,
+    conn=None,
+    commit: bool = True,
+) -> str:
     """
     生成一个新的登录 token，并写入数据库。
 
@@ -165,9 +199,12 @@ def create_token(user_id: int) -> str:
           再经过 SHA-256 哈希后存入数据库（这样数据库泄露也无法直接使用 token）
         - 每个 token 都有明确的过期时间（默认 TOKEN_EXPIRE_DAYS=30 天）
         - 用户登录时会同步删掉自己名下所有已过期的旧 token，保持数据库干净
+        - 支持复用外部事务连接，让注册/登录和 token 写入保持原子性
 
     Args:
         user_id: 用户 ID
+        conn: 可选，外部传入的数据库连接；不传则函数内部自行创建
+        commit: 是否在函数内部提交事务。传入外部连接时通常设为 False
 
     Returns:
         返回给客户端使用的原始 Bearer Token
@@ -186,44 +223,56 @@ def create_token(user_id: int) -> str:
 
     # 步骤 3：计算过期时间
     now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
     expires_at = (now + timedelta(days=TOKEN_EXPIRE_DAYS)).isoformat()
 
     # 步骤 4：数据库操作（清理旧 token + 插入新 token）
-    conn = get_conn()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = get_conn()
     try:
         # 清理该用户所有已过期的旧 token（防止数据库无限膨胀）
-        conn.execute(
-            "DELETE FROM auth_tokens WHERE user_id = ? AND expires_at != '' AND expires_at < ?",
-            (user_id, now.isoformat()),
-        )
+        _cleanup_expired_tokens(conn, user_id=user_id, now_iso=now_iso, commit=False)
         # 插入新 token
         conn.execute(
-            "INSERT INTO auth_tokens(token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
-            (token_hash, user_id, now.isoformat(), expires_at),
+            "INSERT INTO auth_tokens(token, user_id, created_at, expires_at) VALUES (%s, %s, %s, %s)",
+            (token_hash, user_id, now_iso, expires_at),
         )
-        conn.commit()
+        if commit:
+            conn.commit()
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
     finally:
-        conn.close()
+        if owns_conn:
+            conn.close()
 
     return raw_token
 
 
-def delete_token(token: str) -> None:
+def delete_token(token: str, *, commit: bool = True) -> int:
     """
     删除指定的 token（用于登出）。
 
     Args:
-        token: 要删除的 token 哈希值
+        token: 原始 token（客户端持有的 Bearer token）
+        commit: 是否立即提交事务
 
     注意：
         此操作不可逆，删除后用户需要重新登录
     """
     conn = get_conn()
     try:
-        candidates = tuple({token, _hash_token_value(token)})
-        placeholders = ", ".join(["?"] * len(candidates))
-        conn.execute(f"DELETE FROM auth_tokens WHERE token IN ({placeholders})", candidates)
-        conn.commit()
+        token_hash = _hash_token_value(token)
+        cursor = conn.execute("DELETE FROM auth_tokens WHERE token = %s", (token_hash,))
+        if commit:
+            conn.commit()
+        return cursor.rowcount
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -269,29 +318,20 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> Curre
     # 步骤 3：查询数据库验证 token
     conn = get_conn()
     try:
-        candidates = tuple({token, token_hash})
-        placeholders = ", ".join(["?"] * len(candidates))
         row = conn.execute(
-            f"""
+            """
             SELECT users.id, users.email, COALESCE(users.nickname, '') AS nickname,
                    COALESCE(users.plan_type, 'free') AS plan_type,
                    COALESCE(users.plan_expires_at, '') AS plan_expires_at
             FROM auth_tokens
             JOIN users ON users.id = auth_tokens.user_id
-            WHERE auth_tokens.token IN ({placeholders})
-              AND (auth_tokens.expires_at = '' OR auth_tokens.expires_at > ?)
+            WHERE auth_tokens.token = %s
+              AND (auth_tokens.expires_at IS NULL OR auth_tokens.expires_at > %s)
             ORDER BY auth_tokens.created_at DESC
             LIMIT 1
             """,
-            (*candidates, now_iso),
+            (token_hash, now_iso),
         ).fetchone()
-
-        if not row:
-            conn.execute(
-                f"DELETE FROM auth_tokens WHERE token IN ({placeholders}) AND expires_at != '' AND expires_at <= ?",
-                (*candidates, now_iso),
-            )
-            conn.commit()
     finally:
         conn.close()
 

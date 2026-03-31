@@ -24,18 +24,20 @@ AI Friend 后端主入口
 from __future__ import annotations
 
 # 标准库导入
+import logging
 import os
+import time
 from pathlib import Path
 
 # 第三方库导入
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 # 本地模块导入
-from config import FRONTEND_DIR, FRONTEND_STATIC_DIR
-from database import get_conn, init_db
+from config import DATABASE_URL, FRONTEND_DIR, FRONTEND_STATIC_DIR, validate_production_config
+from database import get_conn, get_db, init_db_pool, close_db_pool
 
 # 导入路由
 from routers import admin, auth, billing, characters, chat
@@ -69,6 +71,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============================================================
+# 请求日志中间件
+# ============================================================
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """记录关键 API 请求的日志，便于问题排查和安全审计。"""
+    start_time = time.time()
+    
+    # 只记录 API 请求
+    if request.url.path.startswith("/api/"):
+        logging.info(f"请求: {request.method} {request.url.path}")
+    
+    response = await call_next(request)
+    
+    # 记录关键操作（登录、注册、聊天）
+    if request.url.path in ["/api/register", "/api/login", "/api/chat", "/api/guest-chat"]:
+        duration = time.time() - start_time
+        logging.info(
+            f"完成: {request.method} {request.url.path} "
+            f"状态={response.status_code} 耗时={duration:.2f}s"
+        )
+    
+    return response
 
 # ============================================================
 # 注册路由
@@ -115,22 +142,117 @@ if FRONTEND_STATIC_DIR.exists():
 
 
 # ============================================================
-# 启动事件
+# 启动和关闭事件
 # ============================================================
 @app.on_event("startup")
 def on_startup() -> None:
-    """应用启动时初始化数据库。"""
-    init_db()
+    """应用启动时初始化数据库连接池、验证配置并启动后台清理任务。"""
+    init_db_pool(DATABASE_URL)
+    logging.info("✅ 数据库连接池已初始化")
+
+    # 启动订单超时清理后台任务（每小时执行一次）
+    import threading
+    def cleanup_expired_orders_task():
+        """后台定期清理超时订单。"""
+        from routers.billing import _close_expired_pending_orders
+        while True:
+            try:
+                conn = get_conn()
+                _close_expired_pending_orders(conn)
+                conn.close()
+                logging.info("✅ 已清理超时订单")
+            except Exception as e:
+                logging.error(f"❌ 订单清理失败: {e}", exc_info=True)
+            time.sleep(3600)  # 每小时执行一次
+
+    threading.Thread(target=cleanup_expired_orders_task, daemon=True).start()
+    logging.info("✅ 订单清理后台任务已启动")
+
+    # 验证生产环境配置
+    missing_configs = validate_production_config()
+    if missing_configs:
+        logging.warning("⚠️  检测到缺失的生产环境配置：")
+        for config in missing_configs:
+            logging.warning(f"  - {config}")
+        logging.warning("请检查 .env 文件，参考 .env.production.example")
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    """应用关闭时清理数据库连接池。"""
+    close_db_pool()
+    logging.info("✅ 数据库连接池已关闭")
+
+
+# ============================================================
+# 全局异常处理
+# ============================================================
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    全局异常处理器，防止生产环境暴露敏感错误信息。
+    
+    - HTTPException: 保持原有的状态码和消息
+    - 其他异常: 记录详细日志，返回通用错误消息
+    """
+    # HTTPException 直接返回
+    if isinstance(exc, HTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+    
+    # 其他异常记录日志并返回通用错误
+    logging.error(f"未处理的异常: {type(exc).__name__}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "服务器内部错误，请稍后重试"},
+    )
 
 
 # ============================================================
 # 健康检查
 # ============================================================
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    """健康检查端点。"""
+def health() -> dict[str, str | bool]:
+    """
+    健康检查端点，用于监控服务状态。
+    
+    检查项：
+    - 数据库连接是否正常
+    - 关键配置是否已设置
+    
+    Returns:
+        包含状态信息的字典
+    """
     from config import utc_now_iso
-    return {"status": "ok", "time": utc_now_iso()}
+    
+    result = {
+        "status": "ok",
+        "time": utc_now_iso(),
+        "database": False,
+        "config": False,
+    }
+    
+    # 检查数据库连接
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        finally:
+            conn.close()
+        result["database"] = True
+    except Exception:
+        result["status"] = "degraded"
+    
+    # 检查关键配置
+    missing_configs = validate_production_config()
+    result["config"] = len(missing_configs) == 0
+    if missing_configs:
+        result["status"] = "degraded"
+    
+    return result
 
 
 # ============================================================
@@ -178,11 +300,11 @@ def get_avatar(character_id: str):
     Raises:
         HTTPException: 404 角色不存在或头像未找到
     """
-    conn = get_conn()
+    conn = get_db()
     try:
         # 查询角色头像路径
         row = conn.execute(
-            "SELECT avatar_url FROM characters WHERE id = ?",
+            "SELECT avatar_url FROM characters WHERE id = %s",
             (character_id,),
         ).fetchone()
         if not row:
@@ -197,10 +319,10 @@ def get_avatar(character_id: str):
 @app.get("/api/cover/{character_id}")
 def get_cover(character_id: str):
     """返回角色卡封面图片，支持本地文件、静态路径和外链。"""
-    conn = get_conn()
+    conn = get_db()
     try:
         row = conn.execute(
-            "SELECT avatar_url, cover_url FROM characters WHERE id = ?",
+            "SELECT avatar_url, cover_url FROM characters WHERE id = %s",
             (character_id,),
         ).fetchone()
         if not row:

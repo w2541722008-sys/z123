@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from config import AI_CHAT_MAX_OUTPUT_TOKENS
 
+# 常量定义
+DEFAULT_TIMEOUT = 60
+STREAM_TIMEOUT = 120
+ERROR_MESSAGE_MAX_LENGTH = 300
 
 # ============================================================
 # 模型配置与调用适配层
@@ -81,7 +85,7 @@ def _build_request(config: dict[str, str], payload: dict[str, Any]) -> urllib.re
 def request_chat_completion(
     messages: list[dict[str, str]],
     config: dict[str, str],
-    normalize_reply_text,
+    normalize_reply_text: Callable[[str], str],
     max_tokens: int | None = None,
 ) -> str:
     """普通非流式模型调用。"""
@@ -97,11 +101,11 @@ def request_chat_completion(
     req = _build_request(config, payload)
 
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
             body = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"模型接口错误 {exc.code}: {detail[:300]}") from exc
+        raise RuntimeError(f"模型接口错误 {exc.code}: {detail[:ERROR_MESSAGE_MAX_LENGTH]}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"模型接口连接失败: {exc}") from exc
 
@@ -131,7 +135,7 @@ def stream_chat_completion(
     req = _build_request(config, payload)
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=STREAM_TIMEOUT) as resp:
             while True:
                 raw_line = resp.readline()
                 if not raw_line:
@@ -151,6 +155,6 @@ def stream_chat_completion(
                     yield delta
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"模型接口错误 {exc.code}: {detail[:300]}") from exc
+        raise RuntimeError(f"模型接口错误 {exc.code}: {detail[:ERROR_MESSAGE_MAX_LENGTH]}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"模型接口连接失败: {exc}") from exc

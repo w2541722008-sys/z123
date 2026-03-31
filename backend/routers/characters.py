@@ -24,6 +24,7 @@ from models import CharacterProfileUpdatePayload, ClearChatPayload
 from services.character_state import get_character_state
 from services.chat_service import ensure_opening_message, get_character_or_404
 from services.memory_service import parse_json_list, parse_json_object
+from services.cache_service import cache_get, cache_set, cache_delete
 from services.plan_service import (
     GUEST_PLAN,
     can_access_required_plan,
@@ -48,7 +49,7 @@ def _get_user_character_overrides(
         """
         SELECT remark, custom_signature
         FROM user_character_profiles
-        WHERE user_id = ? AND character_id = ?
+        WHERE user_id = %s AND character_id = %s
         """,
         (user_id, character_id),
     ).fetchone()
@@ -109,23 +110,34 @@ def _get_accessible_character(conn: Any, character_id: str, viewer_plan: str):
 
 @router.get("/characters")
 def list_characters(user: CurrentUser | None = Depends(get_optional_user)) -> list[dict[str, Any]]:
-    """获取可见角色列表（按 home_priority 排序）。"""
+    """获取可见角色列表（按 home_priority 排序）。优先从缓存读取。"""
     conn = get_conn()
     try:
         viewer_plan = _get_viewer_plan(user)
-        rows = conn.execute(
-            """
-            SELECT id, name, abbr, subtitle, avatar_url, cover_url, description, opening_message, tags,
-                   card_type, home_priority, is_visible, required_plan
-            FROM characters
-            WHERE is_visible = 1
-            ORDER BY home_priority ASC, sort_order ASC
-            """
-        ).fetchall()
-
+        
+        # 尝试从缓存获取角色列表
+        cache_key = "character_list_all"
+        cached_rows = cache_get(cache_key)
+        
+        if cached_rows is None:
+            # 缓存未命中，查询数据库
+            rows = conn.execute(
+                """
+                SELECT id, name, abbr, subtitle, avatar_url, cover_url, description, opening_message, tags,
+                       card_type, home_priority, is_visible, required_plan
+                FROM characters
+                WHERE is_visible = 1
+                ORDER BY home_priority ASC, sort_order ASC
+                """
+            ).fetchall()
+            # 转换为字典列表以便缓存
+            cached_rows = [dict(row) for row in rows]
+            cache_set(cache_key, cached_rows, ttl=300)  # 缓存5分钟
+        
+        # 过滤用户可访问的角色
         visible_rows = [
-            row for row in rows
-            if can_access_required_plan(viewer_plan, row["required_plan"] if "required_plan" in row.keys() else "guest")
+            row for row in cached_rows
+            if can_access_required_plan(viewer_plan, row.get("required_plan", "guest"))
         ]
         return [_serialize_character_for_client(conn, row, user.id if user else None) for row in visible_rows]
     finally:
@@ -165,7 +177,7 @@ def update_character_profile(
         conn.execute(
             """
             INSERT INTO user_character_profiles(user_id, character_id, remark, custom_signature, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT(user_id, character_id) DO UPDATE SET
                 remark = excluded.remark,
                 custom_signature = excluded.custom_signature,
@@ -180,7 +192,7 @@ def update_character_profile(
             SELECT id, name, abbr, subtitle, avatar_url, cover_url, description,
                    opening_message, tags, card_type, home_priority, required_plan
             FROM characters
-            WHERE id = ?
+            WHERE id = %s
             """,
             (payload.character_id,),
         ).fetchone()
@@ -232,7 +244,7 @@ def get_character_greetings(
                    COALESCE(s.name, '') AS storyline_name
             FROM character_greetings g
             LEFT JOIN character_storylines s ON s.id = g.storyline_id
-            WHERE g.character_id = ? AND g.is_active = 1 AND g.story_phase = 'stranger'
+            WHERE g.character_id = %s AND g.is_active = 1 AND g.story_phase = 'stranger'
             ORDER BY g.priority ASC, g.id ASC
             """,
             (character_id,),
@@ -309,17 +321,17 @@ def reset_character_state(
         _get_accessible_character(conn, character_id, user.effective_plan)
         # 删除聊天记录
         conn.execute(
-            "DELETE FROM chat_messages WHERE user_id = ? AND character_id = ?",
+            "DELETE FROM chat_messages WHERE user_id = %s AND character_id = %s",
             (user.id, character_id),
         )
         # 删除摘要
         conn.execute(
-            "DELETE FROM chat_summaries WHERE user_id = ? AND character_id = ?",
+            "DELETE FROM chat_summaries WHERE user_id = %s AND character_id = %s",
             (user.id, character_id),
         )
         # 删除状态
         conn.execute(
-            "DELETE FROM character_states WHERE user_id = ? AND character_id = ?",
+            "DELETE FROM character_states WHERE user_id = %s AND character_id = %s",
             (user.id, character_id),
         )
         conn.commit()
@@ -351,19 +363,19 @@ def clear_chat_history(
         _get_accessible_character(conn, payload.character_id, user.effective_plan)
         # 删除聊天记录
         conn.execute(
-            "DELETE FROM chat_messages WHERE user_id = ? AND character_id = ?",
+            "DELETE FROM chat_messages WHERE user_id = %s AND character_id = %s",
             (user.id, payload.character_id),
         )
         # 删除摘要
         conn.execute(
-            "DELETE FROM chat_summaries WHERE user_id = ? AND character_id = ?",
+            "DELETE FROM chat_summaries WHERE user_id = %s AND character_id = %s",
             (user.id, payload.character_id),
         )
         conn.commit()
 
         # 根据 greeting_index 选择开场白
         char_row = conn.execute(
-            "SELECT opening_message, structured_asset_json FROM characters WHERE id = ?",
+            "SELECT opening_message, structured_asset_json FROM characters WHERE id = %s",
             (payload.character_id,),
         ).fetchone()
 
@@ -373,7 +385,7 @@ def clear_chat_history(
                 greeting_row = conn.execute(
                     """
                     SELECT content FROM character_greetings
-                    WHERE id = ? AND character_id = ? AND is_active = 1
+                    WHERE id = %s AND character_id = %s AND is_active = 1
                     LIMIT 1
                     """,
                     (payload.greeting_index, payload.character_id),
@@ -394,7 +406,7 @@ def clear_chat_history(
         conn.execute(
             """
             INSERT INTO chat_messages(user_id, character_id, role, content, created_at, is_summarized)
-            VALUES (?, ?, 'assistant', ?, ?, 1)
+            VALUES (%s, %s, 'assistant', %s, %s, 1)
             """,
             (user.id, payload.character_id, greeting, utc_now_iso()),
         )
@@ -420,7 +432,7 @@ def chat_history(
             """
             SELECT role, content, created_at
             FROM chat_messages
-            WHERE user_id = ? AND character_id = ?
+            WHERE user_id = %s AND character_id = %s
             ORDER BY id ASC
             """,
             (user.id, character_id),

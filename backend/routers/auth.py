@@ -50,7 +50,6 @@ from config import (
 )
 from database import get_conn
 from models import (
-    BillingCreateOrderPayload,
     ForgotPasswordPayload,
     LoginPayload,
     RegisterPayload,
@@ -123,7 +122,7 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
     try:
         # 步骤 1：检查邮箱是否已存在
         existing = conn.execute(
-            "SELECT 1 FROM users WHERE LOWER(email) = ?",
+            "SELECT 1 FROM users WHERE LOWER(email) = %s",
             (normalized_email,),
         ).fetchone()
         if existing:
@@ -135,20 +134,24 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
         # 步骤 3：昵称默认为邮箱前缀
         nickname = payload.nickname or normalized_email.split("@")[0]
 
-        # 步骤 4：插入用户记录
+        # 步骤 4：插入用户记录，使用 RETURNING id 获取新生成的主键（PostgreSQL 专用）
         now = utc_now_iso()
         cur = conn.execute(
             """
             INSERT INTO users(email, password_hash, password_algo, nickname, created_at, updated_at)
-            VALUES (?, ?, 'bcrypt', ?, ?, ?)
+            VALUES (%s, %s, 'bcrypt', %s, %s, %s)
+            RETURNING id
             """,
             (normalized_email, password_hash, nickname, now, now),
         )
-        conn.commit()
-        user_id = cur.lastrowid
+        row_result = cur.fetchone()
+        user_id = row_result[0] if row_result else None
+        if not user_id:
+            raise RuntimeError("用户创建失败：无法获取新用户ID")
 
-        # 步骤 5：生成登录 token
-        token = create_token(user_id)
+        # 步骤 5：生成登录 token，并与用户创建保持同一事务
+        token = create_token(user_id, conn=conn, commit=False)
+        conn.commit()
 
         return {
             "token": token,
@@ -161,6 +164,9 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
                 is_admin=_is_admin_email(normalized_email),
             ),
         }
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -214,7 +220,7 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
             SELECT id, email, password_hash, password_algo, COALESCE(nickname, '') AS nickname,
                    COALESCE(plan_type, 'free') AS plan_type,
                    COALESCE(plan_expires_at, '') AS plan_expires_at
-            FROM users WHERE LOWER(email) = ?
+            FROM users WHERE LOWER(email) = %s
             """,
             (normalized_email,),
         ).fetchone()
@@ -231,13 +237,13 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
         if algo != "bcrypt":
             new_hash = hash_password_bcrypt(payload.password)
             conn.execute(
-                "UPDATE users SET password_hash = ?, password_algo = 'bcrypt', updated_at = ? WHERE id = ?",
+                "UPDATE users SET password_hash = %s, password_algo = 'bcrypt', updated_at = %s WHERE id = %s",
                 (new_hash, utc_now_iso(), row["id"]),
             )
-            conn.commit()
 
-        # 步骤 4：生成 token
-        token = create_token(row["id"])
+        # 步骤 4：生成 token，并与密码升级保持同一事务
+        token = create_token(row["id"], conn=conn, commit=False)
+        conn.commit()
         nickname = row["nickname"] or normalized_email.split("@")[0]
 
         return {
@@ -251,6 +257,9 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
                 is_admin=_is_admin_email(row["email"]),
             ),
         }
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -342,7 +351,7 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request) -> dict[st
     try:
         # 步骤 1：检查邮箱是否存在
         user = conn.execute(
-            "SELECT id, email FROM users WHERE LOWER(email) = ?",
+            "SELECT id, email FROM users WHERE LOWER(email) = %s",
             (normalized_email,),
         ).fetchone()
 
@@ -356,7 +365,7 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request) -> dict[st
         recent_code = conn.execute(
             """
             SELECT created_at FROM password_reset_codes
-            WHERE email = ? AND used = 0 AND created_at > ?
+            WHERE email = %s AND used = 0 AND created_at > %s
             ORDER BY created_at DESC LIMIT 1
             """,
             (normalized_email, (now - timedelta(seconds=60)).isoformat()),
@@ -378,27 +387,24 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request) -> dict[st
         conn.execute(
             """
             INSERT INTO password_reset_codes (email, code, expires_at, used, created_at)
-            VALUES (?, ?, ?, 0, ?)
+            VALUES (%s, %s, %s, 0, %s)
             """,
             (normalized_email, code, expires_at, now.isoformat()),
         )
-        conn.commit()
 
         # 步骤 6：发送邮件
         email_sent = send_reset_code_email(user["email"], code)
 
         if not email_sent:
-            # 邮件发送失败，删除刚插入的验证码（回滚）
-            conn.execute(
-                "DELETE FROM password_reset_codes WHERE email = ? AND code = ?",
-                (normalized_email, code),
-            )
-            conn.commit()
             raise HTTPException(status_code=500, detail="邮件发送失败，请稍后重试")
 
+        conn.commit()
         logger.info(f"密码重置验证码已发送: {user['email']}")
         return {"ok": True, "message": "验证码已发送至您的邮箱，10 分钟内有效"}
 
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -444,7 +450,7 @@ def verify_reset_code(payload: VerifyCodePayload, request: Request) -> dict[str,
             """
             SELECT id, code, expires_at, used
             FROM password_reset_codes
-            WHERE email = ? AND used = 0 AND expires_at > ?
+            WHERE email = %s AND used = 0 AND expires_at > %s
             ORDER BY created_at DESC LIMIT 1
             """,
             (normalized_email, now),
@@ -506,7 +512,7 @@ def reset_password(payload: ResetPasswordPayload, request: Request) -> dict[str,
             """
             SELECT id, code, expires_at, used
             FROM password_reset_codes
-            WHERE email = ? AND used = 0 AND expires_at > ?
+            WHERE email = %s AND used = 0 AND expires_at > %s
             ORDER BY created_at DESC LIMIT 1
             """,
             (normalized_email, now),
@@ -517,7 +523,7 @@ def reset_password(payload: ResetPasswordPayload, request: Request) -> dict[str,
 
         # 步骤 2：查找用户
         user = conn.execute(
-            "SELECT id, email FROM users WHERE LOWER(email) = ?",
+            "SELECT id, email FROM users WHERE LOWER(email) = %s",
             (normalized_email,),
         ).fetchone()
 
@@ -531,21 +537,21 @@ def reset_password(payload: ResetPasswordPayload, request: Request) -> dict[str,
         conn.execute(
             """
             UPDATE users
-            SET password_hash = ?, password_algo = 'bcrypt', updated_at = ?
-            WHERE id = ?
+            SET password_hash = %s, password_algo = 'bcrypt', updated_at = %s
+            WHERE id = %s
             """,
             (new_hash, utc_now_iso(), user["id"]),
         )
 
         # 步骤 5：标记验证码已使用
         conn.execute(
-            "UPDATE password_reset_codes SET used = 1 WHERE id = ?",
+            "UPDATE password_reset_codes SET used = 1 WHERE id = %s",
             (reset_code["id"],),
         )
 
         # 步骤 6：清理该邮箱其他未使用的验证码
         conn.execute(
-            "DELETE FROM password_reset_codes WHERE email = ? AND id != ?",
+            "DELETE FROM password_reset_codes WHERE email = %s AND id != %s",
             (normalized_email, reset_code["id"]),
         )
 
@@ -554,5 +560,8 @@ def reset_password(payload: ResetPasswordPayload, request: Request) -> dict[str,
         logger.info(f"密码重置成功: {user['email']}")
         return {"ok": True, "message": "密码重置成功，请使用新密码登录"}
 
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

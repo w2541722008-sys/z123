@@ -30,7 +30,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sqlite3
 import threading
 from typing import Any
 
@@ -49,6 +48,15 @@ _SUMMARY_SECTION_TITLES: list[tuple[str, str]] = [
     ("pending", "待跟进事项"),
 ]
 
+# 各分区最多保留的条目数量
+_SUMMARY_SECTION_LIMITS: dict[str, int] = {
+    "profile": 5,
+    "preferences": 5,
+    "events": 8,
+    "relationship": 5,
+    "pending": 5,
+}
+
 _SUMMARY_SECTION_ALIASES: dict[str, str] = {
     "用户画像": "profile",
     "用户偏好": "preferences",
@@ -59,58 +67,80 @@ _SUMMARY_SECTION_ALIASES: dict[str, str] = {
     "未完成话题": "pending",
 }
 
-_SUMMARY_SECTION_LIMITS: dict[str, int] = {
-    "profile": 8,
-    "preferences": 8,
-    "events": 10,
-    "relationship": 6,
-    "pending": 6,
-}
+_SUMMARY_JOB_LOCK = threading.Lock()
+_SUMMARY_RUNNING_KEYS: set[tuple[int, str]] = set()
+
+
+def _claim_summary_job(user_id: int, character_id: str) -> bool:
+    """尝试占用一份摘要任务，避免同一用户-角色对被重复并发处理。"""
+    key = (user_id, character_id)
+    with _SUMMARY_JOB_LOCK:
+        if key in _SUMMARY_RUNNING_KEYS:
+            return False
+        _SUMMARY_RUNNING_KEYS.add(key)
+        return True
+
+
+def _release_summary_job(user_id: int, character_id: str) -> None:
+    """释放摘要任务占用标记。"""
+    key = (user_id, character_id)
+    with _SUMMARY_JOB_LOCK:
+        _SUMMARY_RUNNING_KEYS.discard(key)
 
 
 # ============================================================
 # JSON 解析工具
 # ============================================================
-def parse_json_object(text: str, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
+def parse_json_object(text, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     安全解析 JSON 对象。
 
     Args:
-        text: JSON 字符串
+        text: JSON 字符串，或者已经被 psycopg2 自动解析的 dict/list
         fallback: 解析失败时的默认值
 
     Returns:
         解析后的字典，或 fallback
     """
     fallback = fallback or {}
-    raw = (text or "").strip()
+    # psycopg2 对 json/jsonb 类型会自动解析为 Python 对象，直接判断类型即可
+    if isinstance(text, dict):
+        return text
+    if isinstance(text, list):
+        return dict(fallback)
+    raw = (text or "").strip() if isinstance(text, str) else ""
     if not raw:
         return dict(fallback)
     try:
         value = json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return dict(fallback)
     return value if isinstance(value, dict) else dict(fallback)
 
 
-def parse_json_list(text: str, fallback: list[Any] | None = None) -> list[Any]:
+def parse_json_list(text, fallback: list[Any] | None = None) -> list[Any]:
     """
     安全解析 JSON 数组。
 
     Args:
-        text: JSON 字符串
+        text: JSON 字符串，或者已经被 psycopg2 自动解析的 list/dict
         fallback: 解析失败时的默认值
 
     Returns:
         解析后的列表，或 fallback
     """
     fallback = fallback or []
-    raw = (text or "").strip()
+    # psycopg2 对 json/jsonb 类型会自动解析为 Python 对象，直接判断类型即可
+    if isinstance(text, list):
+        return text
+    if isinstance(text, dict):
+        return list(fallback)
+    raw = (text or "").strip() if isinstance(text, str) else ""
     if not raw:
         return list(fallback)
     try:
         value = json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return list(fallback)
     return value if isinstance(value, list) else list(fallback)
 
@@ -119,7 +149,7 @@ def parse_json_list(text: str, fallback: list[Any] | None = None) -> list[Any]:
 # 消息查询
 # ============================================================
 def get_recent_messages(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
     limit: int = RECENT_MESSAGE_WINDOW,
@@ -144,9 +174,9 @@ def get_recent_messages(
         """
         SELECT role, content
         FROM chat_messages
-        WHERE user_id = ? AND character_id = ?
+        WHERE user_id = %s AND character_id = %s
         ORDER BY id DESC
-        LIMIT ?
+        LIMIT %s
         """,
         (user_id, character_id, limit),
     ).fetchall()
@@ -158,10 +188,10 @@ def get_recent_messages(
 
 
 def get_unsummarized_messages(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
-) -> list[sqlite3.Row]:
+) -> list[Any]:
     """
     获取所有未摘要的消息。
 
@@ -177,7 +207,7 @@ def get_unsummarized_messages(
         """
         SELECT id, role, content, created_at
         FROM chat_messages
-        WHERE user_id = ? AND character_id = ? AND is_summarized = 0
+        WHERE user_id = %s AND character_id = %s AND is_summarized = 0
         ORDER BY id ASC
         """,
         (user_id, character_id),
@@ -188,10 +218,10 @@ def get_unsummarized_messages(
 # 摘要管理
 # ============================================================
 def get_summary_record(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
-) -> sqlite3.Row | None:
+) -> Any | None:
     """
     获取摘要记录。
 
@@ -204,13 +234,13 @@ def get_summary_record(
         摘要记录行，如果不存在则返回 None
     """
     return conn.execute(
-        "SELECT * FROM chat_summaries WHERE user_id = ? AND character_id = ?",
+        "SELECT * FROM chat_summaries WHERE user_id = %s AND character_id = %s",
         (user_id, character_id),
     ).fetchone()
 
 
 def get_summary_text(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
 ) -> str:
@@ -296,7 +326,7 @@ def _render_structured_summary(summary: dict[str, list[str]]) -> str:
 
 
 def get_summary_for_prompt(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
 ) -> str:
@@ -309,7 +339,7 @@ def get_summary_for_prompt(
 
 
 def should_refresh_summary(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
 ) -> bool:
@@ -331,7 +361,7 @@ def should_refresh_summary(
 
 
 def get_structured_summary(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
 ) -> dict[str, Any]:
@@ -457,7 +487,7 @@ def normalize_reply_text(text: str) -> str:
 
 def build_structured_memory_summary_fallback(
     existing_summary: str,
-    unsummarized_messages: list[sqlite3.Row],
+    unsummarized_messages: list[Any],
 ) -> str:
     """
     AI 摘要失败时的降级方案：简单提取关键信息。
@@ -547,7 +577,7 @@ def merge_summary_text(existing_summary: str, new_summary_text: str) -> str:
 
 
 def save_summary(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
     summary_text: str,
@@ -573,12 +603,12 @@ def save_summary(
         conn.execute(
             """
             UPDATE chat_summaries
-            SET summary = ?,
+            SET summary = %s,
                 memory_version = memory_version + 1,
-                last_message_id = ?,
-                last_summarized_at = ?,
-                updated_at = ?
-            WHERE user_id = ? AND character_id = ?
+                last_message_id = %s,
+                last_summarized_at = %s,
+                updated_at = %s
+            WHERE user_id = %s AND character_id = %s
             """,
             (summary_text, last_message_id, now, now, user_id, character_id),
         )
@@ -589,13 +619,13 @@ def save_summary(
             INSERT INTO chat_summaries(
                 user_id, character_id, summary, memory_version,
                 last_message_id, last_summarized_at, created_at, updated_at
-            ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, 1, %s, %s, %s, %s)
             """,
             (user_id, character_id, summary_text, last_message_id, now, now, now),
         )
 
 
-def mark_messages_summarized(conn: sqlite3.Connection, message_ids: list[int]) -> None:
+def mark_messages_summarized(conn: Any, message_ids: list[int]) -> None:
     """
     将指定消息标记为已摘要。
 
@@ -605,7 +635,7 @@ def mark_messages_summarized(conn: sqlite3.Connection, message_ids: list[int]) -
     """
     if not message_ids:
         return
-    placeholders = ",".join("?" for _ in message_ids)
+    placeholders = ",".join("%s" for _ in message_ids)
     conn.execute(
         f"UPDATE chat_messages SET is_summarized = 1 WHERE id IN ({placeholders})",
         message_ids,
@@ -613,7 +643,7 @@ def mark_messages_summarized(conn: sqlite3.Connection, message_ids: list[int]) -
 
 
 def refresh_memory_summary(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
     character: Any,
@@ -658,7 +688,13 @@ def refresh_memory_summary(
             normalize_reply_text,
             max_tokens=SUMMARY_MAX_TOKENS,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "记忆摘要 AI 生成失败，改走降级方案 user_id=%s character_id=%s error=%s",
+            user_id,
+            character_id,
+            exc,
+        )
         # AI 失败时使用降级方案
         summary_text = build_structured_memory_summary_fallback(existing_summary, summary_target_rows)
 
@@ -669,6 +705,7 @@ def refresh_memory_summary(
     last_message_id = summary_target_rows[-1]["id"] if summary_target_rows else None
     save_summary(conn, user_id, character_id, summary_text, last_message_id)
     mark_messages_summarized(conn, [row["id"] for row in summary_target_rows])
+    conn.commit()
 
 
 def run_memory_summary_background(
@@ -696,15 +733,50 @@ def run_memory_summary_background(
         character_id: 角色 ID
         character_row_data: 角色数据字典
     """
+    if not _claim_summary_job(user_id, character_id):
+        logger.info(
+            "跳过重复记忆摘要任务 user_id=%s character_id=%s",
+            user_id,
+            character_id,
+        )
+        return
+
+    should_spawn = False
+    precheck_conn = None
+    try:
+        precheck_conn = get_conn()
+        should_spawn = should_refresh_summary(precheck_conn, user_id, character_id)
+    finally:
+        if precheck_conn is not None:
+            precheck_conn.close()
+
+    if not should_spawn:
+        _release_summary_job(user_id, character_id)
+        return
+
     def target():
+        conn = None
         try:
             conn = get_conn()
-            try:
-                refresh_memory_summary(conn, user_id, character_id, character_row_data)
-            finally:
-                conn.close()
+            if not should_refresh_summary(conn, user_id, character_id):
+                return
+            refresh_memory_summary(conn, user_id, character_id, character_row_data)
         except Exception as e:
-            logger.error(f"后台记忆摘要失败: {e}")
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+            logger.exception(
+                "后台记忆摘要失败 user_id=%s character_id=%s error=%s",
+                user_id,
+                character_id,
+                e,
+            )
+        finally:
+            if conn is not None:
+                conn.close()
+            _release_summary_job(user_id, character_id)
 
     threading.Thread(target=target, daemon=True).start()
 

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="theme-color" content="#0a0e1a" />
+  <meta name="theme-color" content="#0f1020" />
   
   <!-- 预加载关键资源 -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -13,13 +13,29 @@
   
   <!-- 缓存控制 -->
   <meta http-equiv="Cache-Control" content="max-age=3600, must-revalidate" />
-  <title>Lunar</title>
+  <title>miss</title>
   <!--
     ============================================================
-    aifriend/index.html — 预览版（极简神秘风格）
+    aifriend/index.html — H5 MVP 前端入口（当前直连本地 FastAPI 后端）
+    ============================================================
+    当前已落地：
+    - 角色广场 / 角色详情 / 聊天页 / 我的页面
+    - 邮箱登录 / 自动注册 / 登录态恢复
+    - SSE 流式打字机输出
+    - 结构化长期记忆 + 最近消息窗口
+    - 聊天页右上角微信风格更多菜单
+    - 查看聊天记录 / 清空聊天记录 / 修改备注
+    ============================================================
+    结构设计原则（不变）：
+    1. 页面 = 独立 <section id="page-*">，每个页面自包含
+    2. 底部导航 = NAV_CONFIG 数据驱动
+    3. 角色卡 = CHARACTERS 数组数据驱动
+    4. 聊天页 = 最小核心容器，可后续挂入语音/历史等
+    5. 我的页面 = .setting-card 可插拔卡片区
+    6. CSS 变量集中在 :root，换肤一处改全局
     ============================================================
   -->
-  <link rel="stylesheet" href="frontend/style.css?v=20260331" />
+  <link rel="stylesheet" href="frontend/style.css?v=20260330a" />
 </head>
 <body>
   <!-- ============================================================
@@ -28,32 +44,51 @@
   <div class="phone-shell">
 
     <!-- ============================================================
-         PAGE 1: 首页（极简风格）
+         PAGE 1: 首页
     ============================================================ -->
     <section class="page active" id="page-home">
-      <!-- 隐藏原 topbar，极简首页不需要 -->
-      <div class="page-topbar home-topbar-hidden">
-        <h1>Lunar</h1>
-        <div class="subtitle"></div>
+      <div class="page-topbar">
+        <h1>miss</h1>
+        <div class="subtitle">沉浸陪伴 · 长期记忆 · 微信打开即用</div>
       </div>
 
-      <div class="home-minimal-container">
-        <!-- 背景星尘光效 -->
-        <div class="home-glow home-glow-1"></div>
-        <div class="home-glow home-glow-2"></div>
-
-        <!-- Logo 文字 -->
-        <div class="home-logo">
-          <span class="home-logo-text">Lunar</span>
+      <div style="padding:16px 16px 0">
+        <!-- Hero 介绍 -->
+        <div class="hero-card">
+          <div class="hero-badge">✦ 4个免费角色 · 可先试聊</div>
+          <h2>那个会慢慢懂你的他<br/>正在等你开口</h2>
+          <p>选择一位专属角色，他会逐步记住你的偏好、关系进展和重要话题，让下一次打开不再像第一次见面。</p>
+          <div class="hero-actions">
+            <button class="btn btn-primary" onclick="App.nav('square')">选择角色</button>
+            <button class="btn btn-ghost"   onclick="App.navToLastChat()">开始聊天</button>
+          </div>
         </div>
 
-        <!-- 主文案 -->
-        <p class="home-tagline">这一次，故事从你开始。</p>
-
-        <!-- 两个圆润按钮，上下排列 -->
-        <div class="home-actions">
-          <button class="home-btn home-btn-outline" onclick="App.nav('square')">选择角色</button>
-          <button class="home-btn home-btn-primary" onclick="App.navToLastChat()">开始聊天</button>
+        <!-- 核心特性列表 -->
+        <div class="section-title">为什么选这里 <span class="hint">核心优势</span></div>
+        <div class="feature-list">
+          <div class="feature-item">
+            <div class="feature-icon">💬</div>
+            <div>
+              <h4>角色感稳定，不失忆</h4>
+              <p>每个角色有独立人设、说话风格、禁忌和开场白，不是普通聊天机器人。</p>
+            </div>
+          </div>
+          <div class="feature-item">
+            <div class="feature-icon">🧠</div>
+            <div>
+              <h4>记住关键偏好和进展</h4>
+              <p>会整理你在意的人、事和互动变化，把真正影响后续聊天的内容留下来，而不是堆一堆流水账。</p>
+            </div>
+          </div>
+          <div class="feature-item">
+            <div class="feature-icon">📱</div>
+            <div>
+              <h4>微信打开即用，不折腾</h4>
+              <p>不用下载 App，打开网页就能先试聊；登录后再持续保存聊天记录和长期记忆。</p>
+            </div>
+          </div>
+          <!-- 扩展位：后续可加 TTS语音、会员特权等 feature-item -->
         </div>
       </div>
     </section>
@@ -169,10 +204,12 @@
             <div class="setting-row-icon">💬</div>
             <div class="setting-row-text">
               <div class="row-label">试聊说明</div>
-              <div class="row-hint">未登录可先试聊，确认喜欢这个角色后，再登录继续长期聊天体验。</div>
+              <div class="row-hint">未登录可先试聊 5 句，确认喜欢这个角色后，再登录继续长期聊天体验。</div>
             </div>
           </div>
         </div>
+
+        <!-- 扩展位：会员状态卡片 / 消费记录 / 邀请好友 / 联系客服 -->
 
       </div>
     </section>
@@ -269,8 +306,9 @@
       <input class="input-field" id="input-password" type="password" placeholder="密码（至少 6 位）" />
       <!-- 忘记密码链接 -->
       <div style="text-align: right; margin: -8px 0 16px;">
-        <a href="/forgot-password.html" class="forgot-password-link">忘记密码？</a>
+        <a href="/forgot-password.html" style="font-size: 13px; color: var(--pink); text-decoration: none; opacity: 0.9; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.9'">忘记密码？</a>
       </div>
+      <!-- 扩展位：微信/手机号一键登录 -->
       <div class="modal-actions">
         <button class="btn btn-ghost"   onclick="Auth.closeLogin()">取消</button>
         <button class="btn btn-primary" id="auth-submit-btn" onclick="Auth.doSubmit()">确认登录</button>
@@ -330,8 +368,21 @@
 
 
   <!-- ============================================================
-       JS 逻辑（复制自源文件，不做修改）
-  ============================================================ -->
+       JS 逻辑
+       ============================================================
+       模块：
+       - App        ：路由 / 导航 / 初始化
+       - API        ：统一请求本地 FastAPI 后端
+       - Chat       ：聊天页逻辑（消息渲染、SSE 流式输出、typing 动画）
+       - Auth       ：登录 / 退出 / 登录态恢复
+       - CharDetail ：角色详情弹窗
+       - ChatMenu   ：聊天页右上角更多菜单（历史 / 清空 / 备注 / 签名）
+       - Mine 信息区：展示登录与保存规则，避免无效入口和占位功能
+
+       数据：
+       - NAV_CONFIG ：底部导航配置
+       - CHARACTERS ：角色运行时数组（从后端加载）
+  -->
   <script src="frontend/app.js?v=20260330a"></script>
 </body>
 </html>

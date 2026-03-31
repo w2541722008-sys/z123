@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 from typing import Any
 
 
@@ -29,7 +28,7 @@ class AIChatError(Exception):
 
 from fastapi import HTTPException
 
-from config import AI_CHAT_MAX_OUTPUT_TOKENS, utc_now_iso
+from config import AI_CHAT_MAX_OUTPUT_TOKENS, logger, utc_now_iso
 from model_adapter import get_ai_config, request_chat_completion
 from prompt_assembler import build_layered_chat_messages
 from services.plan_service import ensure_plan_access, plan_display_name
@@ -40,24 +39,35 @@ from services.memory_service import (
     normalize_reply_text,
     parse_state_update_tag,
 )
+from services.cache_service import get_character, set_character
 
 
 # ============================================================
 # 角色查询
 # ============================================================
 def get_character_or_404(
-    conn: sqlite3.Connection,
+    conn: Any,
     character_id: str,
     viewer_plan: str | None = None,
-) -> sqlite3.Row:
-    """获取角色，不存在时抛出 404。"""
+) -> Any:
+    """获取角色，不存在时抛出 404。优先从缓存读取。"""
     from fastapi import HTTPException
-    row = conn.execute(
-        "SELECT * FROM characters WHERE id = ? AND is_visible = 1",
-        (character_id,),
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="角色不存在")
+    
+    # 尝试从缓存获取
+    cached = get_character(character_id)
+    if cached:
+        row = cached
+    else:
+        # 缓存未命中，查询数据库
+        row = conn.execute(
+            "SELECT * FROM characters WHERE id = %s AND is_visible = 1",
+            (character_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="角色不存在")
+        # 存入缓存
+        set_character(character_id, row)
+    
     if viewer_plan is not None:
         required_plan = row["required_plan"] if "required_plan" in row.keys() else "guest"
         ensure_plan_access(
@@ -72,10 +82,10 @@ def get_character_or_404(
 # 聊天上下文准备
 # ============================================================
 def get_greeting_for_phase(
-    conn: sqlite3.Connection,
+    conn: Any,
     character_id: str,
     story_phase: str = "stranger",
-) -> str | None:
+) -> tuple[int | None, str | None]:
     """
     根据关系阶段获取对应的开场白。
     
@@ -89,13 +99,15 @@ def get_greeting_for_phase(
         story_phase: 关系阶段 (stranger/acquaintance/friend/lover)
     
     返回：
-        开场白内容，或 None
+        (greeting_id, 开场白内容)
+        - 命中 character_greetings 时返回真实 greeting_id
+        - 回退到 characters.opening_message 时返回 (None, content)
     """
     # 1. 尝试从多阶段开场白表中获取
     row = conn.execute(
         """
-        SELECT content FROM character_greetings
-        WHERE character_id = ? AND story_phase = ? AND is_active = 1
+        SELECT id, content FROM character_greetings
+        WHERE character_id = %s AND story_phase = %s AND is_active = 1
         ORDER BY priority ASC, RANDOM()
         LIMIT 1
         """,
@@ -103,21 +115,23 @@ def get_greeting_for_phase(
     ).fetchone()
     
     if row and row["content"]:
-        return row["content"]
+        return int(row["id"]), row["content"]
     
     # 2. 回退到角色的默认开场白
     row = conn.execute(
-        "SELECT opening_message FROM characters WHERE id = ?",
+        "SELECT opening_message FROM characters WHERE id = %s",
         (character_id,),
     ).fetchone()
     
-    return row["opening_message"] if row else None
+    return None, (row["opening_message"] if row else None)
 
 
 def ensure_opening_message(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
+    *,
+    commit: bool = True,
 ) -> None:
     """
     确保用户首次和角色对话时，数据库里有一条角色的开场白。
@@ -126,7 +140,7 @@ def ensure_opening_message(
     """
     # 检查是否已有消息
     row = conn.execute(
-        "SELECT 1 FROM chat_messages WHERE user_id = ? AND character_id = ? LIMIT 1",
+        "SELECT 1 FROM chat_messages WHERE user_id = %s AND character_id = %s LIMIT 1",
         (user_id, character_id),
     ).fetchone()
     if row:
@@ -138,42 +152,45 @@ def ensure_opening_message(
     story_phase = state.get("story_phase", "stranger") if state else "stranger"
     
     # 获取对应阶段的开场白
-    greeting = get_greeting_for_phase(conn, character_id, story_phase)
+    greeting_id, greeting = get_greeting_for_phase(conn, character_id, story_phase)
     
     if not greeting:
         return
     
-    # 插入开场白作为第一条消息
+    # 插入开场白与更新 use_count 保持同一事务，避免半成功
     conn.execute(
         """
         INSERT INTO chat_messages(user_id, character_id, role, content, created_at, is_summarized)
-        VALUES (?, ?, 'assistant', ?, ?, 1)
+        VALUES (%s, %s, 'assistant', %s, %s, 1)
         """,
         (user_id, character_id, greeting, utc_now_iso()),
     )
-    conn.commit()
-    
-    # 更新开场白使用次数
-    conn.execute(
-        """
-        UPDATE character_greetings 
-        SET use_count = use_count + 1 
-        WHERE character_id = ? AND story_phase = ? AND is_active = 1
-        AND content = ?
-        """,
-        (character_id, story_phase, greeting),
-    )
-    conn.commit()
+
+    if greeting_id is not None:
+        conn.execute(
+            """
+            UPDATE character_greetings 
+            SET use_count = use_count + 1 
+            WHERE id = %s AND character_id = %s
+            """,
+            (greeting_id, character_id),
+        )
+
+    if commit:
+        conn.commit()
+
 
 
 def prepare_chat_context(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
     user_message: str,
     persist_user_message: bool = True,
     viewer_plan: str | None = None,
-) -> tuple[sqlite3.Row, str, list[dict[str, str]], str]:
+    *,
+    commit: bool = True,
+) -> tuple[Any, str, list[dict[str, str]], str]:
     """
     准备聊天所需的上下文数据。
     
@@ -184,16 +201,19 @@ def prepare_chat_context(
     clean_text = user_message.strip()
     if not clean_text:
         raise HTTPException(status_code=400, detail="消息不能为空")
-    ensure_opening_message(conn, user_id, character_id)
+    ensure_opening_message(conn, user_id, character_id, commit=False)
 
     if persist_user_message:
-        store_user_message(conn, user_id, character_id, clean_text)
+        store_user_message(conn, user_id, character_id, clean_text, commit=False)
 
     # 读取最近消息和摘要
     recent_messages = get_recent_messages(conn, user_id, character_id)
     if not persist_user_message and clean_text:
         recent_messages.append({"role": "user", "content": clean_text})
     memory_summary = get_summary_for_prompt(conn, user_id, character_id)
+
+    if commit:
+        conn.commit()
     
     return character, clean_text, recent_messages, memory_summary
 
@@ -201,34 +221,50 @@ def prepare_chat_context(
 # ============================================================
 # 消息保存和统计
 # ============================================================
-def save_assistant_message(conn: sqlite3.Connection, user_id: int, character_id: str, reply: str) -> None:
+def save_assistant_message(
+    conn: Any,
+    user_id: int,
+    character_id: str,
+    reply: str,
+    *,
+    commit: bool = True,
+) -> None:
     """保存 AI 助手的回复到数据库。"""
     conn.execute(
-        "INSERT INTO chat_messages(user_id, character_id, role, content, created_at) VALUES (?, ?, 'assistant', ?, ?)",
+        "INSERT INTO chat_messages(user_id, character_id, role, content, created_at) VALUES (%s, %s, 'assistant', %s, %s)",
         (user_id, character_id, reply, utc_now_iso()),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
-def store_user_message(conn: sqlite3.Connection, user_id: int, character_id: str, content: str) -> None:
+def store_user_message(
+    conn: Any,
+    user_id: int,
+    character_id: str,
+    content: str,
+    *,
+    commit: bool = True,
+) -> None:
     """保存用户消息到数据库。"""
     conn.execute(
-        "INSERT INTO chat_messages(user_id, character_id, role, content, created_at) VALUES (?, ?, 'user', ?, ?)",
+        "INSERT INTO chat_messages(user_id, character_id, role, content, created_at) VALUES (%s, %s, 'user', %s, %s)",
         (user_id, character_id, content, utc_now_iso()),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
-def count_chat_messages(conn: sqlite3.Connection, user_id: int, character_id: str) -> int:
+def count_chat_messages(conn: Any, user_id: int, character_id: str) -> int:
     """统计用户和某角色的聊天消息总数。"""
     row = conn.execute(
-        "SELECT COUNT(*) AS total FROM chat_messages WHERE user_id = ? AND character_id = ?",
+        "SELECT COUNT(*) AS total FROM chat_messages WHERE user_id = %s AND character_id = %s",
         (user_id, character_id),
     ).fetchone()
     return int(row["total"]) if row else 0
 
 
-def get_linked_assets(conn: sqlite3.Connection, character_id: str) -> list[sqlite3.Row]:
+def get_linked_assets(conn: Any, character_id: str) -> list[Any]:
     """
     获取角色关联的资产列表（世界卡/剧情卡等）。
     
@@ -241,14 +277,16 @@ def get_linked_assets(conn: sqlite3.Connection, character_id: str) -> list[sqlit
 # AI 回复生成
 # ============================================================
 def build_reply_with_fallback(
-    character: sqlite3.Row,
+    character: Any,
     recent_messages: list[dict[str, str]],
     memory_summary: str,
-    related_assets: list[sqlite3.Row] | None = None,
+    related_assets: list[Any] | None = None,
     user_name: str = "",
-    conn: sqlite3.Connection | None = None,
+    conn: Any | None = None,
     user_id: int | None = None,
     ai_config: dict[str, str] | None = None,
+    *,
+    commit: bool = True,
 ) -> tuple[str, dict[str, Any] | None]:
     """
     组装 Prompt → 调用 AI → 解析状态增量 → 返回 (cleaned_reply, new_state)。
@@ -258,6 +296,7 @@ def build_reply_with_fallback(
     
     参数：
         conn, user_id — 可选，用于读取/写入关系状态
+        commit — 是否在内部提交状态更新；需要与外层事务合并时可设为 False
     
     返回：
         (reply_text, new_state)
@@ -294,14 +333,20 @@ def build_reply_with_fallback(
     new_state: dict[str, Any] | None = None
     if delta and conn is not None and user_id is not None:
         try:
-            new_state = apply_state_delta(conn, user_id, character["id"], delta)
-        except Exception:
-            pass  # 状态更新失败不影响正常回复
+            new_state = apply_state_delta(conn, user_id, character["id"], delta, commit=commit)
+        except Exception as exc:
+            logger.warning(
+                "角色状态更新失败 user_id=%s character_id=%s delta=%s error=%s",
+                user_id,
+                character["id"],
+                delta,
+                exc,
+            )
 
     return cleaned_reply, new_state
 
 
-def build_mock_reply(character: sqlite3.Row, user_message: str) -> str:
+def build_mock_reply(character: Any, user_message: str) -> str:
     """
     生成 fallback mock 回复。
     

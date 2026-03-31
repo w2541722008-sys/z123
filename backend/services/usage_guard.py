@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -10,6 +9,8 @@ from fastapi import HTTPException
 
 from config import COST_ESTIMATE_CHARS_PER_TOKEN, utc_now_iso
 
+# 常量定义
+ERROR_DETAIL_MAX_LENGTH = 500
 
 SUCCESS_STATUSES = ("success", "fallback")
 
@@ -45,7 +46,7 @@ def _day_range_utc() -> tuple[str, str]:
 
 
 def get_daily_usage(
-    conn: sqlite3.Connection,
+    conn: Any,
     *,
     user_id: int | None = None,
     guest_ip: str | None = None,
@@ -55,7 +56,7 @@ def get_daily_usage(
         raise ValueError("user_id 和 guest_ip 至少需要一个")
 
     start_iso, end_iso = _day_range_utc()
-    status_placeholders = ", ".join(["?"] * len(SUCCESS_STATUSES))
+    status_placeholders = ", ".join(["%s"] * len(SUCCESS_STATUSES))
 
     if user_id is not None:
         row = conn.execute(
@@ -63,10 +64,10 @@ def get_daily_usage(
             SELECT COUNT(*) AS request_count,
                    COALESCE(SUM(total_estimated_tokens), 0) AS total_tokens
             FROM ai_request_logs
-            WHERE user_id = ?
+            WHERE user_id = %s
               AND status IN ({status_placeholders})
-              AND created_at >= ?
-              AND created_at < ?
+              AND created_at >= %s
+              AND created_at < %s
             """,
             (user_id, *SUCCESS_STATUSES, start_iso, end_iso),
         ).fetchone()
@@ -76,10 +77,10 @@ def get_daily_usage(
             SELECT COUNT(*) AS request_count,
                    COALESCE(SUM(total_estimated_tokens), 0) AS total_tokens
             FROM ai_request_logs
-            WHERE guest_ip = ?
+            WHERE guest_ip = %s
               AND status IN ({status_placeholders})
-              AND created_at >= ?
-              AND created_at < ?
+              AND created_at >= %s
+              AND created_at < %s
             """,
             (guest_ip or "", *SUCCESS_STATUSES, start_iso, end_iso),
         ).fetchone()
@@ -91,7 +92,7 @@ def get_daily_usage(
 
 
 def enforce_daily_budget(
-    conn: sqlite3.Connection,
+    conn: Any,
     *,
     user_id: int | None = None,
     guest_ip: str | None = None,
@@ -107,7 +108,7 @@ def enforce_daily_budget(
 
 
 def log_ai_request(
-    conn: sqlite3.Connection,
+    conn: Any,
     *,
     user_id: int | None,
     guest_ip: str,
@@ -120,6 +121,7 @@ def log_ai_request(
     used_fallback: bool,
     status: str,
     error_detail: str = "",
+    commit: bool = True,
 ) -> None:
     """记录一次聊天请求的估算消耗。"""
     conn.execute(
@@ -128,7 +130,7 @@ def log_ai_request(
             user_id, guest_ip, character_id, endpoint,
             request_chars, estimated_input_tokens, estimated_output_tokens,
             total_estimated_tokens, used_fallback, status, error_detail, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             user_id,
@@ -141,8 +143,9 @@ def log_ai_request(
             total_estimated_tokens,
             1 if used_fallback else 0,
             status,
-            (error_detail or "")[:500],
+            (error_detail or "")[:ERROR_DETAIL_MAX_LENGTH],
             utc_now_iso(),
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()

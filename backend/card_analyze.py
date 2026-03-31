@@ -35,20 +35,28 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
 import sys
 import textwrap
 from pathlib import Path
 
 # ── 路径与配置 ────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "data" / "aifriend.db"
-ENV_FILE = BASE_DIR / ".env"
+
+# 把 backend/ 加入模块搜索路径
+sys.path.insert(0, str(BASE_DIR))
+
+# 加载环境变量（必须在导入 database 之前）
+from config import load_env_file
+
+load_env_file()
+
+from database import get_conn  # noqa: E402
 
 
 def load_env() -> dict[str, str | None]:
     """读取 .env 文件，返回 key-value 字典。"""
     env: dict[str, str | None] = {}
+    ENV_FILE = BASE_DIR / ".env"
     if ENV_FILE.exists():
         for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -57,12 +65,6 @@ def load_env() -> dict[str, str | None]:
             k, _, v = line.partition("=")
             env[k.strip()] = v.strip()
     return env
-
-
-def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 # ── AI 调用（直接复用 model_adapter 的逻辑，不引入 FastAPI 依赖）────────────
@@ -276,11 +278,11 @@ def save_to_db(char_id: str, char_name: str, fields: dict) -> None:
         cur.execute(
             """
             update characters
-            set subtitle=?,
-                tags=?,
-                opening_message=?,
+            set subtitle=%s,
+                tags=%s,
+                opening_message=%s,
                 import_locked=1
-            where id=?
+            where id=%s
             """,
             (
                 fields["subtitle"],
@@ -326,16 +328,16 @@ def main() -> None:
         sys.exit(1)
 
     # 连接数据库
-    if not DB_PATH.exists():
-        print(f"✗ 数据库不存在：{DB_PATH}")
+    try:
+        conn = get_conn()
+    except Exception as e:
+        print(f"✗ 数据库连接失败：{e}")
         sys.exit(1)
-
-    conn = get_conn()
 
     # 查询目标角色
     if args.name:
         rows = conn.execute(
-            "select id, name, card_type, import_locked, opening_message, raw_card_json from characters where name like ?",
+            "select id, name, card_type, import_locked, opening_message, raw_card_json from characters where name like %s",
             (f"%{args.name}%",),
         ).fetchall()
     elif args.force:

@@ -1019,7 +1019,11 @@
                 // AI 调用失败时，后端不发 chunk/done，只发 error 事件
                 onError(payload) {
                   removeTyping();
-                  if (bubbleEl) { bubbleEl.remove(); bubbleEl = null; }
+                  // 删除整个 AI 消息行（如果已创建的话）
+                  if (bubbleEl && bubbleEl.parentNode) {
+                    bubbleEl.parentNode.remove();
+                  }
+                  bubbleEl = null;
                   UI.toast(payload?.message || '网络波动，请稍后再试', 'warn', 3000);
                 },
               }
@@ -1061,7 +1065,11 @@
                 // AI 调用失败时，后端不发 chunk/done，只发 error 事件
                 onError(payload) {
                   removeTyping();
-                  if (bubbleEl) { bubbleEl.remove(); bubbleEl = null; }
+                  // 删除整个 AI 消息行（如果已创建的话）
+                  if (bubbleEl && bubbleEl.parentNode) {
+                    bubbleEl.parentNode.remove();
+                  }
+                  bubbleEl = null;
                   UI.toast(payload?.message || '网络波动，请稍后再试', 'warn', 3000);
                 },
               }

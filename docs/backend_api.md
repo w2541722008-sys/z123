@@ -195,6 +195,11 @@
 - 请求头：`Authorization: Bearer <token>`
 - 查看当前用户某一笔订单的详细状态
 
+### 20. 取消订单
+**`POST /billing/orders/{order_no}/cancel`**
+- 请求头：`Authorization: Bearer <token>`
+- 取消指定订单
+
 ---
 
 ## 调试接口（仅开发环境）

@@ -35,7 +35,6 @@ from __future__ import annotations
 
 # 标准库导入
 import json
-import sqlite3
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -127,27 +126,31 @@ _AFFECTION_DELTA_MAX = 10
 # 工具函数
 # ============================================================
 def _get_today_date() -> str:
-    """返回本地日期字符串 YYYY-MM-DD。"""
-    return date.today().isoformat()
+    """返回 UTC 日期字符串 YYYY-MM-DD（与数据库字段保持一致）。"""
+    return datetime.now(timezone.utc).date().isoformat()
 
 
-def parse_json_object(text: str, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
-    """安全解析 JSON 对象。"""
+def parse_json_object(text, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
+    """安全解析 JSON 对象（兼容 psycopg2 自动解析的 dict）。"""
     fallback = fallback or {}
-    raw = (text or "").strip()
+    if isinstance(text, dict):
+        return text
+    if isinstance(text, list):
+        return dict(fallback)
+    raw = (text or "").strip() if isinstance(text, str) else ""
     if not raw:
         return dict(fallback)
     try:
         value = json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         return dict(fallback)
     return value if isinstance(value, dict) else dict(fallback)
 
 
-def _get_affection_rules(conn: sqlite3.Connection, character_id: str) -> dict[str, int]:
+def _get_affection_rules(conn: Any, character_id: str) -> dict[str, int]:
     """读取角色卡自定义规则，与全局底座合并（角色卡覆盖同名 key）。"""
     row = conn.execute(
-        "SELECT affection_rules_json, affection_enabled FROM characters WHERE id = ?",
+        "SELECT affection_rules_json, affection_enabled FROM characters WHERE id = %s",
         (character_id,),
     ).fetchone()
     if not row:
@@ -180,10 +183,10 @@ def _get_affection_rules(conn: sqlite3.Connection, character_id: str) -> dict[st
     return merged
 
 
-def is_affection_enabled(conn: sqlite3.Connection, character_id: str) -> bool:
+def is_affection_enabled(conn: Any, character_id: str) -> bool:
     """判断该角色卡是否启用好感度系统。"""
     row = conn.execute(
-        "SELECT affection_enabled, affection_rules_json, card_type FROM characters WHERE id = ?",
+        "SELECT affection_enabled, affection_rules_json, card_type FROM characters WHERE id = %s",
         (character_id,),
     ).fetchone()
     if not row:
@@ -206,14 +209,14 @@ def is_affection_enabled(conn: sqlite3.Connection, character_id: str) -> bool:
 # ============================================================
 # 状态读写
 # ============================================================
-def get_character_state(conn: sqlite3.Connection, user_id: int, character_id: str) -> dict[str, Any]:
+def get_character_state(conn: Any, user_id: int, character_id: str) -> dict[str, Any]:
     """读取用户对某角色的当前关系状态，不存在时返回默认值。"""
     row = conn.execute(
         """
         SELECT affection, story_phase, mood, custom_vars,
                daily_event_counts, daily_affection_gained, last_event_timestamps, daily_reset_date
         FROM character_states
-        WHERE user_id = ? AND character_id = ?
+        WHERE user_id = %s AND character_id = %s
         """,
         (user_id, character_id),
     ).fetchone()
@@ -249,7 +252,7 @@ def _reset_daily_fields_if_needed(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def upsert_character_state(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
     affection: int,
@@ -260,6 +263,8 @@ def upsert_character_state(
     daily_affection_gained: int = 0,
     last_event_timestamps: dict[str, Any] | None = None,
     daily_reset_date: str = "",
+    *,
+    commit: bool = True,
 ) -> None:
     """写入（插入或更新）一条关系状态记录。"""
     affection = max(0, min(100, int(affection)))
@@ -279,9 +284,9 @@ def upsert_character_state(
         INSERT INTO character_states(
             user_id, character_id, affection, story_phase, mood, custom_vars,
             daily_event_counts, daily_affection_gained, last_event_timestamps,
-            daily_reset_date, updated_at
+            daily_reset_date, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT(user_id, character_id) DO UPDATE SET
             affection = excluded.affection,
             story_phase = excluded.story_phase,
@@ -300,10 +305,12 @@ def upsert_character_state(
             daily_affection_gained,
             json.dumps(last_event_timestamps, ensure_ascii=False),
             daily_reset_date,
-            utc_now_iso(),
+            utc_now_iso(),   # created_at（首次插入时使用，UPSERT 时被忽略）
+            utc_now_iso(),   # updated_at（每次更新都更新）
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 # ============================================================
@@ -475,10 +482,12 @@ def _auto_advance_story_phase(affection: int, current_phase: str) -> str:
 # 状态增量应用
 # ============================================================
 def apply_state_delta(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
     delta: dict[str, Any],
+    *,
+    commit: bool = True,
 ) -> dict[str, Any]:
     """把 AI 输出的状态增量应用到现有状态，返回更新后的状态。"""
     affection_enabled = is_affection_enabled(conn, character_id)
@@ -550,7 +559,7 @@ def apply_state_delta(
 
     # 检查并触发剧情事件（在写库之前，基于新的好感度）
     triggered_events = _check_and_trigger_story_events(
-        conn, user_id, character_id, affection, story_phase
+        conn, user_id, character_id, affection, story_phase, commit=False
     )
 
     # 写库
@@ -564,7 +573,11 @@ def apply_state_delta(
         daily_affection_gained=current.get("_daily_affection_gained", 0),
         last_event_timestamps=current.get("_last_event_timestamps", {}),
         daily_reset_date=current.get("_daily_reset_date", _get_today_date()),
+        commit=False,
     )
+
+    if commit:
+        conn.commit()
 
     result = get_character_state(conn, user_id, character_id)
 
@@ -580,11 +593,13 @@ def apply_state_delta(
 # ============================================================
 
 def _check_and_trigger_story_events(
-    conn: sqlite3.Connection,
+    conn: Any,
     user_id: int,
     character_id: str,
     current_affection: int,
     current_phase: str,
+    *,
+    commit: bool = True,
 ) -> list[dict[str, Any]]:
     """
     检查并触发剧情事件。
@@ -612,7 +627,7 @@ def _check_and_trigger_story_events(
                    unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
                    event_content, is_active
             FROM story_events
-            WHERE character_id = ? AND is_active = 1
+            WHERE character_id = %s AND is_active = 1
             ORDER BY trigger_score ASC
             """,
             (character_id,),
@@ -625,7 +640,7 @@ def _check_and_trigger_story_events(
         progress_row = conn.execute(
             """
             SELECT triggered_event_ids FROM user_story_progress
-            WHERE user_id = ? AND character_id = ?
+            WHERE user_id = %s AND character_id = %s
             """,
             (user_id, character_id),
         ).fetchone()
@@ -673,12 +688,12 @@ def _check_and_trigger_story_events(
                 ]
                 if memory_ids:
                     # 激活这些记忆条目
-                    placeholders = ",".join(["?"] * len(memory_ids))
+                    placeholders = ",".join(["%s"] * len(memory_ids))
                     conn.execute(
                         f"""
                         UPDATE character_memories
                         SET is_active = 1
-                        WHERE character_id = ? AND id IN ({placeholders})
+                        WHERE character_id = %s AND id IN ({placeholders})
                         """,
                         (character_id,) + tuple(memory_ids),
                     )
@@ -693,12 +708,12 @@ def _check_and_trigger_story_events(
                 ]
                 if greeting_ids:
                     # 激活这些开场白
-                    placeholders = ",".join(["?"] * len(greeting_ids))
+                    placeholders = ",".join(["%s"] * len(greeting_ids))
                     conn.execute(
                         f"""
                         UPDATE character_greetings
                         SET is_active = 1
-                        WHERE character_id = ? AND id IN ({placeholders})
+                        WHERE character_id = %s AND id IN ({placeholders})
                         """,
                         (character_id,) + tuple(greeting_ids),
                     )
@@ -711,7 +726,7 @@ def _check_and_trigger_story_events(
                     """
                     UPDATE character_storylines
                     SET is_active = 1
-                    WHERE character_id = ? AND id = ?
+                    WHERE character_id = %s AND id = %s
                     """,
                     (character_id, storyline_id),
                 )
@@ -729,7 +744,7 @@ def _check_and_trigger_story_events(
                 INSERT INTO user_story_progress
                 (user_id, character_id, triggered_event_ids, current_storyline_id,
                  last_updated, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 ON CONFLICT(user_id, character_id) DO UPDATE SET
                     triggered_event_ids = excluded.triggered_event_ids,
                     last_updated = excluded.last_updated
@@ -739,11 +754,12 @@ def _check_and_trigger_story_events(
                     character_id,
                     all_triggered_str,
                     None,  # current_storyline_id 保持不变
-                    _get_now_iso(),
-                    _get_now_iso(),
+                    utc_now_iso(),
+                    utc_now_iso(),
                 ),
             )
-            conn.commit()
+            if commit:
+                conn.commit()
 
     except Exception as e:
         # 剧情事件触发失败不应影响主流程，记录错误但继续

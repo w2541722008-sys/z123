@@ -26,7 +26,7 @@ import os
 from typing import Any
 
 # 第三方库导入
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 # 本地模块导入
@@ -50,7 +50,7 @@ from services.usage_guard import (
     get_daily_usage,
     log_ai_request,
 )
-from services.character_state import get_character_state
+from services.character_state import apply_state_delta, get_character_state
 from services.chat_service import (
     AIChatError,
     build_layered_chat_messages,
@@ -70,7 +70,95 @@ from services.memory_service import (
     sanitize_stream_chunk,
 )
 
+
 router = APIRouter()
+
+
+def _log_chat_failure(
+    *,
+    user_id: int | None,
+    guest_ip: str,
+    character_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    error_detail: str,
+    estimated_output_tokens: int = 0,
+) -> None:
+    """尽量补记失败请求日志，避免线上排查时只看到成功请求。"""
+    log_conn = get_conn()
+    try:
+        total_estimated_tokens = estimate["tokens"] + max(0, estimated_output_tokens)
+        log_ai_request(
+            log_conn,
+            user_id=user_id,
+            guest_ip=guest_ip,
+            character_id=character_id,
+            endpoint=endpoint,
+            request_chars=estimate["chars"],
+            estimated_input_tokens=estimate["tokens"],
+            estimated_output_tokens=max(0, estimated_output_tokens),
+            total_estimated_tokens=total_estimated_tokens,
+            used_fallback=False,
+            status="error",
+            error_detail=error_detail,
+        )
+    except Exception:
+        # 失败日志写入不能反过来影响主流程
+        pass
+    finally:
+        log_conn.close()
+
+
+def _persist_stream_result(
+    *,
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    final_reply: str,
+    estimate: dict[str, int],
+    delta: dict[str, Any] | None,
+    user_message: str | None = None,  # 新增：用户消息内容
+) -> dict[str, Any]:
+    """统一落库用户消息、流式回复、消耗日志和角色状态，任一步失败都整体回滚。"""
+    save_conn = get_conn()
+    try:
+        # 先写用户消息（如果提供了）
+        if user_message:
+            store_user_message(save_conn, user_id, character_id, user_message, commit=False)
+        # 再写 AI 回复
+        save_assistant_message(save_conn, user_id, character_id, final_reply, commit=False)
+        actual_output_tokens = estimate_text_tokens(final_reply)
+        log_ai_request(
+            save_conn,
+            user_id=user_id,
+            guest_ip=guest_ip,
+            character_id=character_id,
+            endpoint="/api/chat/stream",
+            request_chars=estimate["chars"],
+            estimated_input_tokens=estimate["tokens"],
+            estimated_output_tokens=actual_output_tokens,
+            total_estimated_tokens=estimate["tokens"] + actual_output_tokens,
+            used_fallback=False,
+            status="success",
+            commit=False,
+        )
+        if delta:
+            raw_state = apply_state_delta(
+                save_conn,
+                user_id,
+                character_id,
+                delta,
+                commit=False,
+            )
+        else:
+            raw_state = get_character_state(save_conn, user_id, character_id)
+        save_conn.commit()
+        return {k: v for k, v in raw_state.items() if not k.startswith("_")}
+    except Exception:
+        save_conn.rollback()
+        raise
+    finally:
+        save_conn.close()
 
 
 def _build_guest_quota_payload(conn, guest_ip: str) -> dict[str, Any]:
@@ -155,6 +243,7 @@ def chat_send(
             payload.message,
             persist_user_message=False,
             viewer_plan=user.effective_plan,
+            commit=False,
         )
         related_assets = get_linked_assets(conn, payload.character_id)
         character_state = get_character_state(conn, user.id, payload.character_id)
@@ -177,7 +266,7 @@ def chat_send(
         )
 
         # 预算通过后再落库
-        store_user_message(conn, user.id, payload.character_id, clean_text)
+        store_user_message(conn, user.id, payload.character_id, clean_text, commit=False)
 
         # 步骤 3：生成回复
         # AI 失败时抛出 AIChatError，此时用户消息已写但AI回复未写，
@@ -188,42 +277,55 @@ def chat_send(
                 related_assets=related_assets, user_name=user.nickname,
                 conn=conn, user_id=user.id,
                 ai_config=ai_config,
+                commit=False,
             )
-        except AIChatError:
-            # AI 调用失败：回滚用户消息，保证数据一致性
-            conn.execute(
-                "DELETE FROM chat_messages WHERE user_id = ? AND character_id = ? "
-                "AND role = 'user' AND created_at = ("
-                "  SELECT created_at FROM chat_messages WHERE user_id = ? AND character_id = ? "
-                "  AND role = 'user' ORDER BY created_at DESC LIMIT 1"
-                ")",
-                (user.id, payload.character_id, user.id, payload.character_id),
+
+            # 步骤 4：保存消息、日志和状态，统一在一次事务里提交
+            save_assistant_message(conn, user.id, payload.character_id, reply, commit=False)
+            history_count = count_chat_messages(conn, user.id, payload.character_id)
+
+            # 步骤 5：读取最新状态（过滤内部字段）
+            raw_state = get_character_state(conn, user.id, payload.character_id)
+            character_state = {k: v for k, v in raw_state.items() if not k.startswith("_")}
+
+            actual_output_tokens = estimate_text_tokens(reply)
+            log_ai_request(
+                conn,
+                user_id=user.id,
+                guest_ip=guest_ip,
+                character_id=payload.character_id,
+                endpoint="/api/chat/send",
+                request_chars=estimate["chars"],
+                estimated_input_tokens=estimate["tokens"],
+                estimated_output_tokens=actual_output_tokens,
+                total_estimated_tokens=estimate["tokens"] + actual_output_tokens,
+                used_fallback=False,
+                status="success",
+                commit=False,
             )
             conn.commit()
+        except AIChatError as exc:
+            conn.rollback()
+            _log_chat_failure(
+                user_id=user.id,
+                guest_ip=guest_ip,
+                character_id=payload.character_id,
+                endpoint="/api/chat/send",
+                estimate=estimate,
+                error_detail=str(exc),
+            )
             raise HTTPException(status_code=503, detail="网络波动，请稍后再试")
-
-        # 步骤 4：保存消息
-        save_assistant_message(conn, user.id, payload.character_id, reply)
-        history_count = count_chat_messages(conn, user.id, payload.character_id)
-
-        # 步骤 5：读取最新状态（过滤内部字段）
-        raw_state = get_character_state(conn, user.id, payload.character_id)
-        character_state = {k: v for k, v in raw_state.items() if not k.startswith("_")}
-
-        actual_output_tokens = estimate_text_tokens(reply)
-        log_ai_request(
-            conn,
-            user_id=user.id,
-            guest_ip=guest_ip,
-            character_id=payload.character_id,
-            endpoint="/api/chat/send",
-            request_chars=estimate["chars"],
-            estimated_input_tokens=estimate["tokens"],
-            estimated_output_tokens=actual_output_tokens,
-            total_estimated_tokens=estimate["tokens"] + actual_output_tokens,
-            used_fallback=False,
-            status="success",
-        )
+        except Exception as exc:
+            conn.rollback()
+            _log_chat_failure(
+                user_id=user.id,
+                guest_ip=guest_ip,
+                character_id=payload.character_id,
+                endpoint="/api/chat/send",
+                estimate=estimate,
+                error_detail=str(exc),
+            )
+            raise
     finally:
         conn.close()
 
@@ -268,6 +370,7 @@ def chat_stream(
             payload.message,
             persist_user_message=False,
             viewer_plan=user.effective_plan,
+            commit=False,
         )
         related_assets = get_linked_assets(conn, payload.character_id)
         character_state = get_character_state(conn, user.id, payload.character_id)
@@ -285,7 +388,7 @@ def chat_stream(
             token_limit=plan_policy["token_limit"],
             token_limit_detail="你今天的 AI 使用额度已达上限，请明天再来",
         )
-        store_user_message(conn, user.id, payload.character_id, clean_text)
+        # 用户消息留到流式完成后，与 AI 回复一起在 _persist_stream_result 中统一写入
     finally:
         conn.close()
 
@@ -296,6 +399,7 @@ def chat_stream(
     _character_dict = dict(character)
     _guest_ip = guest_ip
     _estimate = estimate
+    _user_message = clean_text  # 新增：保存用户消息内容
     _ai_config = ai_config
 
     def event_generator():
@@ -326,6 +430,16 @@ def chat_stream(
                 raise RuntimeError("模型返回了空内容")
         except Exception as e:
             stream_error = str(e)
+            _rollback_latest_user_message(_user_id, _character_id)
+            _log_chat_failure(
+                user_id=_user_id,
+                guest_ip=_guest_ip,
+                character_id=_character_id,
+                endpoint="/api/chat/stream",
+                estimate=_estimate,
+                error_detail=stream_error,
+                estimated_output_tokens=estimate_text_tokens(full_reply),
+            )
             # 告知前端发生了网络错误，不要显示任何 mock 内容
             yield format_sse("error", {"message": "网络波动，请稍后再试"})
             return
@@ -333,37 +447,29 @@ def chat_stream(
         # 解析状态增量
         final_reply, delta = parse_state_update_tag(final_reply_raw)
 
-        # 保存回复并应用状态更新
-        save_conn = get_conn()
-        new_state: dict[str, Any] | None = None
         try:
-            save_assistant_message(save_conn, _user_id, _character_id, final_reply)
-            actual_output_tokens = estimate_text_tokens(final_reply)
-            log_ai_request(
-                save_conn,
+            new_state = _persist_stream_result(
+                user_id=_user_id,
+                guest_ip=_guest_ip,
+                character_id=_character_id,
+                final_reply=final_reply,
+                estimate=_estimate,
+                delta=delta,
+                user_message=_user_message,  # 传入用户消息
+            )
+        except Exception as exc:
+            # 用户消息还未写入，无需回滚；AI 回复写入失败，所有操作已自动回滚
+            _log_chat_failure(
                 user_id=_user_id,
                 guest_ip=_guest_ip,
                 character_id=_character_id,
                 endpoint="/api/chat/stream",
-                request_chars=_estimate["chars"],
-                estimated_input_tokens=_estimate["tokens"],
-                estimated_output_tokens=actual_output_tokens,
-                total_estimated_tokens=_estimate["tokens"] + actual_output_tokens,
-                used_fallback=False,
-                status="success",
+                estimate=_estimate,
+                error_detail=f"persist_failed: {exc}",
+                estimated_output_tokens=estimate_text_tokens(final_reply),
             )
-            if delta:
-                from services.character_state import apply_state_delta
-                try:
-                    raw_new_state = apply_state_delta(save_conn, _user_id, _character_id, delta)
-                    new_state = {k: v for k, v in raw_new_state.items() if not k.startswith("_")}
-                except Exception:
-                    pass
-            if new_state is None:
-                raw_state = get_character_state(save_conn, _user_id, _character_id)
-                new_state = {k: v for k, v in raw_state.items() if not k.startswith("_")}
-        finally:
-            save_conn.close()
+            yield format_sse("error", {"message": "消息保存失败，请稍后再试"})
+            return
 
         # 后台异步触发记忆摘要
         run_memory_summary_background(_user_id, _character_id, _character_dict)
@@ -376,6 +482,7 @@ def chat_stream(
         })
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 
 @router.post("/chat/guest-stream")
@@ -491,6 +598,15 @@ def chat_guest_stream(payload: GuestChatPayload, request: Request) -> StreamingR
             if not final_reply_raw:
                 raise RuntimeError("模型返回了空内容")
         except Exception as e:
+            _log_chat_failure(
+                user_id=None,
+                guest_ip=_guest_ip,
+                character_id=payload.character_id,
+                endpoint="/api/chat/guest-stream",
+                estimate=_estimate,
+                error_detail=str(e),
+                estimated_output_tokens=estimate_text_tokens(full_reply),
+            )
             # 游客接口：AI 失败时告知前端，不走 mock
             yield format_sse("error", {"message": "网络波动，请稍后再试"})
             return
