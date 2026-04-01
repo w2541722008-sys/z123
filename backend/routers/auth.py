@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 # 标准库导入
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -145,7 +146,8 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
             (normalized_email, password_hash, nickname, now, now),
         )
         row_result = cur.fetchone()
-        user_id = row_result[0] if row_result else None
+        # RealDictCursor 返回字典，需要用 get() 访问
+        user_id = row_result.get("id") if row_result else None
         if not user_id:
             raise RuntimeError("用户创建失败：无法获取新用户ID")
 
@@ -219,7 +221,7 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
             """
             SELECT id, email, password_hash, password_algo, COALESCE(nickname, '') AS nickname,
                    COALESCE(plan_type, 'free') AS plan_type,
-                   COALESCE(plan_expires_at, '') AS plan_expires_at
+                   COALESCE(CAST(plan_expires_at AS VARCHAR), '') AS plan_expires_at
             FROM users WHERE LOWER(email) = %s
             """,
             (normalized_email,),
@@ -459,7 +461,7 @@ def verify_reset_code(payload: VerifyCodePayload, request: Request) -> dict[str,
         if not reset_code:
             raise HTTPException(status_code=400, detail="验证码已过期或无效")
 
-        if reset_code["code"] != payload.code:
+        if not hmac.compare_digest(str(reset_code["code"]), str(payload.code)):
             raise HTTPException(status_code=400, detail="验证码错误")
 
         return {"ok": True, "message": "验证通过"}

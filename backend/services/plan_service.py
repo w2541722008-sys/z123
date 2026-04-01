@@ -63,20 +63,26 @@ def plan_display_name(plan_type: str | None) -> str:
     return PLAN_LABELS.get(normalize_required_plan(plan_type), "游客")
 
 
-def _parse_iso_datetime(raw_value: str | None) -> datetime | None:
-    value = (raw_value or "").strip()
-    if not value:
+def _parse_iso_datetime(raw_value: str | datetime | None) -> datetime | None:
+    # 处理数据库返回的datetime对象或字符串
+    if raw_value is None:
         return None
-    try:
-        dt = datetime.fromisoformat(value)
-    except ValueError:
-        return None
+    if isinstance(raw_value, datetime):
+        dt = raw_value
+    else:
+        value = str(raw_value).strip()
+        if not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(value)
+        except ValueError:
+            return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
 
-def resolve_effective_plan(plan_type: str | None, plan_expires_at: str | None) -> str:
+def resolve_effective_plan(plan_type: str | None, plan_expires_at: str | datetime | None) -> str:
     """根据到期时间计算当前真正生效的档位。"""
     normalized = normalize_user_plan(plan_type)
     if normalized not in {VIP_PLAN, SVIP_PLAN}:
@@ -138,14 +144,21 @@ def get_plan_policy(plan_type: str | None) -> dict[str, Any]:
     }
 
 
-def serialize_plan_info(plan_type: str | None, plan_expires_at: str | None) -> dict[str, Any]:
+def serialize_plan_info(plan_type: str | None, plan_expires_at: str | datetime | None) -> dict[str, Any]:
     """统一序列化会员档位信息，方便接口复用。"""
     raw_plan = normalize_user_plan(plan_type)
     effective_plan = resolve_effective_plan(raw_plan, plan_expires_at)
+    # 处理数据库返回的datetime对象或字符串
+    if plan_expires_at is None:
+        expires_str = ""
+    elif isinstance(plan_expires_at, datetime):
+        expires_str = plan_expires_at.isoformat()
+    else:
+        expires_str = str(plan_expires_at).strip()
     return {
         "plan_type": raw_plan,
         "effective_plan": effective_plan,
-        "plan_expires_at": (plan_expires_at or "").strip(),
+        "plan_expires_at": expires_str,
         "plan_display_name": plan_display_name(effective_plan),
         "is_paid_plan": effective_plan in {VIP_PLAN, SVIP_PLAN},
         "membership_expired": raw_plan in {VIP_PLAN, SVIP_PLAN} and effective_plan == FREE_PLAN,

@@ -120,17 +120,18 @@ def serve_index():
 
 @app.get("/admin.html", response_class=HTMLResponse)
 def serve_admin():
-    """返回后台管理页面 admin.html。"""
-    admin_path = FRONTEND_DIR / "admin.html"
+    """返回后台管理页面（模块化版本，包含完整功能）。"""
+    admin_path = FRONTEND_STATIC_DIR / "admin" / "index.html"
     if not admin_path.exists():
-        return HTMLResponse("<h1>admin.html 未找到</h1>", status_code=404)
+        return HTMLResponse("<h1>admin 页面未找到</h1>", status_code=404)
     return HTMLResponse(admin_path.read_text(encoding="utf-8"))
 
 
 @app.get("/forgot-password.html", response_class=HTMLResponse)
 def serve_forgot_password():
     """返回忘记密码页面 forgot-password.html。"""
-    forgot_path = FRONTEND_DIR / "forgot-password.html"
+    # forgot-password.html 在 frontend/ 子目录下
+    forgot_path = FRONTEND_STATIC_DIR / "forgot-password.html"
     if not forgot_path.exists():
         return HTMLResponse("<h1>forgot-password.html 未找到</h1>", status_code=404)
     return HTMLResponse(forgot_path.read_text(encoding="utf-8"))
@@ -156,13 +157,16 @@ def on_startup() -> None:
         """后台定期清理超时订单。"""
         from routers.billing import _close_expired_pending_orders
         while True:
+            conn = None
             try:
                 conn = get_conn()
                 _close_expired_pending_orders(conn)
-                conn.close()
                 logging.info("✅ 已清理超时订单")
             except Exception as e:
                 logging.error(f"❌ 订单清理失败: {e}", exc_info=True)
+            finally:
+                if conn is not None:
+                    conn.close()
             time.sleep(3600)  # 每小时执行一次
 
     threading.Thread(target=cleanup_expired_orders_task, daemon=True).start()
@@ -174,7 +178,7 @@ def on_startup() -> None:
         logging.warning("⚠️  检测到缺失的生产环境配置：")
         for config in missing_configs:
             logging.warning(f"  - {config}")
-        logging.warning("请检查 .env 文件，参考 .env.production.example")
+        logging.warning("请检查 .env 文件，参考 .env.example")
 
 
 @app.on_event("shutdown")

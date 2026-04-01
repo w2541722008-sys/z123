@@ -8,9 +8,12 @@
 
 ### 1. 环境变量配置
 
-参考 `backend/.env.production.example`，确保以下环境变量已正确设置：
+参考 `backend/.env.example`，确保以下环境变量已正确设置：
 
 - [ ] **AIFRIEND_API_KEY** - 已设置为生产环境的真实 API Key
+- [ ] **AIFRIEND_BASE_URL** - 已设置为正确的 AI 模型接口地址
+- [ ] **AIFRIEND_MODEL** - 已设置为生产环境使用的模型名称
+- [ ] **DATABASE_URL** - 已设置为 Supabase PostgreSQL 连接字符串
 - [ ] **ALLOWED_ORIGINS** - 已改为生产域名（不是 localhost）
   - 示例：`https://yourdomain.com,https://www.yourdomain.com`
 - [ ] **RESEND_API_KEY** - 邮件服务 API Key 已设置
@@ -82,16 +85,17 @@ python main.py
 
 ### 8. 备份策略
 
-- [ ] 测试备份脚本：`python backend/backup_db.py`
-- [ ] 设置定时备份（推荐使用 cron）：
+- [ ] 测试备份脚本：`bash backend/backup_supabase.sh`
+- [ ] 设置定时备份（推荐使用 cron 或 1Panel 计划任务）：
   ```bash
   # 编辑 crontab
   crontab -e
-  
-  # 添加每天凌晨 2 点备份
-  0 2 * * * cd /path/to/aifriend/backend && python backup_db.py
+
+  # 添加每天凌晨 3 点备份
+  0 3 * * * /opt/aifriend/backend/backup_supabase.sh >> /opt/aifriend/logs/backup.log 2>&1
   ```
-- [ ] 确认备份文件保存在 `backend/data/backups/`
+- [ ] 确认备份文件保存在 `/opt/aifriend/backups/`
+- [ ] 参考 `docs/DATABASE_BACKUP_GUIDE.md` 了解更多
 
 ---
 
@@ -162,7 +166,7 @@ cd backend && python main.py
 ## 🆘 常见问题
 
 ### Q1: 启动时提示缺少环境变量怎么办？
-A: 检查 `backend/.env` 文件，参考 `.env.production.example` 补充缺失的配置。
+A: 检查 `backend/.env` 文件，参考 `.env.example` 补充缺失的配置。
 
 ### Q2: 邮件发送失败怎么办？
 A: 检查 `RESEND_API_KEY` 是否正确，Resend 免费版每天限制 100 封邮件。

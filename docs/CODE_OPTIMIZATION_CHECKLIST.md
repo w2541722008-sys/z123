@@ -1,8 +1,12 @@
 # AIFriend 代码优化清单
 
+> ⚠️ **本文档为历史存档**（2026-03-31 评估记录）
+> SQLite → Supabase 迁移后，部分条目已过时。当前代码状态请以实际代码为准。
+> 数据库相关优化项（如 backup_db.py）已不适用，项目已使用 `backup_supabase.sh`。
+
 **文档版本**: v1.0  
 **创建日期**: 2026-03-31  
-**最后更新**: 2026-03-31  
+**最后更新**: 2026-04-01（标记为历史存档）  
 **项目路径**: `/Users/jjj/aifriend`
 
 ---
@@ -40,7 +44,7 @@
 
 ### 2. 文件组织
 - ✅ 删除了废弃的备份文件（`backend/auth.py.bak`）
-- ✅ 创建了数据库备份脚本 `backend/backup_db.py`
+- ✅ 创建了数据库备份脚本 `backend/backup_supabase.sh`（替代旧版 backup_db.py）
 - ✅ 创建了数据库监控服务 `backend/services/db_monitor.py`
 - ✅ 创建了缓存服务 `backend/services/cache_service.py`
 
@@ -60,10 +64,11 @@
   - 任务: 确认所有敏感信息都通过环境变量配置
 
 - [ ] **数据库备份策略** (风险: 高)
-  - 文件: `backend/backup_db.py`
+  - 文件: `backend/backup_supabase.sh`
   - 任务: 确认备份脚本可以正常运行
-  - 任务: 设置定时备份任务（cron job）
+  - 任务: 设置定时备份任务（cron job / 1Panel 计划任务）
   - 任务: 测试备份恢复流程
+  - 参考: `docs/DATABASE_BACKUP_GUIDE.md`
 
 ---
 

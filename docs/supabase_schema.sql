@@ -316,3 +316,21 @@ create index if not exists idx_user_story_progress_user on user_story_progress(u
 --       所以 character_storylines 必须在 character_greetings 之前创建。
 --       上面的顺序已经正确（storylines → greetings）。
 -- ============================================
+
+-- ============================================
+-- 管理后台操作审计日志
+-- ============================================
+create table if not exists admin_audit_logs (
+    id          bigserial       primary key,
+    operator_id     text            not null,   -- 操作人用户 ID
+    operator_email  varchar(255)    not null,   -- 操作人邮箱
+    action      varchar(100)    not null,   -- 操作类型，如 edit_user / delete_user
+    target_type varchar(50)     not null,   -- 目标类型，如 user / order
+    target_id   text,                       -- 目标 ID
+    detail      text,                       -- JSON 格式的操作详情
+    created_at  timestamptz     not null default now()
+);
+
+create index if not exists idx_admin_audit_logs_created on admin_audit_logs(created_at desc);
+create index if not exists idx_admin_audit_logs_action on admin_audit_logs(action);
+create index if not exists idx_admin_audit_logs_target on admin_audit_logs(target_type, target_id);

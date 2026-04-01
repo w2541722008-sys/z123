@@ -25,7 +25,7 @@ tar -xzf aifriend_deploy_*.tar.gz
 cd aifriend_deploy_*
 
 # 配置环境变量
-cp backend/.env.production.example backend/.env
+cp backend/.env.example backend/.env
 nano backend/.env  # 编辑配置
 
 # 安装依赖
@@ -54,7 +54,7 @@ cd aifriend
 ### 3. 配置和启动
 ```bash
 # 配置环境变量
-cp backend/.env.production.example backend/.env
+cp backend/.env.example backend/.env
 nano backend/.env
 
 # 安装依赖
@@ -67,13 +67,15 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 ## 重要提醒
 
-1. **环境变量**: 务必在服务器上创建 `backend/.env` 并填入正确的配置
-2. **数据库**: 确保 DATABASE_URL 指向正确的 PostgreSQL 数据库
-3. **备份**: 部署前先备份本地数据（使用 `backend/backup_db.py`）
-4. **测试**: 部署后测试所有功能是否正常
+1. **环境变量**: 务必在服务器上创建 `backend/.env` 并填入正确的配置（参考 `backend/.env.example`）
+2. **数据库**: 确保 `DATABASE_URL` 指向正确的 Supabase PostgreSQL 数据库
+3. **建表**: 首次部署需要在 Supabase SQL Editor 中执行 `docs/supabase_schema.sql`
+4. **备份**: 部署前先备份本地数据（使用 `bash backend/backup_supabase.sh`）
+5. **测试**: 部署后测试所有功能是否正常
 
 ## 相关文档
 
 - [完整部署指南](./DEPLOYMENT_GUIDE_VPS.md)
 - [部署检查清单](./DEPLOYMENT_CHECKLIST.md)
-- [迁移总结](./MIGRATION_SUMMARY.md)
+- [数据库备份指南](./DATABASE_BACKUP_GUIDE.md)
+- [Supabase 建表 SQL](./supabase_schema.sql)

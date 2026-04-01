@@ -403,28 +403,15 @@ AI 会自动读取 `raw_card_json`，生成：
 #### 步骤 3：人工复核 AI 填写的内容
 
 ```bash
-# 查看 AI 填写结果
-python3 -c "
-import sqlite3, json
-conn = sqlite3.connect('data/aifriend.db')
-conn.row_factory = sqlite3.Row
-r = conn.execute(\"select name, subtitle, tags, opening_message from characters where name like '%角色名%'\").fetchone()
-print('subtitle:', r['subtitle'])
-print('tags:', r['tags'])
-print('opening:', r['opening_message'][:200])
-conn.close()
-"
+# 查看 AI 填写结果（通过 psql 查询 Supabase）
+psql $DATABASE_URL -c "SELECT name, subtitle, tags, opening_message FROM characters WHERE name LIKE '%角色名%';"
 ```
 
 如果觉得 AI 写的不好，直接改数据库（import_locked 继续保持 1）：
 
-```python
-import sqlite3, json
-conn = sqlite3.connect('aifriend/backend/data/aifriend.db')
-conn.execute("update characters set subtitle=? where name like '%角色名%'",
-             ("你改好的 subtitle",))
-conn.commit()
-conn.close()
+```sql
+-- 在 Supabase SQL Editor 中执行
+UPDATE characters SET subtitle = '你改好的 subtitle' WHERE name LIKE '%角色名%';
 ```
 
 ---
@@ -462,66 +449,65 @@ _card_type_overrides = [
 直接写 Python 脚本插入数据库，适合自主创作的角色（无 PNG 来源）：
 
 ```python
-import json, sqlite3
-from pathlib import Path
+import json, os
+from database import get_db  # 项目自身的数据库连接模块
 
-conn = sqlite3.connect("aifriend/backend/data/aifriend.db")
-
-conn.execute("""
-    insert into characters (
-        id, name, abbr, subtitle, tags, opening_message,
-        system_prompt, sort_order, mock_reply_style,
-        asset_type, card_type, source_kind, source_path,
-        embedded_format, raw_card_json, structured_asset_json,
-        runtime_cache_json, import_diagnostics,
-        is_visible, home_priority, import_locked
-    ) values (
-        ?, ?, ?, ?, ?, ?,
-        ?, ?, ?,
-        ?, ?, ?, ?,
-        'manual', '', '',
-        ?, '[]',
-        ?, ?, 1
-    )
-""", (
-    "char_id_v1",                              # id
-    "角色名",                                   # name
-    "角色名",                                   # abbr
-    "30-60字的一句话简介",                       # subtitle
-    json.dumps(["标签1", "标签2", "标签3"], ensure_ascii=False),  # tags
-    "开场白内容",                               # opening_message
-    "你是XXX，请全程保持角色扮演。",              # system_prompt
-    0,                                          # sort_order
-    json.dumps([], ensure_ascii=False),         # mock_reply_style
-    "character",                                # asset_type
-    "intimate",                                 # card_type (intimate/scenario/world)
-    "manual",                                   # source_kind
-    "",                                         # source_path
-    json.dumps({                               # runtime_cache_json（核心字段）
-        "asset_type": "character",
-        "primary_system_prompt": "...",
-        "base_profile": "...",
-        "personality": "...",
-        "scenario": "",
-        "world_rules": "",
-        "examples": "",
-        "post_history_rules": "请始终保持角色特征。",
-        "alternate_greetings": [],
-        "opening_message": "...",
-        "first_message": "...",
-        "world_info_before": "",
-        "world_info_after": "",
-        "conditional_entries": []
-    }, ensure_ascii=False),
-    1,    # is_visible
-    999,  # home_priority（加入精选后改小）
-))
-conn.commit()
-conn.close()
+with get_db() as conn:
+    conn.execute("""
+        insert into characters (
+            id, name, abbr, subtitle, tags, opening_message,
+            system_prompt, sort_order, mock_reply_style,
+            asset_type, card_type, source_kind, source_path,
+            embedded_format, raw_card_json, structured_asset_json,
+            runtime_cache_json, import_diagnostics,
+            is_visible, home_priority, import_locked
+        ) values (
+            %s, %s, %s, %s, %s, %s,
+            %s, %s, %s,
+            %s, %s, %s, %s,
+            'manual', '', '',
+            %s, '[]',
+            %s, %s, 1
+        )
+    """, (
+        "char_id_v1",                              # id
+        "角色名",                                   # name
+        "角色名",                                   # abbr
+        "30-60字的一句话简介",                       # subtitle
+        json.dumps(["标签1", "标签2", "标签3"], ensure_ascii=False),  # tags
+        "开场白内容",                               # opening_message
+        "你是XXX，请全程保持角色扮演。",              # system_prompt
+        0,                                          # sort_order
+        json.dumps([], ensure_ascii=False),         # mock_reply_style
+        "character",                                # asset_type
+        "intimate",                                 # card_type (intimate/scenario/world)
+        "manual",                                   # source_kind
+        "",                                         # source_path
+        json.dumps({                               # runtime_cache_json（核心字段）
+            "asset_type": "character",
+            "primary_system_prompt": "...",
+            "base_profile": "...",
+            "personality": "...",
+            "scenario": "",
+            "world_rules": "",
+            "examples": "",
+            "post_history_rules": "请始终保持角色特征。",
+            "alternate_greetings": [],
+            "opening_message": "...",
+            "first_message": "...",
+            "world_info_before": "",
+            "world_info_after": "",
+            "conditional_entries": []
+        }, ensure_ascii=False),
+        1,    # is_visible
+        999,  # home_priority（加入精选后改小）
+    ))
 print("写入完成")
 ```
 
 > `import_locked=1` 直接写 1，跳过 AI 分析步骤。
+>
+> 注意：运行此脚本前需要先 `cd backend` 并确保 `.env` 中的 `DATABASE_URL` 已配置。
 
 ---
 

@@ -85,18 +85,20 @@ def get_greeting_for_phase(
     conn: Any,
     character_id: str,
     story_phase: str = "stranger",
+    storyline_id: int | None = None,
 ) -> tuple[int | None, str | None]:
     """
     根据关系阶段获取对应的开场白。
     
     优先级：
-    1. 从 character_greetings 表中查询匹配当前阶段的开场白
+    1. 从 character_greetings 表中查询匹配当前阶段和剧情线的开场白
     2. 如果没有匹配，返回 characters.opening_message
     
     参数：
         conn: 数据库连接
         character_id: 角色ID
         story_phase: 关系阶段 (stranger/acquaintance/friend/lover)
+        storyline_id: 剧情线ID（可选），如果提供则优先匹配该剧情线的开场白
     
     返回：
         (greeting_id, 开场白内容)
@@ -104,20 +106,47 @@ def get_greeting_for_phase(
         - 回退到 characters.opening_message 时返回 (None, content)
     """
     # 1. 尝试从多阶段开场白表中获取
-    row = conn.execute(
-        """
-        SELECT id, content FROM character_greetings
-        WHERE character_id = %s AND story_phase = %s AND is_active = 1
-        ORDER BY priority ASC, RANDOM()
-        LIMIT 1
-        """,
-        (character_id, story_phase),
-    ).fetchone()
+    # 如果提供了 storyline_id，优先匹配该剧情线的开场白
+    if storyline_id:
+        # 将 storyline_id 转为字符串，与数据库 TEXT 类型保持一致
+        storyline_id_str = str(storyline_id)
+        row = conn.execute(
+            """
+            SELECT id, content FROM character_greetings
+            WHERE character_id = %s AND story_phase = %s AND is_active = 1
+              AND (storyline_id = %s OR storyline_id IS NULL)
+            ORDER BY 
+                CASE WHEN storyline_id = %s THEN 0 ELSE 1 END,
+                priority ASC, RANDOM()
+            LIMIT 1
+            """,
+            (character_id, story_phase, storyline_id_str, storyline_id_str),
+        ).fetchone()
+        
+        # 如果指定了剧情线但没匹配到，记录日志（便于调试）
+        if not row:
+            import logging
+            logging.getLogger(__name__).info(
+                f"未找到剧情线 {storyline_id} 的开场白，将尝试通用开场白"
+            )
+    
+    # 2. 如果没有指定剧情线，或指定剧情线未匹配到，尝试通用开场白
+    if not row:
+        row = conn.execute(
+            """
+            SELECT id, content FROM character_greetings
+            WHERE character_id = %s AND story_phase = %s AND is_active = 1
+              AND storyline_id IS NULL
+            ORDER BY priority ASC, RANDOM()
+            LIMIT 1
+            """,
+            (character_id, story_phase),
+        ).fetchone()
     
     if row and row["content"]:
-        return int(row["id"]), row["content"]
+        return row["id"], row["content"]
     
-    # 2. 回退到角色的默认开场白
+    # 3. 回退到角色的默认开场白
     row = conn.execute(
         "SELECT opening_message FROM characters WHERE id = %s",
         (character_id,),
@@ -146,13 +175,14 @@ def ensure_opening_message(
     if row:
         return  # 已有消息，不需要开场白
     
-    # 获取当前关系阶段
+    # 获取当前关系阶段和剧情线
     from services.character_state import get_character_state
     state = get_character_state(conn, user_id, character_id)
     story_phase = state.get("story_phase", "stranger") if state else "stranger"
+    storyline_id = state.get("storyline_id") if state else None
     
-    # 获取对应阶段的开场白
-    greeting_id, greeting = get_greeting_for_phase(conn, character_id, story_phase)
+    # 获取对应阶段和剧情线的开场白
+    greeting_id, greeting = get_greeting_for_phase(conn, character_id, story_phase, storyline_id)
     
     if not greeting:
         return

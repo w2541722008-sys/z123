@@ -62,7 +62,7 @@ def get_daily_usage(
         row = conn.execute(
             f"""
             SELECT COUNT(*) AS request_count,
-                   COALESCE(SUM(total_estimated_tokens), 0) AS total_tokens
+                   COALESCE(SUM(CAST(total_estimated_tokens AS bigint)), 0) AS total_tokens
             FROM ai_request_logs
             WHERE user_id = %s
               AND status IN ({status_placeholders})
@@ -75,7 +75,7 @@ def get_daily_usage(
         row = conn.execute(
             f"""
             SELECT COUNT(*) AS request_count,
-                   COALESCE(SUM(total_estimated_tokens), 0) AS total_tokens
+                   COALESCE(SUM(CAST(total_estimated_tokens AS bigint)), 0) AS total_tokens
             FROM ai_request_logs
             WHERE guest_ip = %s
               AND status IN ({status_placeholders})

@@ -322,7 +322,7 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> Curre
             """
             SELECT users.id, users.email, COALESCE(users.nickname, '') AS nickname,
                    COALESCE(users.plan_type, 'free') AS plan_type,
-                   COALESCE(users.plan_expires_at, '') AS plan_expires_at
+                   COALESCE(CAST(users.plan_expires_at AS VARCHAR), '') AS plan_expires_at
             FROM auth_tokens
             JOIN users ON users.id = auth_tokens.user_id
             WHERE auth_tokens.token = %s

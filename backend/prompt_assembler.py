@@ -141,7 +141,7 @@ def parse_json_object(text: str, fallback: dict[str, Any] | None = None) -> dict
 
 
 def _get_field(source: Any, key: str, default: Any = "") -> Any:
-    """兼容 sqlite3.Row / dict / 普通对象 三种读取方式。"""
+    """兼容 dict / psycopg2 RealDictRow / 普通对象 三种读取方式。"""
     try:
         value = source[key]
     except Exception:
@@ -376,15 +376,21 @@ def _append_memory_and_history(
       从最新消息往前贪心填充，预算耗尽即停，保留"最近且有价值"的对话。
     - 不传 budget 时行为与原先完全一致（向下兼容）。
 
-    注意：memory_summary 用 assistant role 包装（而不是 system），
-    以便兼容只允许单条 system 的 API（如 MiniMax）。
+    注意：memory_summary 用 user role 包装（而不是 assistant），
+    避免模型将记忆内容误认为是"自己之前说过的话"。
+    明确标注这是"关于用户的信息"，让模型正确理解上下文。
     """
     # ── 1. 长期记忆摘要 ─────────────────────────────────────────
     if memory_summary:
         mem_text = memory_summary
         if budget is not None:
             mem_text = _clip(mem_text, budget.memory_max_chars())
-        messages.append({"role": "assistant", "content": f"【记忆】{mem_text}"})
+        # 使用 user role 包装记忆摘要，避免模型混淆主语
+        # 明确标注这是"关于用户的信息"，让模型正确理解上下文
+        messages.append({
+            "role": "user",
+            "content": f"【系统提示：以下是关于用户的长期记忆，请结合这些背景信息进行回复】\n\n{mem_text}"
+        })
 
     # ── 2. 历史消息：决定保留窗口 ──────────────────────────────
     # 先按 recent_message_window 取候选集（兜底，保证不超过窗口设置）
@@ -898,9 +904,9 @@ def get_character_post_rules_from_db(
             conditions.append("(storyline_id IS NULL OR storyline_id = %s)")
             params.append(storyline_id)
 
-        # story_phase 过滤：规则未指定 story_phase（通用）或匹配当前 story_phase
+        # story_phase 过滤：规则未指定 story_phase（通用，NULL或空字符串）或匹配当前 story_phase
         if story_phase:
-            conditions.append("(story_phase IS NULL OR story_phase = %s)")
+            conditions.append("(story_phase IS NULL OR story_phase = '' OR story_phase = %s)")
             params.append(story_phase)
         
         where_clause = " AND ".join(conditions)
@@ -976,7 +982,7 @@ def build_layered_chat_messages(
 
     runtime_bundle = build_runtime_bundle(character, related_assets=related_assets)
     asset_type = runtime_bundle.get("asset_type") or _get_field(character, "asset_type", "hybrid")
-    # 读取产品层 card_type（数据库字段，可能是 sqlite3.Row，用 _get_field 兼容）
+    # 读取产品层 card_type（数据库字段，用 _get_field 兼容多种返回格式）
     card_type = _get_field(character, "card_type", "intimate") or "intimate"
     char_name = _get_field(character, "name", "") or ""
     # 对 bundle 内所有文本做一次宏展开（{{char}} → 角色名，{{user}} → 用户名）
@@ -1002,40 +1008,62 @@ def build_layered_chat_messages(
     if conditional_entries:
         card_before, card_after = resolve_world_info(conditional_entries, ctx_text, budget=_budget)
     
-    # 3. 合并数据库和角色卡的触发结果（数据库优先）
+    # 3. 合并数据库和角色卡的触发结果（角色卡优先，数据库补充）
+    # 角色卡包含核心设定，应优先保证；数据库的记忆条目作为动态补充
     wi_max = _budget.wi_max_chars()
-    wi_used = 0
 
-    def _safe_wi_append(existing: str, new_items: list[str]) -> str:
-        """把 new_items 追加到 existing，总量不超过 wi_max（基于 budget）。"""
-        nonlocal wi_used
+    def _calc_wi_used(items: list[str]) -> int:
+        """计算已使用的 World Info 字符数。"""
+        return sum(len(item) for item in items)
+
+    def _safe_wi_append(existing: str, new_items: list[str], remaining_budget: int) -> tuple[str, int]:
+        """把 new_items 追加到 existing，总量不超过 remaining_budget。
+        返回 (合并后的文本, 实际使用的字符数)
+        """
         parts = [existing] if existing else []
+        used = 0
         for item in new_items:
             item_chars = len(item)
-            if wi_used + item_chars > wi_max:
+            if used + item_chars > remaining_budget:
                 break
             parts.append(item)
-            wi_used += item_chars
-        return "\n\n".join(parts).strip()
+            used += item_chars
+        return "\n\n".join(parts).strip(), used
 
-    # 先追加数据库的记忆条目，再追加角色卡的
-    if db_before:
-        runtime_bundle["world_info_before"] = _safe_wi_append(
-            runtime_bundle.get("world_info_before") or "", db_before
-        )
-    if card_before:
-        runtime_bundle["world_info_before"] = _safe_wi_append(
-            runtime_bundle.get("world_info_before") or "", card_before
-        )
+    # 先处理角色卡的 World Info（优先）
+    # 注意：必须按顺序追加并获取实际使用量，而不是预先计算
     
-    if db_after:
-        runtime_bundle["world_info_after"] = _safe_wi_append(
-            runtime_bundle.get("world_info_after") or "", db_after
+    # 处理 card_before
+    if card_before:
+        merged_before, card_before_used = _safe_wi_append(
+            runtime_bundle.get("world_info_before") or "", card_before, wi_max
         )
+        runtime_bundle["world_info_before"] = merged_before
+    else:
+        card_before_used = 0
+    
+    # 处理 card_after
     if card_after:
-        runtime_bundle["world_info_after"] = _safe_wi_append(
-            runtime_bundle.get("world_info_after") or "", card_after
+        merged_after, card_after_used = _safe_wi_append(
+            runtime_bundle.get("world_info_after") or "", card_after, wi_max
         )
+        runtime_bundle["world_info_after"] = merged_after
+    else:
+        card_after_used = 0
+    
+    # 再处理数据库的记忆条目（使用实际剩余预算）
+    remaining_before = max(0, wi_max - card_before_used)
+    remaining_after = max(0, wi_max - card_after_used)
+    
+    if db_before and remaining_before > 0:
+        runtime_bundle["world_info_before"] = _safe_wi_append(
+            runtime_bundle.get("world_info_before") or "", db_before, remaining_before
+        )[0]
+    
+    if db_after and remaining_after > 0:
+        runtime_bundle["world_info_after"] = _safe_wi_append(
+            runtime_bundle.get("world_info_after") or "", db_after, remaining_after
+        )[0]
 
     # ── 后置规则动态注入 ──────────────────────────────────────────────────
     # 从数据库查询后置规则，合并到 runtime_bundle 的 post_history_rules 中
@@ -1049,8 +1077,12 @@ def build_layered_chat_messages(
     
     if db_post_rules:
         # 合并数据库后置规则和角色卡原有的 post_history_rules
+        # 合并顺序：角色卡规则在前，数据库规则在后
+        # 这样数据库的动态规则会覆盖角色卡的静态规则（后出现的指令优先）
         existing_rules = runtime_bundle.get("post_history_rules") or ""
-        merged_rules = "\n\n".join([existing_rules] + db_post_rules).strip()
+        # 过滤掉空字符串，避免产生多余的换行
+        all_rules = [r for r in ([existing_rules] + db_post_rules) if r and r.strip()]
+        merged_rules = "\n\n".join(all_rules).strip()
         runtime_bundle["post_history_rules"] = merged_rules
 
     # ── 关系状态快照注入 ──────────────────────────────────────────────────
@@ -1118,13 +1150,23 @@ def build_layered_chat_messages(
         ])
 
         state_snapshot = "\n".join(state_lines)
-        # 状态快照字数保护：上限为 WI 预算的 10%（约 2477 字），超出直接截断
-        # 避免自定义变量太多时把整个 WI 配额吞掉
-        _state_max = max(800, _budget.wi_max_chars() // 10)
+        # 状态快照字数保护：上限为 WI 预算的 15%，但保证至少 1000 字符
+        # 状态快照对角色行为影响重大，需要保证完整性
+        _state_max = max(1000, int(_budget.wi_max_chars() * 0.15))
         if len(state_snapshot) > _state_max:
-            state_snapshot = state_snapshot[:_state_max].rstrip() + "\n…（状态快照已截断）"
+            # 优先截断自定义变量部分，保留核心状态信息
+            truncated_lines = state_lines[:6]  # 保留标题和核心状态（好感度、阶段、心情）
+            truncated_lines.append("…（自定义变量已省略）")
+            truncated_lines.extend(state_lines[state_lines.index("【状态更新指令（重要）】"):])  # 保留指令部分
+            state_snapshot = "\n".join(truncated_lines)
+        
+        # 状态快照优先级最高：放在 world_info_after 的最前面
+        # 这样即使 world_info_after 被截断，状态快照也能保留
         existing_after = runtime_bundle.get("world_info_after") or ""
-        runtime_bundle["world_info_after"] = (existing_after + "\n\n" + state_snapshot).strip() if existing_after else state_snapshot
+        if existing_after:
+            runtime_bundle["world_info_after"] = (state_snapshot + "\n\n" + existing_after).strip()
+        else:
+            runtime_bundle["world_info_after"] = state_snapshot
 
     # ── 产品层 card_type 路由（优先级高于 asset_type）─────────────────────
     # card_type 是产品侧手动标注，语义比导卡自动解析的 asset_type 更可靠

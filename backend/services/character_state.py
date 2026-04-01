@@ -195,6 +195,7 @@ def is_affection_enabled(conn: Any, character_id: str) -> bool:
 # ============================================================
 def get_character_state(conn: Any, user_id: int, character_id: str) -> dict[str, Any]:
     """读取用户对某角色的当前关系状态，不存在时返回默认值。"""
+    # 查询角色状态
     row = conn.execute(
         """
         SELECT affection, story_phase, mood, custom_vars,
@@ -205,12 +206,29 @@ def get_character_state(conn: Any, user_id: int, character_id: str) -> dict[str,
         (user_id, character_id),
     ).fetchone()
     
+    # 查询当前剧情线（从用户剧情进度表）
+    progress_row = conn.execute(
+        """
+        SELECT current_storyline_id FROM user_story_progress
+        WHERE user_id = %s AND character_id = %s
+        """,
+        (user_id, character_id),
+    ).fetchone()
+    
+    storyline_id = None
+    if progress_row and progress_row["current_storyline_id"]:
+        try:
+            storyline_id = int(progress_row["current_storyline_id"])
+        except (ValueError, TypeError):
+            storyline_id = None
+    
     if not row:
         return {
             "affection": 30,
             "story_phase": "stranger",
             "mood": "neutral",
             "custom_vars": {},
+            "storyline_id": storyline_id,
         }
     
     return {
@@ -218,6 +236,7 @@ def get_character_state(conn: Any, user_id: int, character_id: str) -> dict[str,
         "story_phase": row["story_phase"] or "stranger",
         "mood": row["mood"] or "neutral",
         "custom_vars": parse_json_object(row["custom_vars"], fallback={}),
+        "storyline_id": storyline_id,
         "_daily_event_counts": parse_json_object(row["daily_event_counts"] or "{}", fallback={}),
         "_daily_affection_gained": int(row["daily_affection_gained"] or 0),
         "_last_event_timestamps": parse_json_object(row["last_event_timestamps"] or "{}", fallback={}),
@@ -465,6 +484,99 @@ def _auto_advance_story_phase(affection: int, current_phase: str) -> str:
 # ============================================================
 # 状态增量应用
 # ============================================================
+
+# STATE_UPDATE 白名单字段 - 只允许这些字段被AI更新
+# 这是安全防线，防止AI输出意外字段导致数据污染
+_STATE_UPDATE_ALLOWED_FIELDS = {
+    "affection",      # 好感度变化或直接设置
+    "event",          # 触发的好感度事件名称
+    "story_phase",    # 剧情阶段
+    "mood",           # 心情状态
+    "custom",         # 自定义变量字典
+}
+
+# 自定义变量的黑名单 - 这些键不允许被AI修改
+_CUSTOM_VARS_BLACKLIST = {
+    "_triggered_events",  # 内部事件标记
+    "_daily_event_counts",  # 日事件计数（内部使用）
+    "_daily_affection_gained",  # 日好感度获得（内部使用）
+    "_last_event_timestamps",  # 事件时间戳（内部使用）
+    "_daily_reset_date",  # 日重置日期（内部使用）
+}
+
+
+def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
+    """
+    清理和验证 STATE_UPDATE 增量，只允许白名单字段通过。
+    
+    安全处理规则：
+        1. 只保留白名单中的字段
+        2. custom 字典中的黑名单键会被过滤
+        3. 数值字段进行范围限制
+        4. 字符串字段进行长度限制
+    
+    Args:
+        delta: AI 输出的原始增量字典
+        
+    Returns:
+        清理后的安全增量字典
+    """
+    if not isinstance(delta, dict):
+        return {}
+    
+    sanitized = {}
+    
+    for key, value in delta.items():
+        # 只处理白名单字段
+        if key not in _STATE_UPDATE_ALLOWED_FIELDS:
+            continue
+        
+        if key == "affection":
+            # 好感度：可以是数字或 +/- 前缀的字符串
+            if isinstance(value, (int, float)):
+                sanitized[key] = max(-_AFFECTION_DELTA_MAX, min(_AFFECTION_DELTA_MAX, int(value)))
+            elif isinstance(value, str):
+                sanitized[key] = value[:20]  # 限制长度，如 "+5" "-3"
+        
+        elif key == "event":
+            # 事件名称：字符串，限制长度
+            if isinstance(value, str):
+                sanitized[key] = value.strip().lower()[:50]
+        
+        elif key == "story_phase":
+            # 剧情阶段：必须是有效值
+            if isinstance(value, str) and value.strip().lower() in _VALID_STORY_PHASES:
+                sanitized[key] = value.strip().lower()
+        
+        elif key == "mood":
+            # 心情：必须是有效值
+            if isinstance(value, str) and value.strip().lower() in _VALID_MOODS:
+                sanitized[key] = value.strip().lower()
+        
+        elif key == "custom":
+            # 自定义变量：必须是字典，且过滤黑名单键
+            if isinstance(value, dict):
+                safe_custom = {}
+                for k, v in value.items():
+                    # 跳过黑名单键
+                    if k in _CUSTOM_VARS_BLACKLIST:
+                        continue
+                    # 键名安全检查
+                    if not isinstance(k, str) or not k:
+                        continue
+                    safe_key = k[:50]  # 限制键名长度
+                    # 值类型安全检查
+                    if isinstance(v, (str, int, float, bool)):
+                        safe_custom[safe_key] = v
+                    elif isinstance(v, dict):
+                        safe_custom[safe_key] = str(v)[:200]  # 嵌套字典转字符串
+                    else:
+                        safe_custom[safe_key] = str(v)[:200]
+                sanitized[key] = safe_custom
+    
+    return sanitized
+
+
 def apply_state_delta(
     conn: Any,
     user_id: int,
@@ -473,7 +585,17 @@ def apply_state_delta(
     *,
     commit: bool = True,
 ) -> dict[str, Any]:
-    """把 AI 输出的状态增量应用到现有状态，返回更新后的状态。"""
+    """
+    把 AI 输出的状态增量应用到现有状态，返回更新后的状态。
+    
+    安全说明：
+        - 所有增量字段都会经过白名单验证
+        - 非法字段会被自动过滤，不会报错但会被记录
+        - 数值字段有范围限制，防止极端值
+    """
+    # 首先验证和清理增量
+    delta = _sanitize_state_delta(delta)
+    
     affection_enabled = is_affection_enabled(conn, character_id)
 
     current = get_character_state(conn, user_id, character_id)

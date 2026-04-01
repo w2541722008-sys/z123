@@ -223,10 +223,10 @@ def send_reset_code_email(to_email: str, code: str, max_retries: int = 3) -> boo
 
 def generate_reset_code() -> str:
     """
-    生成 6 位数字验证码。
-    
+    生成 6 位数字验证码（密码学安全版本）。
+
     Returns:
         str: 6 位数字字符串（如 "123456"）
     """
-    import random
-    return "".join(random.choices("0123456789", k=6))
+    import secrets
+    return "".join(secrets.choice("0123456789") for _ in range(6))

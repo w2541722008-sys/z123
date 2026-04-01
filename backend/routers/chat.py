@@ -74,6 +74,98 @@ from services.memory_service import (
 router = APIRouter()
 
 
+def _build_guest_fallback_messages(character: dict, user_message: str) -> list[dict]:
+    """
+    构建游客模式的降级Prompt，在主流程失败时使用。
+    
+    尽可能保留角色的核心设定，确保游客也能获得完整的角色体验。
+    包含：角色基础信息、详细描述、性格、世界观、示例对话等。
+    
+    Args:
+        character: 角色数据字典
+        user_message: 用户输入的消息
+        
+    Returns:
+        组装好的消息列表，可直接用于AI调用
+    """
+    # 构建系统提示词，尽可能包含角色的完整设定
+    system_parts = []
+    
+    # 1. 角色身份基础
+    name = character.get('name', 'AI角色')
+    subtitle = character.get('subtitle', '')
+    base_identity = f"你是{name}"
+    if subtitle:
+        base_identity += f"，{subtitle}"
+    system_parts.append(base_identity)
+    
+    # 2. 详细描述（description）
+    description = character.get('description', '')
+    if description:
+        system_parts.append(f"\n【角色背景】\n{description}")
+    
+    # 3. 性格特征（personality）
+    personality = character.get('personality', '')
+    if personality:
+        system_parts.append(f"\n【性格特点】\n{personality}")
+    
+    # 4. 世界观/场景（scenario）
+    scenario = character.get('scenario', '')
+    if scenario:
+        system_parts.append(f"\n【世界观/场景】\n{scenario}")
+    
+    # 5. 角色设定前（world_info_before）
+    world_info_before = character.get('world_info_before', '')
+    if world_info_before:
+        system_parts.append(f"\n【角色设定】\n{world_info_before}")
+    
+    # 6. 示例对话（example_dialogue）
+    example_dialogue = character.get('example_dialogue', '')
+    if example_dialogue:
+        system_parts.append(f"\n【参考对话风格】\n{example_dialogue}")
+    
+    # 7. 角色设定后（world_info_after）
+    world_info_after = character.get('world_info_after', '')
+    if world_info_after:
+        system_parts.append(f"\n【补充设定】\n{world_info_after}")
+    
+    # 8. 后置规则（post_history_rules）
+    post_rules = character.get('post_history_rules', '')
+    if post_rules:
+        system_parts.append(f"\n【回复规则】\n{post_rules}")
+    
+    # 9. 系统指令
+    system_parts.append("\n【重要指令】")
+    system_parts.append("1. 始终保持角色设定，用第一人称回复")
+    system_parts.append("2. 回复自然、有温度，符合角色性格")
+    system_parts.append("3. 在回复末尾添加状态更新标签，格式：<STATE_UPDATE>{\"mood\": \"心情\", \"affection\": 数值}</STATE_UPDATE>")
+    
+    # 组装完整系统提示词
+    system_content = "\n".join(system_parts)
+    
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_message},
+    ]
+
+
+def _rollback_latest_user_message(user_id: int, character_id: str) -> None:
+    """回滚最近一条用户消息（在AI回复失败时调用）。"""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """
+            DELETE FROM chat_messages 
+            WHERE user_id = %s AND character_id = %s AND role = 'user'
+            AND id = (SELECT MAX(id) FROM chat_messages WHERE user_id = %s AND character_id = %s AND role = 'user')
+            """,
+            (user_id, character_id, user_id, character_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _log_chat_failure(
     *,
     user_id: int | None,
@@ -524,10 +616,8 @@ def chat_guest_stream(payload: GuestChatPayload, request: Request) -> StreamingR
             )
             preview_messages.append({"role": "user", "content": payload.message.strip()})
         except Exception:
-            preview_messages = [
-                {"role": "system", "content": f"你是{character['name']}，{character.get('subtitle', '一个有温度的 AI 角色')}。"},
-                {"role": "user", "content": payload.message.strip()},
-            ]
+            # 降级方案：尽可能保留角色核心设定，给游客完整体验
+            preview_messages = _build_guest_fallback_messages(character, payload.message.strip())
 
         estimate = estimate_messages_tokens(preview_messages)
         planned_tokens = estimate["tokens"] + AI_CHAT_MAX_OUTPUT_TOKENS
@@ -565,11 +655,8 @@ def chat_guest_stream(payload: GuestChatPayload, request: Request) -> StreamingR
             msgs.append({"role": "user", "content": _clean_text})
             return msgs
         except Exception:
-            # 降级方案
-            return [
-                {"role": "system", "content": f"你是{character['name']}，{character.get('subtitle', '一个有温度的 AI 角色')}。"},
-                {"role": "user", "content": _clean_text},
-            ]
+            # 降级方案：尽可能保留角色核心设定
+            return _build_guest_fallback_messages(character, _clean_text)
 
     stream_messages = _build_guest_messages()
 

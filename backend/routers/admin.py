@@ -54,7 +54,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import CurrentUser, get_admin_user, get_current_user
 from config import utc_now_iso
@@ -62,6 +62,8 @@ from database import get_conn
 from models import (
     AdminUpdatePayload,
     AdminUserPlanUpdatePayload,
+    AdminUserEditPayload,
+    AdminBatchPlanPayload,
     MemoryEntryPayload,
     GreetingPayload,
     StorylinePayload,
@@ -88,6 +90,33 @@ _ADMIN_EDITABLE_FIELDS = {
     "affection_enabled", "affection_rules_json",
     "import_locked", "avatar_url", "cover_url",
 }
+
+
+# ============================================================
+# 事务管理辅助函数
+# ============================================================
+def _transaction(conn, func):
+    """
+    在事务中执行函数，出错时自动回滚。
+    
+    用法:
+        conn = get_conn()
+        try:
+            def _do_work():
+                conn.execute("INSERT ...")
+                conn.execute("UPDATE ...")
+                return result
+            result = _transaction(conn, _do_work)
+        finally:
+            conn.close()
+    """
+    try:
+        result = func()
+        conn.commit()
+        return result
+    except Exception as e:
+        conn.rollback()
+        raise e
 
 
 @router.get("/admin/characters")
@@ -126,7 +155,10 @@ def admin_list_characters() -> list[dict[str, Any]]:
 
 
 @router.post("/admin/characters")
-def admin_create_character(body: dict[str, Any]) -> dict[str, Any]:
+def admin_create_character(
+    body: dict[str, Any],
+    current_user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """
     管理后台：创建新角色。
     
@@ -151,58 +183,90 @@ def admin_create_character(body: dict[str, Any]) -> dict[str, Any]:
     
     conn = get_conn()
     try:
-        # 检查ID是否已存在
-        existing = conn.execute(
-            "SELECT id FROM characters WHERE id = %s",
-            (char_id,)
-        ).fetchone()
-        if existing:
-            raise HTTPException(status_code=409, detail=f"角色ID '{char_id}' 已存在")
-        
-        # 准备数据
-        abbr = body.get("abbr", name).strip() or name
-        subtitle = body.get("subtitle", "").strip()
-        description = body.get("description", "").strip()
-        opening_message = body.get("opening_message", "").strip()
-        tags = body.get("tags", "[]")
-        card_type = body.get("card_type", "intimate")
-        required_plan = body.get("required_plan", "guest")
-        avatar_url = body.get("avatar_url", "").strip()
-        cover_url = body.get("cover_url", "").strip()
-        home_priority = int(body.get("home_priority", 10))
-        is_visible = 1 if body.get("is_visible", True) else 0
-        
-        # 插入新角色
-        conn.execute(
-            """
-            INSERT INTO characters (
-                id, name, abbr, subtitle, avatar_url, cover_url, description,
-                system_prompt, opening_message, tags,
-                card_type, required_plan, home_priority, is_visible, sort_order,
-                mock_reply_style, asset_type, source_kind, source_path,
-                embedded_format, raw_card_json, structured_asset_json,
-                import_diagnostics, import_locked, affection_enabled, affection_rules_json
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                char_id, name, abbr, subtitle, avatar_url, cover_url, description,
-                system_prompt, opening_message, tags,
-                card_type, required_plan, home_priority, is_visible, home_priority,
-                "温柔、体贴、会关心人", "character", "manual", "",
-                "json", "", "{}",
-                "[]", 0, 1, "{}"
+        def _do_create():
+            # 检查ID是否已存在
+            existing = conn.execute(
+                "SELECT id FROM characters WHERE id = %s",
+                (char_id,)
+            ).fetchone()
+            if existing:
+                raise HTTPException(status_code=409, detail=f"角色ID '{char_id}' 已存在")
+            
+            # 准备数据
+            abbr = body.get("abbr", name).strip() or name
+            subtitle = body.get("subtitle", "").strip()
+            description = body.get("description", "").strip()
+            opening_message = body.get("opening_message", "").strip()
+            tags = body.get("tags", "[]")
+            card_type = body.get("card_type", "intimate")
+            required_plan = body.get("required_plan", "guest")
+            avatar_url = body.get("avatar_url", "").strip()
+            cover_url = body.get("cover_url", "").strip()
+            home_priority = int(body.get("home_priority", 10))
+            is_visible = 1 if body.get("is_visible", True) else 0
+            
+            # 验证tags是有效的JSON
+            try:
+                import json
+                tags_list = json.loads(tags) if tags else []
+                if not isinstance(tags_list, list):
+                    raise HTTPException(status_code=400, detail="tags必须是JSON数组格式")
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="tags格式错误，必须是有效的JSON")
+            
+            # 验证card_type和required_plan
+            valid_card_types = ["intimate", "friend", "mentor", "entertainment"]
+            valid_plans = ["guest", "free", "vip", "svip"]
+            if card_type not in valid_card_types:
+                raise HTTPException(status_code=400, detail=f"card_type必须是以下之一: {', '.join(valid_card_types)}")
+            if required_plan not in valid_plans:
+                raise HTTPException(status_code=400, detail=f"required_plan必须是以下之一: {', '.join(valid_plans)}")
+            
+            # 验证home_priority范围
+            if not (0 <= home_priority <= 9999):
+                raise HTTPException(status_code=400, detail="home_priority必须在0-9999之间")
+            
+            # 插入新角色
+            conn.execute(
+                """
+                INSERT INTO characters (
+                    id, name, abbr, subtitle, avatar_url, cover_url, description,
+                    system_prompt, opening_message, tags,
+                    card_type, required_plan, home_priority, is_visible, sort_order,
+                    mock_reply_style, asset_type, source_kind, source_path,
+                    embedded_format, raw_card_json, structured_asset_json,
+                    import_diagnostics, import_locked, affection_enabled, affection_rules_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    char_id, name, abbr, subtitle, avatar_url, cover_url, description,
+                    system_prompt, opening_message, tags,
+                    card_type, required_plan, home_priority, is_visible, home_priority,
+                    "温柔、体贴、会关心人", "character", "manual", "",
+                    "json", "", "{}",
+                    "[]", 0, 1, "{}"
+                )
             )
-        )
-        conn.commit()
+            
+            # 记录审计日志
+            _write_audit_log(
+                conn,
+                operator_id=current_user.id,
+                operator_email=current_user.email,
+                action="create_character",
+                target_type="character",
+                target_id=char_id,
+                detail={"name": name, "card_type": card_type, "required_plan": required_plan},
+            )
+            
+            return {"ok": True, "id": char_id, "message": f"角色 '{name}' 创建成功"}
         
-        # 清除角色列表缓存
+        result = _transaction(conn, _do_create)
+        
+        # 清除角色列表缓存（在事务外执行）
         cache_delete("character_list_all")
         
-        return {
-            "ok": True,
-            "id": char_id,
-            "message": f"角色 '{name}' 创建成功"
-        }
+        return result
     finally:
         conn.close()
 
@@ -267,19 +331,65 @@ def admin_get_character(character_id: str) -> dict[str, Any]:
 
 
 @router.get("/admin/users")
-def admin_list_users() -> list[dict[str, Any]]:
-    """管理后台：查看用户与当前会员档位。"""
+def admin_list_users(
+    search: str = "",
+    plan: str = "",
+    page: int = 1,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """
+    管理后台：查看用户列表，支持搜索、档位筛选和分页。
+
+    参数：
+        search: 按邮箱或昵称模糊搜索
+        plan: 按档位筛选（free/vip/svip）
+        page: 页码（从 1 开始）
+        limit: 每页条数（最多 100）
+    """
+    # 验证分页参数
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page参数必须大于等于1")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit参数必须在1-100之间")
+    
     conn = get_conn()
     try:
+        # 动态构建 WHERE 条件
+        conditions = []
+        params: list[Any] = []
+
+        if search:
+            conditions.append("(email LIKE %s OR nickname LIKE %s)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        if plan:
+            conditions.append("plan_type = %s")
+            params.append(plan)
+
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        # 查询总数
+        count_row = conn.execute(
+            f"SELECT COUNT(*) AS total FROM users {where_clause}",
+            tuple(params),
+        ).fetchone()
+        total = count_row["total"]
+
+        # 查询列表（分页）
+        offset = (max(1, page) - 1) * min(limit, 100)
+        safe_limit = min(limit, 100)
+
         rows = conn.execute(
-            """
+            f"""
             SELECT id, email, COALESCE(nickname, '') AS nickname,
                    COALESCE(plan_type, 'free') AS plan_type,
-                   COALESCE(plan_expires_at, '') AS plan_expires_at,
+                   COALESCE(CAST(plan_expires_at AS VARCHAR), '') AS plan_expires_at,
                    created_at, updated_at
             FROM users
+            {where_clause}
             ORDER BY id DESC
-            """
+            LIMIT %s OFFSET %s
+            """,
+            tuple(params) + (safe_limit, offset),
         ).fetchall()
 
         items: list[dict[str, Any]] = []
@@ -293,15 +403,283 @@ def admin_list_users() -> list[dict[str, Any]]:
                 "updated_at": row["updated_at"],
                 **plan_info,
             })
+
+        return {
+            "total": total,
+            "page": page,
+            "limit": safe_limit,
+            "items": items,
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/admin/users/export")
+def admin_export_users() -> list[dict[str, Any]]:
+    """
+    管理后台：导出全部用户 CSV 数据（不分页，返回完整列表）。
+    """
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT u.id, u.email, COALESCE(u.nickname, '') AS nickname,
+                   COALESCE(u.plan_type, 'free') AS plan_type,
+                   COALESCE(CAST(u.plan_expires_at AS VARCHAR), '') AS plan_expires_at,
+                   u.created_at, u.updated_at,
+                   COALESCE(c.chat_count, 0) AS chat_count,
+                   COALESCE(c.char_count, 0) AS char_count,
+                   COALESCE(p.char_count, 0) AS linked_char_count
+            FROM users u
+            LEFT JOIN (
+                SELECT user_id,
+                       COUNT(*) AS chat_count,
+                       SUM(COALESCE(LENGTH(content), 0)) AS char_count
+                FROM chat_messages
+                GROUP BY user_id
+            ) c ON c.user_id = u.id
+            LEFT JOIN (
+                SELECT user_id, COUNT(*) AS char_count
+                FROM user_character_profiles
+                GROUP BY user_id
+            ) p ON p.user_id = u.id
+            ORDER BY u.id DESC
+            """
+        ).fetchall()
+
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            plan_info = serialize_plan_info(row["plan_type"], row["plan_expires_at"])
+            items.append({
+                "id": row["id"],
+                "email": row["email"],
+                "nickname": row["nickname"] or row["email"].split("@")[0],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "chat_count": row["chat_count"],
+                "char_count": row["char_count"],
+                "linked_char_count": row["linked_char_count"],
+                **plan_info,
+            })
         return items
+    finally:
+        conn.close()
+
+
+@router.get("/admin/users/{user_id}")
+def admin_get_user(user_id: str) -> dict[str, Any]:
+    """
+    管理后台：获取用户详情（含对话数、关联角色数）。
+    """
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM users WHERE id = %s",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="用户不存在")
+
+        # 对话统计
+        chat_row = conn.execute(
+            """
+            SELECT COUNT(*) AS chat_count,
+                   COALESCE(SUM(LENGTH(content)), 0) AS char_count
+            FROM chat_messages WHERE user_id = %s
+            """,
+            (user_id,),
+        ).fetchone()
+
+        # 关联角色数
+        char_row = conn.execute(
+            "SELECT COUNT(*) AS char_count FROM user_character_profiles WHERE user_id = %s",
+            (user_id,),
+        ).fetchone()
+
+        # 最后登录时间（从 ai_request_logs 推断）
+        last_login_row = conn.execute(
+            "SELECT MAX(created_at) AS last_login FROM ai_request_logs WHERE user_id = %s",
+            (user_id,),
+        ).fetchone()
+
+        plan_info = serialize_plan_info(row["plan_type"], row.get("plan_expires_at"))
+
+        return {
+            "id": row["id"],
+            "email": row["email"],
+            "nickname": row["nickname"] or "",
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "last_login": last_login_row["last_login"] if last_login_row else None,
+            "chat_count": chat_row["chat_count"] if chat_row else 0,
+            "char_count": chat_row["char_count"] if chat_row else 0,
+            "linked_char_count": char_row["char_count"] if char_row else 0,
+            **plan_info,
+        }
+    finally:
+        conn.close()
+
+
+@router.patch("/admin/users/{user_id}")
+def admin_edit_user(
+    user_id: str,
+    body: AdminUserEditPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """
+    管理后台：编辑用户邮箱或昵称。
+    路由：PATCH /api/admin/users/{user_id}（通过 /api/admin 挂载点）
+    """
+    conn = get_conn()
+    try:
+        user_row = conn.execute(
+            "SELECT id, email FROM users WHERE id = %s",
+            (user_id,),
+        ).fetchone()
+        if not user_row:
+            raise HTTPException(status_code=404, detail="用户不存在")
+
+        updates: dict[str, Any] = {}
+        if body.email is not None:
+            updates["email"] = body.email.strip()
+        if body.nickname is not None:
+            updates["nickname"] = body.nickname.strip()
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="没有提供任何更新字段")
+
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
+        conn.execute(
+            f"UPDATE users SET {set_clause}, updated_at = %s WHERE id = %s",
+            list(updates.values()) + [utc_now_iso(), user_id],
+        )
+
+        # 写入审计日志
+        _write_audit_log(
+            conn,
+            operator_id=current_user.id,
+            operator_email=current_user.email,
+            action="edit_user",
+            target_type="user",
+            target_id=str(user_id),
+            detail={"updated_fields": updates, "target_email": user_row["email"]},
+        )
+        conn.commit()
+
+        return {
+            "ok": True,
+            "message": f"用户 {user_row['email']} 信息已更新",
+            "updated_fields": list(updates.keys()),
+        }
+    finally:
+        conn.close()
+
+
+@router.delete("/admin/users/{user_id}")
+def admin_delete_user(
+    user_id: str,
+    current_user: CurrentUser = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """
+    管理后台：删除用户及其关联数据（聊天记录、角色关系、订单）。
+
+    关联数据清理顺序：
+    1. ai_request_logs（依赖 user_id）
+    2. chat_messages（依赖 user_id）
+    3. user_character_profiles（依赖 user_id）
+    4. membership_orders（依赖 user_id）
+    5. users（最后删用户本身）
+    """
+    conn = get_conn()
+    try:
+        user_row = conn.execute(
+            "SELECT id, email FROM users WHERE id = %s",
+            (user_id,),
+        ).fetchone()
+        if not user_row:
+            raise HTTPException(status_code=404, detail="用户不存在")
+
+        # 按顺序删除关联数据
+        conn.execute("DELETE FROM ai_request_logs WHERE user_id = %s", (user_id,))
+        conn.execute("DELETE FROM chat_messages WHERE user_id = %s", (user_id,))
+        conn.execute("DELETE FROM user_character_profiles WHERE user_id = %s", (user_id,))
+        conn.execute("DELETE FROM membership_orders WHERE user_id = %s", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
+
+        # 写入审计日志
+        _write_audit_log(
+            conn,
+            operator_id=current_user.id,
+            operator_email=current_user.email,
+            action="delete_user",
+            target_type="user",
+            target_id=str(user_id),
+            detail={"deleted_email": user_row["email"]},
+        )
+        conn.commit()
+
+        return {
+            "ok": True,
+            "message": f"用户 {user_row['email']}（ID: {user_id}）已删除，关联数据已清理",
+        }
+    finally:
+        conn.close()
+
+
+@router.post("/admin/users/batch-plan")
+def admin_batch_update_plan(
+    body: AdminBatchPlanPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
+) -> dict[str, Any]:
+    """
+    管理后台：批量设置用户档位。
+    """
+    conn = get_conn()
+    try:
+        if body.plan_type == "free":
+            plan_expires_at = ""
+        else:
+            plan_expires_at = (
+                datetime.now(timezone.utc) + timedelta(days=body.duration_days)
+            ).isoformat()
+
+        updated = 0
+        for uid in body.user_ids:
+            conn.execute(
+                "UPDATE users SET plan_type = %s, plan_expires_at = %s, updated_at = %s WHERE id = %s",
+                (body.plan_type, plan_expires_at, utc_now_iso(), uid),
+            )
+            updated += 1
+
+        _write_audit_log(
+            conn,
+            operator_id=current_user.id,
+            operator_email=current_user.email,
+            action="batch_update",
+            target_type="user",
+            target_id=None,
+            detail={
+                "user_ids": body.user_ids,
+                "plan_type": body.plan_type,
+                "duration_days": body.duration_days,
+            },
+        )
+        conn.commit()
+
+        return {
+            "ok": True,
+            "message": f"已为 {updated} 位用户设置为 {plan_display_name(body.plan_type)}",
+            "updated_count": updated,
+        }
     finally:
         conn.close()
 
 
 @router.post("/admin/users/{user_id}/plan")
 def admin_update_user_plan(
-    user_id: int,
+    user_id: str,
     body: AdminUserPlanUpdatePayload,
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """管理后台：手动设置某个用户的会员档位。"""
     conn = get_conn()
@@ -322,6 +700,24 @@ def admin_update_user_plan(
             "UPDATE users SET plan_type = %s, plan_expires_at = %s, updated_at = %s WHERE id = %s",
             (body.plan_type, plan_expires_at, utc_now_iso(), user_id),
         )
+
+        # 记录审计日志
+        _write_audit_log(
+            conn,
+            operator_id=current_user.id,
+            operator_email=current_user.email,
+            action="update_user_plan",
+            target_type="user",
+            target_id=user_id,
+            detail={
+                "email": user_row["email"],
+                "nickname": user_row["nickname"],
+                "new_plan": body.plan_type,
+                "duration_days": body.duration_days,
+                "plan_expires_at": plan_expires_at,
+            },
+        )
+        
         conn.commit()
 
         plan_info = serialize_plan_info(body.plan_type, plan_expires_at)
@@ -340,13 +736,55 @@ def admin_update_user_plan(
 
 
 @router.get("/admin/orders")
-def admin_list_membership_orders(limit: int = 100) -> dict[str, Any]:
-    """管理后台：查看最近的会员订单预留记录。"""
-    safe_limit = max(1, min(limit, 500))
+def admin_list_membership_orders(
+    search: str = "",
+    status: str = "",
+    page: int = 1,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """
+    管理后台：查看会员订单列表，支持搜索、状态筛选和分页。
+
+    参数：
+        search: 按订单号或用户邮箱模糊搜索
+        status: 按状态筛选（pending/paid/expired/closed/refunded）
+        page: 页码（从 1 开始）
+        limit: 每页条数（最多 100）
+    """
+    # 验证分页参数
+    if page < 1:
+        raise HTTPException(status_code=400, detail="page参数必须大于等于1")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit参数必须在1-100之间")
+    
     conn = get_conn()
     try:
+        # 动态构建 WHERE 条件
+        conditions = []
+        params: list[Any] = []
+
+        if search:
+            conditions.append("(o.order_no LIKE %s OR u.email LIKE %s)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        if status:
+            conditions.append("o.status = %s")
+            params.append(status)
+
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        # 查询总数
+        count_row = conn.execute(
+            f"SELECT COUNT(*) AS total FROM membership_orders o LEFT JOIN users u ON u.id = o.user_id {where_clause}",
+            tuple(params),
+        ).fetchone()
+        total = count_row["total"]
+
+        # 分页
+        offset = (max(1, page) - 1) * min(limit, 100)
+        safe_limit = min(limit, 100)
+
         rows = conn.execute(
-            """
+            f"""
             SELECT o.id, o.order_no, o.user_id, o.plan_type, o.amount_cents, o.currency,
                    o.duration_days, o.status, o.payment_provider, o.provider_trade_no,
                    o.checkout_url, o.created_at, o.paid_at, o.expires_at, o.closed_at,
@@ -354,14 +792,17 @@ def admin_list_membership_orders(limit: int = 100) -> dict[str, Any]:
                    COALESCE(u.nickname, '') AS user_nickname
             FROM membership_orders o
             LEFT JOIN users u ON u.id = o.user_id
+            {where_clause}
             ORDER BY o.id DESC
-            LIMIT %s
+            LIMIT %s OFFSET %s
             """,
-            (safe_limit,),
+            tuple(params) + (safe_limit, offset),
         ).fetchall()
 
         return {
-            "total": len(rows),
+            "total": total,
+            "page": page,
+            "limit": safe_limit,
             "orders": [
                 {
                     "id": row["id"],
@@ -390,8 +831,101 @@ def admin_list_membership_orders(limit: int = 100) -> dict[str, Any]:
         conn.close()
 
 
+@router.get("/admin/orders/export")
+def admin_export_orders() -> list[dict[str, Any]]:
+    """
+    管理后台：导出全部订单 CSV 数据。
+    """
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT o.id, o.order_no, o.user_id, o.plan_type, o.amount_cents, o.currency,
+                   o.duration_days, o.status, o.payment_provider, o.provider_trade_no,
+                   o.checkout_url, o.created_at, o.paid_at, o.expires_at, o.closed_at,
+                   COALESCE(u.email, '') AS user_email,
+                   COALESCE(u.nickname, '') AS user_nickname
+            FROM membership_orders o
+            LEFT JOIN users u ON u.id = o.user_id
+            ORDER BY o.id DESC
+            """
+        ).fetchall()
+
+        return [
+            {
+                "id": row["id"],
+                "order_no": row["order_no"],
+                "user_id": row["user_id"],
+                "user_email": row["user_email"],
+                "user_nickname": row["user_nickname"],
+                "plan_type": row["plan_type"],
+                "plan_label": plan_display_name(row["plan_type"]),
+                "amount_cents": row["amount_cents"],
+                "currency": row["currency"],
+                "duration_days": row["duration_days"],
+                "status": row["status"],
+                "payment_provider": row["payment_provider"],
+                "provider_trade_no": row["provider_trade_no"],
+                "checkout_url": row["checkout_url"],
+                "created_at": row["created_at"],
+                "paid_at": row["paid_at"],
+                "expires_at": row["expires_at"],
+                "closed_at": row["closed_at"],
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+@router.get("/admin/orders/{order_id}")
+def admin_get_order(order_id: int) -> dict[str, Any]:
+    """
+    管理后台：获取订单完整详情。
+    """
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT o.*, COALESCE(u.email, '') AS user_email, COALESCE(u.nickname, '') AS user_nickname
+            FROM membership_orders o
+            LEFT JOIN users u ON u.id = o.user_id
+            WHERE o.id = %s
+            """,
+            (order_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="订单不存在")
+
+        return {
+            "id": row["id"],
+            "order_no": row["order_no"],
+            "user_id": row["user_id"],
+            "user_email": row["user_email"],
+            "user_nickname": row["user_nickname"],
+            "plan_type": row["plan_type"],
+            "plan_label": plan_display_name(row["plan_type"]),
+            "amount_cents": row["amount_cents"],
+            "currency": row["currency"],
+            "duration_days": row["duration_days"],
+            "status": row["status"],
+            "payment_provider": row["payment_provider"],
+            "provider_trade_no": row["provider_trade_no"],
+            "checkout_url": row["checkout_url"],
+            "created_at": row["created_at"],
+            "paid_at": row["paid_at"],
+            "expires_at": row["expires_at"],
+            "closed_at": row["closed_at"],
+        }
+    finally:
+        conn.close()
+
+
 @router.delete("/admin/character/{character_id}")
-def admin_delete_character(character_id: str) -> dict[str, Any]:
+def admin_delete_character(
+    character_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> dict[str, Any]:
     """管理后台：删除角色及其关联配置/记录。"""
     conn = get_conn()
     try:
@@ -402,7 +936,37 @@ def admin_delete_character(character_id: str) -> dict[str, Any]:
         if not row:
             raise HTTPException(status_code=404, detail="角色不存在")
 
+        # 删除关联数据（按依赖关系顺序）
+        # 1. 用户角色关联数据
+        conn.execute("DELETE FROM user_character_profiles WHERE character_id = %s", (character_id,))
+        # 2. 角色状态数据
+        conn.execute("DELETE FROM character_states WHERE character_id = %s", (character_id,))
+        # 3. 开场白数据
+        conn.execute("DELETE FROM character_greetings WHERE character_id = %s", (character_id,))
+        # 4. 记忆条目
+        conn.execute("DELETE FROM character_memories WHERE character_id = %s", (character_id,))
+        # 5. 记忆分类
+        conn.execute("DELETE FROM memory_categories WHERE character_id = %s", (character_id,))
+        # 6. 后置规则
+        conn.execute("DELETE FROM character_post_rules WHERE character_id = %s", (character_id,))
+        # 7. 剧情事件
+        conn.execute("DELETE FROM story_events WHERE character_id = %s", (character_id,))
+        # 8. 剧情线
+        conn.execute("DELETE FROM character_storylines WHERE character_id = %s", (character_id,))
+        # 9. 最后删除角色本身
         conn.execute("DELETE FROM characters WHERE id = %s", (character_id,))
+        
+        # 记录审计日志
+        _write_audit_log(
+            conn,
+            operator_id=current_user.id,
+            operator_email=current_user.email,
+            action="delete_character",
+            target_type="character",
+            target_id=character_id,
+            detail={"name": row["name"]},
+        )
+        
         conn.commit()
         
         # 清除缓存
@@ -491,16 +1055,14 @@ def admin_update_character(
         conn.close()
 
 
-def _split_csv_ids(raw: str | None) -> list[int]:
-    out: list[int] = []
+def _split_csv_ids(raw: str | None) -> list[str]:
+    """将逗号分隔的 ID 字符串拆分为列表（兼容 int 和 uuid 格式）。"""
+    out: list[str] = []
     for part in (raw or "").split(","):
         part = part.strip()
         if not part:
             continue
-        try:
-            out.append(int(part))
-        except ValueError:
-            continue
+        out.append(part)
     return out
 
 
@@ -562,19 +1124,19 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
         runtime_layers = structured.get("runtime_layers", {}) or {}
 
         counts = {
-            "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = %s", (character_id,)).fetchone()[0],
-            "memory_category_count": conn.execute("SELECT COUNT(*) FROM memory_categories WHERE character_id = %s", (character_id,)).fetchone()[0],
-            "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = %s", (character_id,)).fetchone()[0],
-            "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = %s", (character_id,)).fetchone()[0],
-            "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = %s", (character_id,)).fetchone()[0],
-            "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = %s", (character_id,)).fetchone()[0],
+            "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = %s", (character_id,)).fetchone()["count"],
+            "memory_category_count": conn.execute("SELECT COUNT(*) FROM memory_categories WHERE character_id = %s", (character_id,)).fetchone()["count"],
+            "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = %s", (character_id,)).fetchone()["count"],
+            "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = %s", (character_id,)).fetchone()["count"],
+            "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = %s", (character_id,)).fetchone()["count"],
+            "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = %s", (character_id,)).fetchone()["count"],
         }
         active_counts = {
-            "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
-            "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
-            "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
-            "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
-            "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()[0],
+            "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
+            "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
+            "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
+            "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
+            "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
         }
         greeting_phase_coverage = len(conn.execute(
             "SELECT DISTINCT story_phase FROM character_greetings WHERE character_id = %s AND is_active = 1",
@@ -588,7 +1150,7 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
         active_greetings = conn.execute(
             "SELECT COUNT(*) FROM character_greetings WHERE character_id = %s AND is_active = 1",
             (character_id,),
-        ).fetchone()[0]
+        ).fetchone()["count"]
 
         warnings = _basic_config_warnings(dict(row), runtime_layers)
         if counts["memory_count"] > 0 and active_counts["memory_count"] == 0:
@@ -613,9 +1175,9 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
                 "SELECT id, unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id, event_content FROM story_events WHERE character_id = %s",
                 (character_id,),
             ).fetchall()
-            valid_memory_ids = {r[0] for r in conn.execute("SELECT id FROM character_memories WHERE character_id = %s", (character_id,)).fetchall()}
-            valid_greeting_ids = {r[0] for r in conn.execute("SELECT id FROM character_greetings WHERE character_id = %s", (character_id,)).fetchall()}
-            valid_storyline_ids = {r[0] for r in conn.execute("SELECT id FROM character_storylines WHERE character_id = %s", (character_id,)).fetchall()}
+            valid_memory_ids = {r["id"] for r in conn.execute("SELECT id FROM character_memories WHERE character_id = %s", (character_id,)).fetchall()}
+            valid_greeting_ids = {r["id"] for r in conn.execute("SELECT id FROM character_greetings WHERE character_id = %s", (character_id,)).fetchall()}
+            valid_storyline_ids = {r["id"] for r in conn.execute("SELECT id FROM character_storylines WHERE character_id = %s", (character_id,)).fetchall()}
             for event in events:
                 bad_m = [x for x in _split_csv_ids(event["unlocked_memory_ids"]) if x not in valid_memory_ids]
                 bad_g = [x for x in _split_csv_ids(event["unlocked_greeting_ids"]) if x not in valid_greeting_ids]
@@ -651,9 +1213,10 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
 
         last_updated_candidates = []
         for table in ["character_memories", "memory_categories", "character_greetings", "character_storylines", "character_post_rules", "story_events"]:
-            r = conn.execute(f"SELECT MAX(updated_at) FROM {table} WHERE character_id = %s", (character_id,)).fetchone()
-            if r and r[0]:
-                last_updated_candidates.append(r[0])
+            r = conn.execute(f"SELECT MAX(updated_at) as max FROM {table} WHERE character_id = %s", (character_id,)).fetchone()
+            if r and r["max"]:
+                # updated_at 可能是 datetime 对象或字符串，统一转字符串后比较
+                last_updated_candidates.append(str(r["max"]))
 
         return {
             "character_id": row["id"],
@@ -686,24 +1249,47 @@ def admin_character_config_summary(character_id: str) -> dict[str, Any]:
 
 
 @router.get("/admin/character/{character_id}/message-preview")
-def admin_message_preview(character_id: str) -> dict[str, Any]:
-    """管理后台：预览组装后的 Prompt 消息（无登录态，使用空上下文）。"""
+def admin_message_preview(
+    character_id: str,
+    affection: int = Query(30, description="好感度 (0-100)"),
+    story_phase: str = Query("stranger", description="关系阶段 (stranger/acquaintance/friend/lover)"),
+    mood: str = Query("neutral", description="心情 (neutral/happy/sad/angry/flirty)"),
+    storyline_id: int | None = Query(None, description="当前剧情线ID"),
+) -> dict[str, Any]:
+    """管理后台：预览组装后的 Prompt 消息（无登录态，可配置角色状态）。
+    
+    查询参数：
+        - affection: 好感度 (0-100)，默认 30
+        - story_phase: 关系阶段，默认 stranger
+        - mood: 心情，默认 neutral
+        - storyline_id: 当前剧情线ID，可选
+    """
     conn = get_conn()
     try:
         char_row = conn.execute("SELECT * FROM characters WHERE id = %s", (character_id,)).fetchone()
         if not char_row:
             raise HTTPException(status_code=404, detail="角色不存在")
 
+        # 构建角色状态
+        character_state = {
+            "affection": max(0, min(100, affection)),
+            "story_phase": story_phase,
+            "mood": mood,
+            "storyline_id": storyline_id,
+            "custom_vars": {},
+        }
+
         preview = build_message_preview(
             character=char_row,
             recent_messages=[],
             memory_summary="",
             user_name="用户",
-            character_state={"affection": 0, "story_phase": "stranger", "mood": "neutral", "custom_vars": {}},
+            character_state=character_state,
         )
         structured = parse_json_object(char_row["structured_asset_json"], fallback={})
         return {
             "character_id": character_id,
+            "character_state": character_state,
             "message_count": preview.get("message_count", 0),
             "messages": preview.get("messages", []),
             "runtime_layers": preview.get("runtime_layers") or structured.get("runtime_layers", {}),
@@ -722,7 +1308,7 @@ def admin_message_preview(character_id: str) -> dict[str, Any]:
 def _assert_memory_category_owned(
     conn: Any,
     character_id: str,
-    category_id: int | None,
+    category_id: str | None,
 ) -> None:
     """category_id 必须属于该角色的记忆分类，否则 400。"""
     if category_id is None:
@@ -738,7 +1324,7 @@ def _assert_memory_category_owned(
 def _assert_storyline_owned(
     conn: Any,
     character_id: str,
-    storyline_id: int | None,
+    storyline_id: str | None,
 ) -> None:
     """storyline_id 必须属于该角色，否则 400。"""
     if storyline_id is None:
@@ -756,35 +1342,42 @@ def _assert_story_event_unlock_refs_owned(
     character_id: str,
     unlocked_memory_ids: str | None,
     unlocked_greeting_ids: str | None,
-    unlocked_storyline_id: int | None,
+    unlocked_storyline_id: str | None,
 ) -> None:
-    """剧情事件的解锁目标必须都属于当前角色。"""
+    """剧情事件的解锁目标必须都属于当前角色且处于启用状态。"""
     memory_ids = _split_csv_ids(unlocked_memory_ids)
     greeting_ids = _split_csv_ids(unlocked_greeting_ids)
 
     if memory_ids:
         valid_memory_ids = {
-            r[0] for r in conn.execute(
-                "SELECT id FROM character_memories WHERE character_id = %s",
+            r["id"] for r in conn.execute(
+                "SELECT id FROM character_memories WHERE character_id = %s AND is_active = 1",
                 (character_id,),
             ).fetchall()
         }
         bad_ids = [x for x in memory_ids if x not in valid_memory_ids]
         if bad_ids:
-            raise HTTPException(status_code=400, detail=f"存在无效的记忆解锁对象：{bad_ids}")
+            raise HTTPException(status_code=400, detail=f"存在无效或已禁用的记忆解锁对象：{bad_ids}")
 
     if greeting_ids:
         valid_greeting_ids = {
-            r[0] for r in conn.execute(
-                "SELECT id FROM character_greetings WHERE character_id = %s",
+            r["id"] for r in conn.execute(
+                "SELECT id FROM character_greetings WHERE character_id = %s AND is_active = 1",
                 (character_id,),
             ).fetchall()
         }
         bad_ids = [x for x in greeting_ids if x not in valid_greeting_ids]
         if bad_ids:
-            raise HTTPException(status_code=400, detail=f"存在无效的开场白解锁对象：{bad_ids}")
+            raise HTTPException(status_code=400, detail=f"存在无效或已禁用的开场白解锁对象：{bad_ids}")
 
-    _assert_storyline_owned(conn, character_id, unlocked_storyline_id)
+    # 验证剧情线是否属于当前角色且处于启用状态
+    if unlocked_storyline_id:
+        row = conn.execute(
+            "SELECT id FROM character_storylines WHERE id = %s AND character_id = %s AND is_active = 1",
+            (unlocked_storyline_id, character_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="解锁的剧情线不存在、不属于该角色或已被禁用")
 
 
 @router.get("/admin/character/{character_id}/memories")
@@ -871,7 +1464,7 @@ def create_memory(
             ),
         )
         conn.commit()
-        new_id = cur.fetchone()[0]
+        new_id = cur.fetchone()["id"]
         return {"id": new_id, "ok": True}
     finally:
         conn.close()
@@ -880,7 +1473,7 @@ def create_memory(
 @router.put("/admin/character/{character_id}/memories/{memory_id}")
 def update_memory(
     character_id: str,
-    memory_id: int,
+    memory_id: str,
     body: MemoryEntryPayload,
 ) -> dict[str, Any]:
     """更新记忆条目。"""
@@ -934,7 +1527,7 @@ def update_memory(
 @router.delete("/admin/character/{character_id}/memories/{memory_id}")
 def delete_memory(
     character_id: str,
-    memory_id: int,
+    memory_id: str,
 ) -> dict[str, Any]:
     """删除记忆条目。"""
     conn = get_conn()
@@ -1043,7 +1636,7 @@ def create_greeting(
             ),
         )
         conn.commit()
-        new_id = cur.fetchone()[0]
+        new_id = cur.fetchone()["id"]
         return {"id": new_id, "ok": True}
     finally:
         conn.close()
@@ -1052,7 +1645,7 @@ def create_greeting(
 @router.put("/admin/character/{character_id}/greetings/{greeting_id}")
 def update_greeting(
     character_id: str,
-    greeting_id: int,
+    greeting_id: str,
     body: GreetingPayload,
 ) -> dict[str, Any]:
     """更新开场白。"""
@@ -1102,7 +1695,7 @@ def update_greeting(
 @router.delete("/admin/character/{character_id}/greetings/{greeting_id}")
 def delete_greeting(
     character_id: str,
-    greeting_id: int,
+    greeting_id: str,
 ) -> dict[str, Any]:
     """删除开场白。"""
     conn = get_conn()
@@ -1193,11 +1786,13 @@ def create_storyline(
             )
 
         now = utc_now_iso()
+        # 创建剧情线 - 使用数据库实际存在的字段
+        import json
         cur = conn.execute(
             """
             INSERT INTO character_storylines
-            (character_id, name, description, unlock_score, is_default,
-             is_active, sort_order, created_at, updated_at)
+            (character_id, name, description,
+             unlock_score, is_default, is_active, sort_order, created_at, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
@@ -1214,7 +1809,7 @@ def create_storyline(
             ),
         )
         conn.commit()
-        new_id = cur.fetchone()[0]
+        new_id = cur.fetchone()["id"]
         return {"id": new_id, "ok": True}
     finally:
         conn.close()
@@ -1223,7 +1818,7 @@ def create_storyline(
 @router.put("/admin/character/{character_id}/storylines/{storyline_id}")
 def update_storyline(
     character_id: str,
-    storyline_id: int,
+    storyline_id: str,
     body: StorylinePayload,
 ) -> dict[str, Any]:
     """更新剧情线。"""
@@ -1279,23 +1874,57 @@ def update_storyline(
 @router.delete("/admin/character/{character_id}/storylines/{storyline_id}")
 def delete_storyline(
     character_id: str,
-    storyline_id: int,
+    storyline_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """删除剧情线。"""
     conn = get_conn()
     try:
         # 检查剧情线是否存在且属于该角色
         sl = conn.execute(
-            "SELECT id FROM character_storylines WHERE id = %s AND character_id = %s",
+            "SELECT id, name FROM character_storylines WHERE id = %s AND character_id = %s",
             (storyline_id, character_id),
         ).fetchone()
         if not sl:
             raise HTTPException(status_code=404, detail="剧情线不存在")
 
+        # 清理关联数据：将引用该剧情线的字段置为空
+        # 1. 开场白中的 storyline_id
+        conn.execute(
+            "UPDATE character_greetings SET storyline_id = NULL WHERE storyline_id = %s",
+            (storyline_id,),
+        )
+        # 2. 后置规则中的 storyline_id
+        conn.execute(
+            "UPDATE character_post_rules SET storyline_id = NULL WHERE storyline_id = %s",
+            (storyline_id,),
+        )
+        # 3. 剧情事件中的解锁剧情线（如果设置为该剧情线，则清空）
+        conn.execute(
+            "UPDATE story_events SET unlocked_storyline_id = NULL WHERE unlocked_storyline_id = %s",
+            (storyline_id,),
+        )
+
+        # 删除剧情线本身
         conn.execute(
             "DELETE FROM character_storylines WHERE id = %s",
             (storyline_id,),
         )
+
+        # 记录审计日志
+        _write_audit_log(
+            conn,
+            operator_id=current_user.id,
+            operator_email=current_user.email,
+            action="delete_storyline",
+            target_type="storyline",
+            target_id=storyline_id,
+            detail={
+                "character_id": character_id,
+                "storyline_name": sl["name"],
+            },
+        )
+        
         conn.commit()
 
         return {"ok": True}
@@ -1306,7 +1935,7 @@ def delete_storyline(
 @router.get("/admin/character/{character_id}/storylines/{storyline_id}/delete-impact")
 def storyline_delete_impact(
     character_id: str,
-    storyline_id: int,
+    storyline_id: str,
 ) -> dict[str, Any]:
     """删除剧情线前，预览会影响哪些配置。"""
     conn = get_conn()
@@ -1518,6 +2147,8 @@ def create_post_rule(
         _assert_storyline_owned(conn, character_id, body.storyline_id)
 
         now = utc_now_iso()
+        # story_phase 为空时存空字符串（数据库该列有NOT NULL约束）
+        story_phase_val = body.story_phase if body.story_phase else ""
         cur = conn.execute(
             """
             INSERT INTO character_post_rules
@@ -1531,7 +2162,7 @@ def create_post_rule(
                 body.name,
                 body.content,
                 body.storyline_id,
-                body.story_phase,
+                story_phase_val,
                 body.priority,
                 body.is_active,
                 now,
@@ -1539,7 +2170,7 @@ def create_post_rule(
             ),
         )
         conn.commit()
-        new_id = cur.fetchone()[0]
+        new_id = cur.fetchone()["id"]
         return {"ok": True, "id": new_id}
     finally:
         conn.close()
@@ -1548,7 +2179,7 @@ def create_post_rule(
 @router.put("/admin/character/{character_id}/post-rules/{rule_id}")
 def update_post_rule(
     character_id: str,
-    rule_id: int,
+    rule_id: str,
     body: PostRulePayload,
 ) -> dict[str, Any]:
     """更新后置规则。"""
@@ -1565,6 +2196,8 @@ def update_post_rule(
         _assert_storyline_owned(conn, character_id, body.storyline_id)
 
         now = utc_now_iso()
+        # story_phase 为空时存空字符串（数据库该列有NOT NULL约束）
+        story_phase_val = body.story_phase if body.story_phase else ""
         conn.execute(
             """
             UPDATE character_post_rules SET
@@ -1581,7 +2214,7 @@ def update_post_rule(
                 body.name,
                 body.content,
                 body.storyline_id,
-                body.story_phase,
+                story_phase_val,
                 body.priority,
                 body.is_active,
                 now,
@@ -1598,7 +2231,7 @@ def update_post_rule(
 @router.delete("/admin/character/{character_id}/post-rules/{rule_id}")
 def delete_post_rule(
     character_id: str,
-    rule_id: int,
+    rule_id: str,
 ) -> dict[str, Any]:
     """删除后置规则。"""
     conn = get_conn()
@@ -1694,24 +2327,30 @@ def create_story_event(
         )
 
         now = utc_now_iso()
+        # event_id 是数据库 NOT NULL 且无默认值的列，用 uuid 生成
+        # unlocked_storyline_id 是 bigint 外键且可为 NULL，前端不传时应存 NULL
+        import uuid
+        # 将空字符串转为 None，以便数据库存 NULL 而不是空字符串
+        unlocked_sl_id = body.unlocked_storyline_id if body.unlocked_storyline_id else None
         cur = conn.execute(
             """
             INSERT INTO story_events
-            (character_id, title, description, trigger_score,
+            (character_id, event_id, title, description, trigger_score,
              unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
              event_content, sort_order, is_active, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 character_id,
+                str(uuid.uuid4()),
                 body.title,
                 body.description,
                 body.trigger_score,
-                body.unlocked_memory_ids,
-                body.unlocked_greeting_ids,
-                body.unlocked_storyline_id,
-                body.event_content,
+                body.unlocked_memory_ids or "",
+                body.unlocked_greeting_ids or "",
+                unlocked_sl_id,
+                body.event_content or "",
                 body.sort_order,
                 body.is_active,
                 now,
@@ -1719,7 +2358,7 @@ def create_story_event(
             ),
         )
         conn.commit()
-        new_id = cur.fetchone()[0]
+        new_id = cur.fetchone()["id"]
         return {"ok": True, "id": new_id}
     finally:
         conn.close()
@@ -1728,7 +2367,7 @@ def create_story_event(
 @router.put("/admin/character/{character_id}/story-events/{event_id}")
 def update_story_event(
     character_id: str,
-    event_id: int,
+    event_id: str,
     body: StoryEventPayload,
 ) -> dict[str, Any]:
     """更新剧情事件。"""
@@ -1751,6 +2390,8 @@ def update_story_event(
         )
 
         now = utc_now_iso()
+        # 将空字符串转为 None，以便数据库存 NULL
+        unlocked_sl_id = body.unlocked_storyline_id if body.unlocked_storyline_id else None
         conn.execute(
             """
             UPDATE story_events SET
@@ -1770,10 +2411,10 @@ def update_story_event(
                 body.title,
                 body.description,
                 body.trigger_score,
-                body.unlocked_memory_ids,
-                body.unlocked_greeting_ids,
-                body.unlocked_storyline_id,
-                body.event_content,
+                body.unlocked_memory_ids or "",
+                body.unlocked_greeting_ids or "",
+                unlocked_sl_id,
+                body.event_content or "",
                 body.sort_order,
                 body.is_active,
                 now,
@@ -1790,7 +2431,7 @@ def update_story_event(
 @router.delete("/admin/character/{character_id}/story-events/{event_id}")
 def delete_story_event(
     character_id: str,
-    event_id: int,
+    event_id: str,
 ) -> dict[str, Any]:
     """删除剧情事件。"""
     conn = get_conn()
@@ -1889,7 +2530,7 @@ def create_memory_category(
             ),
         )
         conn.commit()
-        new_id = cur.fetchone()[0]
+        new_id = cur.fetchone()["id"]
         return {"ok": True, "id": new_id}
     finally:
         conn.close()
@@ -1898,7 +2539,7 @@ def create_memory_category(
 @router.put("/admin/character/{character_id}/memory-categories/{category_id}")
 def update_memory_category(
     character_id: str,
-    category_id: int,
+    category_id: str,
     body: MemoryCategoryPayload,
 ) -> dict[str, Any]:
     """更新记忆分类。"""
@@ -1942,7 +2583,7 @@ def update_memory_category(
 @router.delete("/admin/character/{character_id}/memory-categories/{category_id}")
 def delete_memory_category(
     character_id: str,
-    category_id: int,
+    category_id: str,
 ) -> dict[str, Any]:
     """删除记忆分类。"""
     conn = get_conn()
@@ -1959,7 +2600,7 @@ def delete_memory_category(
         mem_count = conn.execute(
             "SELECT COUNT(*) FROM character_memories WHERE category_id = %s",
             (category_id,),
-        ).fetchone()[0]
+        ).fetchone()["count"]
         
         if mem_count > 0:
             raise HTTPException(
@@ -1981,7 +2622,7 @@ def delete_memory_category(
 @router.get("/admin/character/{character_id}/memory-categories/{category_id}/delete-impact")
 def memory_category_delete_impact(
     character_id: str,
-    category_id: int,
+    category_id: str,
 ) -> dict[str, Any]:
     """删除记忆分类前，预览引用影响。"""
     conn = get_conn()
@@ -2047,3 +2688,249 @@ def reset_db_stats() -> dict[str, Any]:
     """重置数据库性能统计。"""
     reset_stats()
     return {"ok": True, "message": "性能统计已重置"}
+
+
+# ============================================================
+# 运营仪表盘
+# ============================================================
+@router.get("/admin/dashboard/stats")
+def admin_dashboard_stats() -> dict[str, Any]:
+    """
+    管理后台：获取仪表盘核心统计数据。
+
+    返回：总用户数、今日新增、付费用户数、今日订单数、
+          今日收入、即将到期用户数、各档位分布。
+    """
+    conn = get_conn()
+    try:
+        # 总用户数
+        total_users_row = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()
+        total_users = total_users_row["cnt"] if total_users_row else 0
+
+        # 今日新增用户
+        today_new_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM users WHERE DATE(created_at) = CURRENT_DATE"
+        ).fetchone()
+        today_new_users = today_new_row["cnt"] if today_new_row else 0
+
+        # 付费用户数（vip 或 svip，且未过期）
+        paid_users_row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM users
+            WHERE plan_type IN ('vip', 'svip')
+              AND (plan_expires_at IS NULL OR plan_expires_at > NOW())
+            """
+        ).fetchone()
+        paid_users = paid_users_row["cnt"] if paid_users_row else 0
+
+        # 今日订单数（已支付）
+        today_orders_row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM membership_orders WHERE status = 'paid' AND DATE(created_at) = CURRENT_DATE"
+        ).fetchone()
+        today_orders = today_orders_row["cnt"] if today_orders_row else 0
+
+        # 今日收入（已支付订单，单位：分）
+        today_revenue_row = conn.execute(
+            "SELECT COALESCE(SUM(amount_cents), 0) AS total FROM membership_orders WHERE status = 'paid' AND DATE(created_at) = CURRENT_DATE"
+        ).fetchone()
+        today_revenue = today_revenue_row["total"] if today_revenue_row else 0
+
+        # 即将到期用户数（3天内到期）
+        expiring_soon_row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM users
+            WHERE plan_type IN ('vip', 'svip')
+              AND plan_expires_at IS NOT NULL
+              AND plan_expires_at > NOW()
+              AND plan_expires_at <= NOW() + INTERVAL '3 days'
+            """
+        ).fetchone()
+        expiring_soon = expiring_soon_row["cnt"] if expiring_soon_row else 0
+
+        # 各档位分布
+        plan_dist_row = conn.execute(
+            """
+            SELECT plan_type, COUNT(*) AS cnt
+            FROM users
+            GROUP BY plan_type
+            """
+        ).fetchall()
+        plan_distribution = {row["plan_type"] or "free": row["cnt"] for row in plan_dist_row}
+
+        return {
+            "total_users": total_users,
+            "today_new_users": today_new_users,
+            "paid_users": paid_users,
+            "paid_rate": round(paid_users / total_users * 100, 1) if total_users > 0 else 0,
+            "today_orders": today_orders,
+            "today_revenue": today_revenue,
+            "avg_order_value": round(today_revenue / today_orders) if today_orders > 0 else 0,
+            "expiring_soon": expiring_soon,
+            "plan_distribution": plan_distribution,
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/admin/dashboard/trend")
+def admin_dashboard_trend(days: int = 7) -> dict[str, Any]:
+    """
+    管理后台：获取近 N 天用户增长和订单趋势。
+
+    参数：
+        days: 天数，默认 7 天（最多 30 天）
+    """
+    safe_days = max(1, min(days, 30))
+
+    conn = get_conn()
+    try:
+        # 生成日期序列
+        date_series = conn.execute(
+            """
+            SELECT generate_series AS day
+            FROM generate_series(
+                CURRENT_DATE - INTERVAL '%s days',
+                CURRENT_DATE,
+                '1 day'::interval
+            )
+            """,
+            (safe_days - 1,),
+        ).fetchall()
+
+        trend = []
+        for row in date_series:
+            day_str = str(row["day"])[:10]  # 取 YYYY-MM-DD
+
+            user_cnt_row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM users WHERE DATE(created_at) = %s",
+                (day_str,),
+            ).fetchone()
+
+            order_cnt_row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM membership_orders WHERE status = 'paid' AND DATE(created_at) = %s",
+                (day_str,),
+            ).fetchone()
+
+            revenue_row = conn.execute(
+                "SELECT COALESCE(SUM(amount_cents), 0) AS total FROM membership_orders WHERE status = 'paid' AND DATE(created_at) = %s",
+                (day_str,),
+            ).fetchone()
+
+            trend.append({
+                "date": day_str,
+                "new_users": user_cnt_row["cnt"] if user_cnt_row else 0,
+                "new_orders": order_cnt_row["cnt"] if order_cnt_row else 0,
+                "revenue": revenue_row["total"] if revenue_row else 0,
+            })
+
+        return {"trend": trend, "days": safe_days}
+    finally:
+        conn.close()
+
+
+# ============================================================
+# 操作日志
+# ============================================================
+def _write_audit_log(
+    conn: Any,
+    operator_id: str,
+    operator_email: str,
+    action: str,
+    target_type: str,
+    target_id: str | None = None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """
+    内部函数：写入一条操作日志。
+
+    注意：此函数不自行 commit，调用方负责提交事务。
+    """
+    conn.execute(
+        """
+        INSERT INTO admin_audit_logs
+        (operator_id, operator_email, action, target_type, target_id, detail, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            operator_id,
+            operator_email,
+            action,
+            target_type,
+            target_id,
+            json.dumps(detail or {}, ensure_ascii=False),
+            utc_now_iso(),
+        ),
+    )
+
+
+@router.get("/admin/audit-logs")
+def admin_list_audit_logs(
+    action: str = "",
+    target_type: str = "",
+    page: int = 1,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """
+    管理后台：获取操作日志列表。
+
+    参数：
+        action: 按操作类型筛选（delete_user/edit_user/update_plan/batch_update 等）
+        target_type: 按对象类型筛选（user/order/character）
+        page: 页码
+        limit: 每页条数（最多 200）
+    """
+    conn = get_conn()
+    try:
+        conditions = []
+        params: list[Any] = []
+
+        if action:
+            conditions.append("action = %s")
+            params.append(action)
+        if target_type:
+            conditions.append("target_type = %s")
+            params.append(target_type)
+
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        count_row = conn.execute(
+            f"SELECT COUNT(*) AS total FROM admin_audit_logs {where_clause}",
+            tuple(params),
+        ).fetchone()
+        total = count_row["total"]
+
+        offset = (max(1, page) - 1) * min(limit, 200)
+        safe_limit = min(limit, 200)
+
+        rows = conn.execute(
+            f"""
+            SELECT id, operator_id, operator_email, action, target_type,
+                   target_id, detail, created_at
+            FROM admin_audit_logs
+            {where_clause}
+            ORDER BY id DESC
+            LIMIT %s OFFSET %s
+            """,
+            tuple(params) + (safe_limit, offset),
+        ).fetchall()
+
+        return {
+            "total": total,
+            "page": page,
+            "limit": safe_limit,
+            "logs": [
+                {
+                    "id": row["id"],
+                    "operator_id": row["operator_id"],
+                    "operator_email": row["operator_email"],
+                    "action": row["action"],
+                    "target_type": row["target_type"],
+                    "target_id": row["target_id"],
+                    "detail": row["detail"] if row["detail"] else {},
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ],
+        }
+    finally:
+        conn.close()

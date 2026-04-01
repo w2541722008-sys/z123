@@ -117,6 +117,19 @@ class AdminUserPlanUpdatePayload(BaseModel):
     duration_days: int = Field(default=30, ge=1, le=3650)
 
 
+class AdminUserEditPayload(BaseModel):
+    """管理后台编辑用户信息。"""
+    email: str | None = Field(default=None, max_length=255)
+    nickname: str | None = Field(default=None, max_length=20)
+
+
+class AdminBatchPlanPayload(BaseModel):
+    """管理后台批量调整用户档位。"""
+    user_ids: list[str] = Field(min_length=1, max_length=100)
+    plan_type: str = Field(pattern="^(free|vip|svip)$")
+    duration_days: int = Field(default=30, ge=1, le=3650)
+
+
 class BillingCreateOrderPayload(BaseModel):
     """创建会员订单的请求体。"""
     plan_type: str = Field(pattern="^(vip|svip)$")
@@ -181,7 +194,7 @@ class MemoryEntryPayload(BaseModel):
     priority: int = Field(default=100, ge=0, le=9999)
     comment: str = Field(default="", max_length=200)
     is_active: int = Field(default=1, ge=0, le=1)
-    category_id: int | None = Field(default=None)
+    category_id: str | None = Field(default=None)
 
 
 # ============================================================
@@ -208,7 +221,7 @@ class GreetingPayload(BaseModel):
         pattern="^(neutral|happy|sad|angry|flirty)$"
     )
     priority: int = Field(default=100, ge=0, le=9999)
-    storyline_id: int | None = Field(default=None)
+    storyline_id: str | None = Field(default=None)
     is_active: int = Field(default=1, ge=0, le=1)
 
 
@@ -264,11 +277,8 @@ class PostRulePayload(BaseModel):
     """
     name: str = Field(min_length=1, max_length=50)
     content: str = Field(min_length=1, max_length=5000)
-    storyline_id: int | None = Field(default=None)
-    story_phase: str | None = Field(
-        default=None,
-        pattern="^(stranger|acquaintance|friend|lover)$"
-    )
+    storyline_id: str | None = Field(default=None)
+    story_phase: str | None = Field(default=None)
     priority: int = Field(default=100, ge=0, le=9999)
     is_active: int = Field(default=1, ge=0, le=1)
 
@@ -292,12 +302,12 @@ class StoryEventPayload(BaseModel):
     sort_order: 排序
     is_active: 是否启用
     """
-    title: str = Field(min_length=1, max_length=100)
+    title: str = Field(default="", max_length=100)
     description: str = Field(default="", max_length=2000)
-    trigger_score: int = Field(ge=0)
+    trigger_score: int = Field(default=0, ge=0)
     unlocked_memory_ids: str = Field(default="", max_length=500)
     unlocked_greeting_ids: str = Field(default="", max_length=500)
-    unlocked_storyline_id: int | None = Field(default=None)
+    unlocked_storyline_id: str | None = Field(default=None)
     event_content: str = Field(default="", max_length=5000)
     sort_order: int = Field(default=0)
     is_active: int = Field(default=1, ge=0, le=1)

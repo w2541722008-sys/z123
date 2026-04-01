@@ -6,6 +6,7 @@ import urllib.request
 from typing import Any, Callable, Iterable
 
 from config import AI_CHAT_MAX_OUTPUT_TOKENS
+import os
 
 # 常量定义
 DEFAULT_TIMEOUT = 60
@@ -52,6 +53,8 @@ def build_chat_payload(
     stream: bool,
     temperature: float = 0.9,
     max_tokens: int = AI_CHAT_MAX_OUTPUT_TOKENS,
+    top_p: float | None = None,
+    repetition_penalty: float | None = None,
 ) -> dict[str, Any]:
     """统一构建 OpenAI 兼容 chat payload，方便后续替换 provider。
 
@@ -60,14 +63,27 @@ def build_chat_payload(
       - 现在默认值由 AI_CHAT_MAX_OUTPUT_TOKENS 控制，当前走配置化
       - 如果某条消息需要更长的回复（比如 AI 讲故事），调用方可以传入更大的值
       - 理论上限建议不超过 4096（更长的模型输出会很慢，不适合聊天场景）
+
+    参数说明：
+      - temperature: 控制创造性，0.7-0.9 推荐
+      - top_p: 控制输出多样性，0.9 推荐
+      - repetition_penalty: 防止复读，1.05-1.1 推荐
     """
-    return {
+    payload: dict[str, Any] = {
         "model": config["model"],
         "messages": messages,
         "stream": stream,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+
+    # 添加可选参数（如果提供了的话）
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if repetition_penalty is not None:
+        payload["repetition_penalty"] = repetition_penalty
+
+    return payload
 
 
 def _build_request(config: dict[str, str], payload: dict[str, Any]) -> urllib.request.Request:
@@ -82,6 +98,28 @@ def _build_request(config: dict[str, str], payload: dict[str, Any]) -> urllib.re
     )
 
 
+def _get_optional_params() -> dict[str, float]:
+    """从环境变量读取可选的模型参数。
+
+    Note: MiniMax API 不支持 presence_penalty / frequency_penalty / repetition_penalty
+    这些参数会被忽略，防复读请通过后置规则实现。
+    """
+    params: dict[str, float] = {}
+
+    top_p = os.environ.get("AIFRIEND_TOP_P", "").strip()
+    if top_p:
+        try:
+            params["top_p"] = float(top_p)
+        except ValueError:
+            pass
+
+    # Note: repetition_penalty 不被 MiniMax 支持，已移除
+    # 防复读请通过角色配置的"后置规则"实现，例如：
+    # "避免重复之前说过的话，每次回复要有新的细节或进展"
+
+    return params
+
+
 def request_chat_completion(
     messages: list[dict[str, str]],
     config: dict[str, str],
@@ -92,11 +130,13 @@ def request_chat_completion(
     if not config["api_key"]:
         raise RuntimeError("AIFRIEND_API_KEY 未配置")
 
+    optional_params = _get_optional_params()
     payload = build_chat_payload(
         messages=messages,
         config=config,
         stream=False,
         max_tokens=max_tokens or AI_CHAT_MAX_OUTPUT_TOKENS,
+        **optional_params,
     )
     req = _build_request(config, payload)
 
@@ -126,11 +166,13 @@ def stream_chat_completion(
     if not config["api_key"]:
         raise RuntimeError("AIFRIEND_API_KEY 未配置")
 
+    optional_params = _get_optional_params()
     payload = build_chat_payload(
         messages=messages,
         config=config,
         stream=True,
         max_tokens=max_tokens or AI_CHAT_MAX_OUTPUT_TOKENS,
+        **optional_params,
     )
     req = _build_request(config, payload)
 

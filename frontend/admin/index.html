@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>角色卡管理后台</title>
+<link rel="stylesheet" href="/frontend/admin/style.css">
+</head>
+<body>
+<div class="topbar">
+  <h1>🎭 角色卡管理后台</h1>
+  <span class="subtitle">本地开发专用</span>
+  <div class="topbar-right">
+    <button class="btn btn-ghost" onclick="loadCharList()">🔄 刷新列表</button>
+  </div>
+</div>
+<div class="layout">
+  <!-- 左侧角色列表 -->
+  <div class="sidebar">
+    <div class="sidebar-header" style="display:flex;justify-content:space-between;align-items:center;">
+      <span>角色列表</span>
+      <button class="btn btn-primary" style="padding:4px 12px;font-size:11px;" onclick="openCreateCharModal()">+ 新建角色</button>
+    </div>
+    <div style="padding:8px 12px 12px;border-bottom:1px solid #2a2a3a;display:flex;flex-direction:column;gap:8px;">
+      <input type="search" id="char-filter-search" placeholder="搜索名称/ID…" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid #2a2a3a;background:#0f0f13;color:#e8e8f0;font-size:13px;" oninput="renderCharListSidebar()" />
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <select id="char-filter-visible" style="flex:1;min-width:100px;padding:6px 8px;border-radius:8px;border:1px solid #2a2a3a;background:#0f0f13;color:#e8e8f0;font-size:12px;" onchange="renderCharListSidebar()">
+          <option value="all">全部可见性</option>
+          <option value="visible">仅可见</option>
+          <option value="hidden">仅隐藏</option>
+        </select>
+        <select id="char-filter-type" style="flex:1;min-width:100px;padding:6px 8px;border-radius:8px;border:1px solid #2a2a3a;background:#0f0f13;color:#e8e8f0;font-size:12px;" onchange="renderCharListSidebar()">
+          <option value="all">全部类型</option>
+          <option value="intimate">对话陪伴</option>
+          <option value="scenario">剧情沙盒</option>
+          <option value="world">世界探索</option>
+          <option value="divination">占卜形象</option>
+        </select>
+      </div>
+    </div>
+    <div id="char-list">
+      <div class="empty-state"><div class="icon">⏳</div><div>加载中...</div></div>
+    </div>
+  </div>
+
+  <!-- 右侧主内容 -->
+  <div class="main">
+    <!-- 标签页 -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="edit" onclick="switchTab('edit')">✏️ 编辑角色</button>
+      <button class="tab-btn" data-tab="advanced" onclick="switchTab('advanced')">⚙️ 高级配置</button>
+      <button class="tab-btn" data-tab="preview" onclick="switchTab('preview')">🧾 Prompt预览</button>
+      <button class="tab-btn" data-tab="membership" onclick="switchTab('membership')">👥 会员管理</button>
+      <button class="tab-btn" data-tab="dashboard" onclick="switchTab('dashboard')">📊 仪表盘</button>
+      <button class="tab-btn" data-tab="auditlog" onclick="switchTab('auditlog')">🧾 操作日志</button>
+    </div>
+
+    <div id="char-overview" class="char-overview" style="display:none"></div>
+
+    <!-- 编辑面板 -->
+    <div id="tab-edit">
+      <div class="empty-state">
+        <div class="icon">👈</div>
+        <div>从左侧选择一个角色开始编辑</div>
+      </div>
+    </div>
+
+    <!-- 高级配置面板 -->
+    <div id="tab-advanced" style="display:none">
+      <div class="empty-state" id="advanced-empty">
+        <div class="icon">👈</div>
+        <div>从左侧选择一个角色以配置高级选项</div>
+      </div>
+      <div id="advanced-content" style="display:none">
+        <div id="advanced-guide-card" class="guide-card"></div>
+        <!-- 高级配置子标签页 -->
+        <div class="sub-tabs">
+          <button class="sub-tab-btn active" onclick="switchAdvancedTab('memories')">🧠 记忆条目</button>
+          <button class="sub-tab-btn" onclick="switchAdvancedTab('categories')">🏷️ 记忆分类</button>
+          <button class="sub-tab-btn" onclick="switchAdvancedTab('greetings')">👋 开场白</button>
+          <button class="sub-tab-btn" onclick="switchAdvancedTab('storylines')">📖 剧情线</button>
+          <button class="sub-tab-btn" onclick="switchAdvancedTab('postrules')">📝 后置规则</button>
+          <button class="sub-tab-btn" onclick="switchAdvancedTab('events')">🎭 剧情事件</button>
+          <button class="sub-tab-btn" onclick="switchAdvancedTab('test')">🧪 关键词测试</button>
+        </div>
+
+
+        <!-- 记忆条目面板 -->
+        <div id="advanced-memories" class="advanced-panel">
+          <div class="panel-header">
+            <h3>🧠 记忆条目管理（World Info）</h3>
+            <button class="btn btn-primary" onclick="openMemoryModal()">+ 新增条目</button>
+          </div>
+          <div class="panel-desc">当用户消息命中关键词时，这段内容会被临时注入到AI的上下文里。适合放人物背景、关系线索、世界规则和行为禁忌。</div>
+          <div id="memories-list" class="items-list"></div>
+        </div>
+
+        <!-- 开场白面板 -->
+        <div id="advanced-greetings" class="advanced-panel" style="display:none">
+          <div class="panel-header">
+            <h3>👋 多阶段开场白</h3>
+            <button class="btn btn-primary" onclick="openGreetingModal()">+ 新增开场白</button>
+          </div>
+          <div class="panel-desc">用户首次进入、或点击"清空聊天"重新开始时，系统会根据当前关系阶段和剧情线，自动挑选最合适的开场白。</div>
+          <div class="phase-filter">
+            <button class="phase-btn active" onclick="filterGreetings('all')">全部</button>
+            <button class="phase-btn" onclick="filterGreetings('stranger')">😐 陌生人</button>
+            <button class="phase-btn" onclick="filterGreetings('acquaintance')">🙂 熟人</button>
+            <button class="phase-btn" onclick="filterGreetings('friend')">😊 朋友</button>
+            <button class="phase-btn" onclick="filterGreetings('lover')">❤️ 恋人</button>
+          </div>
+          <div id="greetings-list" class="items-list"></div>
+        </div>
+
+        <!-- 剧情线面板 -->
+        <div id="advanced-storylines" class="advanced-panel" style="display:none">
+          <div class="panel-header">
+            <h3>📖 剧情线管理</h3>
+            <button class="btn btn-primary" onclick="openStorylineModal()">+ 新增剧情线</button>
+          </div>
+          <div class="panel-desc">把角色的故事拆成几条分支路线（如校园线/职场线）。每条线可以绑定专属的开场白、后置规则和剧情事件。</div>
+          <div id="storylines-list" class="items-list"></div>
+        </div>
+
+        <!-- 记忆分类面板 -->
+        <div id="advanced-categories" class="advanced-panel" style="display:none">
+          <div class="panel-header">
+            <h3>🏷️ 记忆分类管理</h3>
+            <button class="btn btn-primary" onclick="openCategoryModal()">+ 新增分类</button>
+          </div>
+          <div class="panel-desc">给记忆条目打标签，方便你自己整理。它不直接影响聊天效果，但会让运营维护轻松很多。</div>
+          <div id="categories-list" class="items-list"></div>
+        </div>
+
+        <!-- 后置规则面板 -->
+        <div id="advanced-postrules" class="advanced-panel" style="display:none">
+          <div class="panel-header">
+            <h3>📝 后置规则管理</h3>
+            <button class="btn btn-primary" onclick="openPostRuleModal()">+ 新增规则</button>
+          </div>
+          <div class="panel-desc">放在历史记录之后、AI回复之前，作为最后一道约束提醒。适合放语气要求、格式规范、行为边界——不要把角色设定全堆在这里。</div>
+          <div id="postrules-list" class="items-list"></div>
+        </div>
+
+        <!-- 剧情事件面板 -->
+        <div id="advanced-events" class="advanced-panel" style="display:none">
+          <div class="panel-header">
+            <h3>🎭 剧情事件管理</h3>
+            <button class="btn btn-primary" onclick="openEventModal()">+ 新增事件</button>
+          </div>
+          <div class="panel-desc">当用户好感度达到设定阈值时自动触发。建议同时配置"触发时的特殊对话"和"解锁的新内容"，剧情推进更自然。</div>
+          <div id="events-list" class="items-list"></div>
+        </div>
+
+        <!-- 关键词测试面板 -->
+        <div id="advanced-test" class="advanced-panel" style="display:none">
+          <div class="panel-header">
+            <h3>🧪 关键词触发测试</h3>
+          </div>
+          <div class="panel-desc">输入一句模拟的用户消息，即时测试会触发哪些记忆条目。最适合排查"明明写了设定为什么AI不知道"的问题。</div>
+          <div class="test-input-area">
+            <textarea id="test-input" rows="4" placeholder="输入测试文本，例如：今天天气真好，我想去公园散步..."></textarea>
+            <button class="btn btn-primary" onclick="testKeywords()">测试匹配</button>
+          </div>
+          <div id="test-results" class="test-results"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Prompt 预览面板 -->
+    <div id="tab-preview" style="display:none">
+      <div class="preview-card">
+        <div class="preview-toolbar">
+          <div>
+            <div class="preview-title">🧾 Prompt 预览</div>
+            <div class="hint">这页是给你检查配置用的：AI 实际会收到什么设定、记忆和限制，都能在这里看到。</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-ghost" onclick="loadPromptPreview()">🔄 刷新预览</button>
+            <button class="btn btn-primary" onclick="copyPromptPreview()">📋 复制</button>
+          </div>
+        </div>
+        <div id="prompt-preview-content">
+          <div class="preview-box muted">请先从左侧选择角色。</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-membership" style="display:none">
+      <div id="membership-users-section">
+        <div class="panel-header" style="margin-bottom:6px;">
+          <h3>👥 用户会员管理</h3>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-ghost" onclick="loadMembershipData()">🔄 刷新</button>
+            <button class="btn btn-ghost" onclick="exportUsersCSV()">📥 导出 CSV</button>
+          </div>
+        </div>
+        <div class="desc" style="margin-bottom:14px;">支持搜索、筛选、编辑和删除用户。删除会清理该用户所有关联数据。</div>
+        <div class="search-bar">
+          <input type="search" id="user-search" placeholder="搜索邮箱或昵称…" oninput="filterUsers()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:13px;" />
+          <select id="user-plan-filter" onchange="filterUsers()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 10px;font-size:13px;">
+            <option value="">全部档位</option>
+            <option value="free">Free</option>
+            <option value="vip">VIP</option>
+            <option value="svip">SVIP</option>
+          </select>
+          <div class="count" id="user-count-label"></div>
+        </div>
+        <div class="batch-bar" id="user-batch-bar">
+          <span class="batch-count" id="user-batch-count">已选 0 位用户</span>
+          <div class="batch-actions">
+            <select id="batch-plan-select" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:6px 10px;font-size:13px;">
+              <option value="free">Free</option>
+              <option value="vip">VIP</option>
+              <option value="svip">SVIP</option>
+            </select>
+            <input type="number" id="batch-days" value="30" min="1" max="3650" placeholder="天数" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:6px 10px;font-size:13px;width:80px;" />
+            <button class="btn btn-primary" onclick="batchUpdatePlan()">批量设置档位</button>
+          </div>
+          <button class="btn btn-ghost" onclick="clearUserSelection()" style="margin-left:auto;">取消</button>
+        </div>
+        <div id="membership-users-table-wrap">
+          <div class="no-results">加载中…</div>
+        </div>
+        <div class="pager" id="user-pager"></div>
+      </div>
+
+      <div style="margin-top:24px;">
+        <div class="panel-header" style="margin-bottom:6px;">
+          <h3>🧾 订单管理</h3>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-ghost" onclick="loadMembershipData()">🔄 刷新</button>
+            <button class="btn btn-ghost" onclick="exportOrdersCSV()">📥 导出 CSV</button>
+          </div>
+        </div>
+        <div class="desc" style="margin-bottom:14px;">支持搜索和状态筛选，点击订单号查看完整详情。</div>
+        <div class="search-bar">
+          <input type="search" id="order-search" placeholder="搜索订单号或用户邮箱…" oninput="debouncedFilterOrders()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:13px;" />
+          <select id="order-status-filter" onchange="filterOrders()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 10px;font-size:13px;">
+            <option value="">全部状态</option>
+            <option value="pending">待支付</option>
+            <option value="paid">已支付</option>
+            <option value="expired">已过期</option>
+            <option value="closed">已关闭</option>
+            <option value="refunded">已退款</option>
+          </select>
+          <div class="count" id="order-count-label"></div>
+        </div>
+        <div id="membership-orders-table-wrap">
+          <div class="no-results">加载中…</div>
+        </div>
+        <div class="pager" id="order-pager"></div>
+      </div>
+    </div>
+
+    <div id="tab-dashboard" style="display:none">
+      <div class="panel-header" style="margin-bottom:6px;">
+        <h3>📊 运营仪表盘</h3>
+        <button class="btn btn-ghost" onclick="loadDashboard()">🔄 刷新</button>
+      </div>
+      <div id="dashboard-content">
+        <div class="no-results">加载中…</div>
+      </div>
+    </div>
+
+    <div id="tab-auditlog" style="display:none">
+      <div class="panel-header" style="margin-bottom:6px;">
+        <h3>🧾 操作日志</h3>
+        <button class="btn btn-ghost" onclick="loadAuditLogs()">🔄 刷新</button>
+      </div>
+      <div class="desc" style="margin-bottom:14px;">记录管理后台的关键操作，可按类型筛选。</div>
+      <div class="search-bar">
+        <select id="audit-action-filter" onchange="loadAuditLogs()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 10px;font-size:13px;">
+          <option value="">全部操作</option>
+          <option value="delete_user">删除用户</option>
+          <option value="edit_user">编辑用户</option>
+          <option value="update_plan">修改档位</option>
+          <option value="batch_update">批量操作</option>
+        </select>
+        <div class="count" id="audit-count-label"></div>
+      </div>
+      <div id="audit-logs-table-wrap">
+        <div class="no-results">加载中…</div>
+      </div>
+      <div class="pager" id="audit-pager"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- 悬浮保存按钮（选中角色后出现，固定右下角，随时可点） -->
+<div id="fab-save">
+  <button onclick="saveChar()" title="保存修改">💾</button>
+  <span class="fab-label" id="fab-label">保存</span>
+</div>
+
+<!-- 记忆条目编辑弹窗 -->
+<div id="memory-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="memory-modal-title">新增记忆条目</h3>
+      <button class="modal-close" onclick="closeMemoryModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="memory-id" />
+      <div class="form-group">
+        <label>关键词（逗号分隔）</label>
+        <input type="text" id="memory-keywords" placeholder="例如：公园,散步,天气" />
+      </div>
+      <div class="form-group">
+        <label>触发逻辑</label>
+        <select id="memory-trigger-logic">
+          <option value="any">任意关键词匹配（OR）</option>
+          <option value="all">所有关键词匹配（AND）</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>记忆分类（可选）</label>
+        <select id="memory-category"></select>
+        <div style="font-size:11px;color:#666;margin-top:6px;">在「记忆分类」标签里先建好分类，再在这里给本条记忆选一个，方便归类整理。</div>
+      </div>
+      <div class="form-group">
+        <label>内容（注入到提示词中的文本）</label>
+        <textarea id="memory-content" rows="6" placeholder="当关键词被触发时，这段内容会被注入到提示词中..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>插入位置</label>
+          <select id="memory-position">
+            <option value="before">System Prompt 之前</option>
+            <option value="after">System Prompt 之后</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>优先级（数字越小越优先）</label>
+          <input type="number" id="memory-priority" value="100" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>备注</label>
+        <input type="text" id="memory-comment" placeholder="可选：给这个条目加个备注" />
+      </div>
+      <div class="form-group checkbox-group">
+        <label><input type="checkbox" id="memory-is-active" checked /> 启用此条目</label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeMemoryModal()">取消</button>
+      <button class="btn btn-danger" id="memory-delete-btn" style="display:none" onclick="deleteMemory()">删除</button>
+      <button class="btn btn-success" onclick="saveMemory()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 开场白编辑弹窗 -->
+<div id="greeting-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="greeting-modal-title">新增开场白</h3>
+      <button class="modal-close" onclick="closeGreetingModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="greeting-id" />
+      <div class="form-group">
+        <label>内容</label>
+        <textarea id="greeting-content" rows="6" placeholder="输入开场白内容..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>关系阶段</label>
+          <select id="greeting-phase">
+            <option value="stranger">😐 陌生人</option>
+            <option value="acquaintance">🙂 熟人</option>
+            <option value="friend">😊 朋友</option>
+            <option value="lover">❤️ 恋人</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>心情</label>
+          <select id="greeting-mood">
+            <option value="neutral">😐 平静</option>
+            <option value="happy">😊 开心</option>
+            <option value="sad">😢 难过</option>
+            <option value="angry">😠 生气</option>
+            <option value="flirty">😉 暧昧</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>优先级</label>
+          <input type="number" id="greeting-priority" value="100" />
+        </div>
+        <div class="form-group">
+          <label>关联剧情线</label>
+          <select id="greeting-storyline">
+            <option value="">默认</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group checkbox-group">
+        <label><input type="checkbox" id="greeting-is-active" checked /> 启用</label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeGreetingModal()">取消</button>
+      <button class="btn btn-danger" id="greeting-delete-btn" style="display:none" onclick="deleteGreeting()">删除</button>
+      <button class="btn btn-success" onclick="saveGreeting()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 剧情线编辑弹窗 -->
+<div id="storyline-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="storyline-modal-title">新增剧情线</h3>
+      <button class="modal-close" onclick="closeStorylineModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="storyline-id" />
+      <div class="form-group">
+        <label>名称</label>
+        <input type="text" id="storyline-name" placeholder="例如：校园初遇" />
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <textarea id="storyline-description" rows="3" placeholder="剧情线简介..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>解锁好感度</label>
+          <input type="number" id="storyline-unlock-score" value="0" />
+        </div>
+        <div class="form-group">
+          <label>排序</label>
+          <input type="number" id="storyline-sort" value="0" />
+        </div>
+      </div>
+      <div class="form-group checkbox-group">
+        <label><input type="checkbox" id="storyline-is-default" /> 设为默认剧情线</label>
+      </div>
+      <div class="form-group checkbox-group">
+        <label><input type="checkbox" id="storyline-is-active" checked /> 启用</label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeStorylineModal()">取消</button>
+      <button class="btn btn-danger" id="storyline-delete-btn" style="display:none" onclick="deleteStoryline()">删除</button>
+      <button class="btn btn-success" onclick="saveStoryline()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 记忆分类编辑弹窗 -->
+<div id="category-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="category-modal-title">新增记忆分类</h3>
+      <button class="modal-close" onclick="closeCategoryModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="category-id" />
+      <div class="form-group">
+        <label>分类名称</label>
+        <input type="text" id="category-name" placeholder="例如：职业线" />
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <textarea id="category-description" rows="2" placeholder="分类描述..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>颜色</label>
+          <input type="color" id="category-color" value="#1890FF" />
+        </div>
+        <div class="form-group">
+          <label>排序</label>
+          <input type="number" id="category-sort-order" value="0" />
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeCategoryModal()">取消</button>
+      <button class="btn btn-danger" id="category-delete-btn" style="display:none" onclick="deleteCategory()">删除</button>
+      <button class="btn btn-success" onclick="saveCategory()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 后置规则编辑弹窗 -->
+<div id="postrule-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="postrule-modal-title">新增后置规则</h3>
+      <button class="modal-close" onclick="closePostRuleModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="postrule-id" />
+      <div class="form-group">
+        <label>规则名称</label>
+        <input type="text" id="postrule-name" placeholder="例如：禁止输出表情" />
+      </div>
+      <div class="form-group">
+        <label>规则内容</label>
+        <textarea id="postrule-content" rows="4" placeholder="放在历史记录后的规则内容..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>绑定剧情线（可选）</label>
+          <select id="postrule-storyline">
+            <option value="">通用规则</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>适用阶段（可选）</label>
+          <select id="postrule-phase">
+            <option value="">全部阶段</option>
+            <option value="stranger">😐 陌生人</option>
+            <option value="acquaintance">🙂 熟人</option>
+            <option value="friend">😊 朋友</option>
+            <option value="lover">❤️ 恋人</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>优先级</label>
+        <input type="number" id="postrule-priority" value="100" />
+      </div>
+      <div class="form-group checkbox-group">
+        <label><input type="checkbox" id="postrule-is-active" checked /> 启用</label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closePostRuleModal()">取消</button>
+      <button class="btn btn-danger" id="postrule-delete-btn" style="display:none" onclick="deletePostRule()">删除</button>
+      <button class="btn btn-success" onclick="savePostRule()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 剧情事件编辑弹窗 -->
+<div id="event-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="event-modal-title">新增剧情事件</h3>
+      <button class="modal-close" onclick="closeEventModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="event-id" />
+      <div class="form-group">
+        <label>事件标题</label>
+        <input type="text" id="event-title" placeholder="例如：初次约会" />
+      </div>
+      <div class="form-group">
+        <label>事件描述</label>
+        <textarea id="event-description" rows="2" placeholder="事件简介..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>触发好感度</label>
+        <input type="number" id="event-trigger-score" value="0" min="0" max="100" />
+        <small>当用户好感度达到此值时自动触发</small>
+      </div>
+      <div class="form-group">
+        <label>解锁内容</label>
+        <div class="selector-grid">
+          <div class="selector-panel">
+            <h4>解锁的记忆条目</h4>
+            <div id="event-memory-selector" class="selector-list">
+              <div class="selector-empty">暂无记忆条目</div>
+            </div>
+          </div>
+          <div class="selector-panel">
+            <h4>解锁的开场白</h4>
+            <div id="event-greeting-selector" class="selector-list">
+              <div class="selector-empty">暂无开场白</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>解锁的剧情线</label>
+        <select id="event-storyline-id">
+          <option value="">不解锁剧情线</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>事件触发时的特殊对话</label>
+        <textarea id="event-content" rows="3" placeholder="触发事件时显示的特殊对话内容..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>排序</label>
+        <input type="number" id="event-sort-order" value="0" />
+      </div>
+      <div class="form-group checkbox-group">
+        <label><input type="checkbox" id="event-is-active" checked /> 启用</label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeEventModal()">取消</button>
+      <button class="btn btn-danger" id="event-delete-btn" style="display:none" onclick="deleteEvent()">删除</button>
+      <button class="btn btn-success" onclick="saveEvent()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建角色弹窗 -->
+<div id="create-char-modal" class="modal" style="display:none">
+  <div class="modal-content" style="max-width: 600px;">
+    <div class="modal-header">
+      <h3>➕ 新建角色</h3>
+      <button class="modal-close" onclick="closeCreateCharModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label>角色ID <small style="color:#666">（唯一标识，英文）</small></label>
+          <input type="text" id="new-char-id" placeholder="例如：lin_shen" />
+        </div>
+        <div class="form-group">
+          <label>角色名</label>
+          <input type="text" id="new-char-name" placeholder="例如：林深" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label>简称</label>
+        <input type="text" id="new-char-abbr" placeholder="例如：林深" />
+      </div>
+      <div class="form-group">
+        <label>副标题 <small style="color:#666">（一句话简介）</small></label>
+        <input type="text" id="new-char-subtitle" placeholder="例如：温柔体贴的邻家哥哥" />
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <textarea id="new-char-description" rows="3" placeholder="角色的详细描述..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>头像图片路径 / URL</label>
+          <input type="text" id="new-char-avatar-url" placeholder="如 /frontend/assets/xxx.png、https://... 或本机绝对路径" />
+        </div>
+        <div class="form-group">
+          <label>封面图片路径 / URL</label>
+          <input type="text" id="new-char-cover-url" placeholder="如 /frontend/assets/cover.png、https://... 或本机绝对路径" />
+        </div>
+      </div>
+      <div style="font-size:11px;color:#666;line-height:1.6;margin:-2px 0 12px;">头像建议 1:1 正方形；封面建议 4:3，人物主体尽量放在上半部分，方便广场卡片、详情封面和聊天头像裁切。</div>
+      <div class="form-group">
+        <label>主指令（System Prompt）</label>
+        <textarea id="new-char-system-prompt" rows="4" placeholder="你是XXX，性格是YYY..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>开场白</label>
+        <textarea id="new-char-opening" rows="2" placeholder="你好，我是XXX..."></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>标签 <small style="color:#666">（逗号分隔）</small></label>
+          <input type="text" id="new-char-tags" placeholder="温柔,体贴,程序员" />
+        </div>
+        <div class="form-group">
+          <label>卡类型</label>
+          <select id="new-char-type">
+            <option value="intimate">💞 对话陪伴</option>
+            <option value="scenario">🎭 剧情沙盒</option>
+            <option value="world">🌐 世界探索</option>
+            <option value="divination">🔮 占卜形象</option>
+          </select>
+          <div style="font-size:11px;color:#666;margin-top:6px;line-height:1.6;">拿不准时先选「对话陪伴」。只有明确做剧情分线、世界观探索或占卜体验时，再选其他类型。</div>
+        </div>
+        <div class="form-group">
+          <label>可访问档位</label>
+          <select id="new-char-required-plan">
+            <option value="guest">游客可访问</option>
+            <option value="free">注册用户可访问</option>
+            <option value="vip">仅 VIP 可访问</option>
+            <option value="svip">仅 SVIP 可访问</option>
+          </select>
+          <div style="font-size:11px;color:#666;margin-top:6px;line-height:1.6;">SVIP 专属角色建议选这里，不需要额外写权限表。</div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>排列优先级 <small style="color:#666">（数字越小越靠前）</small></label>
+          <input type="number" id="new-char-priority" value="10" />
+        </div>
+        <div class="form-group checkbox-group" style="padding-top:24px;">
+          <label><input type="checkbox" id="new-char-visible" checked /> 在广场显示</label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeCreateCharModal()">取消</button>
+      <button class="btn btn-success" onclick="createCharacter()">创建角色</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- 用户详情弹窗 -->
+<div id="user-detail-modal" class="modal" style="display:none">
+  <div class="modal-content" id="user-detail-modal-content">
+    <div class="modal-header">
+      <h3>👤 用户详情</h3>
+      <button class="modal-close" onclick="closeUserDetailModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="user-detail-body">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeUserDetailModal()">关闭</button>
+      <button class="btn btn-danger" id="user-detail-delete-btn" onclick="confirmDeleteUser()">删除用户</button>
+    </div>
+  </div>
+</div>
+
+<!-- 用户编辑弹窗 -->
+<div id="user-edit-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="user-edit-title">✏️ 编辑用户</h3>
+      <button class="modal-close" onclick="closeUserEditModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="edit-user-id" />
+      <div class="form-group">
+        <label>邮箱</label>
+        <input type="email" id="edit-user-email" placeholder="user@example.com" style="width:100%;background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:14px;" />
+      </div>
+      <div class="form-group">
+        <label>昵称</label>
+        <input type="text" id="edit-user-nickname" placeholder="用户昵称" style="width:100%;background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:14px;" />
+      </div>
+      <hr style="border:0;border-top:1px solid #2a2a3a;margin:16px 0;">
+      <div class="form-group">
+        <label>会员档位</label>
+        <select id="edit-user-plan" style="width:100%;background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:14px;">
+          <option value="free">免费版</option>
+          <option value="vip">VIP</option>
+          <option value="svip">SVIP</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>时长（天）</label>
+        <input type="number" id="edit-user-plan-days" value="30" min="1" max="3650" style="width:100%;background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:14px;" />
+        <div style="font-size:12px;color:#666;margin-top:4px;">设置会员档位和时长，保存后立即生效</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeUserEditModal()">取消</button>
+      <button class="btn btn-success" onclick="saveUserEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 订单详情弹窗 -->
+<div id="order-detail-modal" class="modal" style="display:none">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>🧾 订单详情</h3>
+      <button class="modal-close" onclick="closeOrderDetailModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="order-detail-body">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeOrderDetailModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- JS 模块加载（顺序重要！依赖关系：utils → api → state → 页面模块 → main） -->
+<script src="/frontend/admin/js/utils.js"></script>
+<script src="/frontend/admin/js/api.js"></script>
+<script src="/frontend/admin/js/state.js"></script>
+<script src="/frontend/admin/js/char-editor.js"></script>
+<script src="/frontend/admin/js/char-advanced.js"></script>
+<script src="/frontend/admin/js/prompt-preview.js"></script>
+<script src="/frontend/admin/js/membership.js"></script>
+<script src="/frontend/admin/js/dashboard.js"></script>
+<script src="/frontend/admin/js/audit-log.js"></script>
+<script src="/frontend/admin/js/main.js"></script>
+</body>
+</html>

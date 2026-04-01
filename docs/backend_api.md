@@ -125,7 +125,7 @@
 **`POST /character/state/reset`**
 - 请求头：`Authorization: Bearer <token>`
 - 请求体：`{ "character_id": "xxx" }`
-- 将当前用户与该角色的状态重置为初始值（affection=0, stage='', mood='', custom_vars={}）
+- 将当前用户与该角色的状态重置为初始值（affection=30, story_phase='stranger', mood='neutral', custom_vars={}）
 
 ### 13. 发送消息（普通）
 **`POST /chat/send`**

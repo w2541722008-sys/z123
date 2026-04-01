@@ -220,26 +220,37 @@ cd aifriend
 5. 修改以下内容：
 
 ```env
-# 数据库配置（使用 Supabase）
+# === 环境与调试 ===
+ENV=production
+DEBUG=false
+
+# === 数据库配置（Supabase）===
 DATABASE_URL=postgresql://postgres:你的密码@db.xxx.supabase.co:5432/postgres
 
-# MiniMax API 配置
-MINIMAX_API_KEY=你的MiniMax API密钥
-MINIMAX_GROUP_ID=你的MiniMax Group ID
+# === AI 模型配置 ===
+# 使用 MiniMax API（OpenAI 兼容格式）
+AIFRIEND_API_KEY=你的MiniMax_API密钥
+AIFRIEND_BASE_URL=https://api.minimaxi.com/v1
+AIFRIEND_MODEL=MiniMax-M2.5
 
-# JWT 密钥（随机生成一个复杂的字符串）
+# === CORS 跨域配置 ===
+# 上线后必须改为你的真实域名！
+ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
+
+# === 邮件服务（密码重置）===
+RESEND_API_KEY=你的Resend_API密钥
+
+# === 管理员邮箱（逗号分隔）===
+ADMIN_EMAILS=你的管理员邮箱
+
+# === JWT 密钥 ===
 JWT_SECRET_KEY=随机生成一个32位以上的复杂字符串
 
-# 邮件配置（如果需要找回密码功能）
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=你的邮箱
-SMTP_PASSWORD=你的邮箱密码或应用专用密码
-SMTP_FROM=你的邮箱
-
-# 环境
-ENVIRONMENT=production
+# === 限流配置（可选，默认值即可）===
+TOKEN_EXPIRE_DAYS=30
 ```
+
+> **环境变量完整说明**：参考 `backend/.env.example` 文件，里面有详细注释和可选配置。
 
 6. 保存文件
 
@@ -255,16 +266,18 @@ pip3 install -r requirements.txt
 
 等待安装完成（约 2-3 分钟）
 
-### 4.5 迁移数据库
+### 4.5 建表初始化
 
-如果你本地已经有数据（角色、用户等），需要迁移：
+首次部署需要在 Supabase 中创建数据库表：
 
-```bash
-cd /opt/aifriend/backend
-python3 migrate_to_supabase.py
-```
+1. 登录 [Supabase 控制台](https://supabase.com)
+2. 进入你的项目 → **SQL Editor**
+3. 点击 **New query**
+4. 复制粘贴项目中的 `docs/supabase_schema.sql` 内容
+5. 点击 **Run** 执行
+6. 如果成功，会显示 "Success. No rows returned"
 
-（稍后我会创建这个迁移脚本）
+> 如果本地已有角色数据需要迁移，请参考 Supabase 控制台的数据导入功能。
 
 ### 4.6 创建系统服务
 
@@ -522,7 +535,7 @@ chmod +x /opt/aifriend/backend/backup_supabase.sh
 
 现在你可以：
 1. 访问 `https://你的域名` 使用应用
-2. 访问 `https://你的域名/admin.html` 管理后台
+2. 访问 `https://你的域名/frontend/admin/` 管理后台
 3. 在 1Panel 查看服务器状态和日志
 4. 每天自动备份数据库
 

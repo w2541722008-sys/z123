@@ -18,18 +18,23 @@ mkdir -p "$DEPLOY_DIR/backend"
 cp -r backend/*.py "$DEPLOY_DIR/backend/" 2>/dev/null || true
 cp backend/requirements.txt "$DEPLOY_DIR/backend/"
 cp backend/.env.example "$DEPLOY_DIR/backend/"
-cp backend/.env.production.example "$DEPLOY_DIR/backend/"
 
 # 复制后端子目录
 cp -r backend/routers "$DEPLOY_DIR/backend/"
 cp -r backend/services "$DEPLOY_DIR/backend/"
 cp -r backend/models "$DEPLOY_DIR/backend/"
+cp -r backend/utils "$DEPLOY_DIR/backend/"
+cp backend/backup_supabase.sh "$DEPLOY_DIR/backend/" 2>/dev/null || true
 
-# 复制前端文件
+# 复制前端文件（包括管理后台）
 mkdir -p "$DEPLOY_DIR/frontend"
+mkdir -p "$DEPLOY_DIR/frontend/admin/js"
 cp frontend/*.html "$DEPLOY_DIR/frontend/" 2>/dev/null || true
 cp frontend/*.js "$DEPLOY_DIR/frontend/"
 cp frontend/*.css "$DEPLOY_DIR/frontend/"
+cp -r frontend/admin/*.html "$DEPLOY_DIR/frontend/admin/" 2>/dev/null || true
+cp -r frontend/admin/*.css "$DEPLOY_DIR/frontend/admin/" 2>/dev/null || true
+cp -r frontend/admin/js/*.js "$DEPLOY_DIR/frontend/admin/js/" 2>/dev/null || true
 
 # 复制根目录的 HTML 文件
 cp *.html "$DEPLOY_DIR/" 2>/dev/null || true
@@ -77,7 +82,7 @@ echo "📦 部署步骤："
 echo "1. 上传到服务器: scp ${DEPLOY_DIR}.tar.gz user@server:/path/to/deploy/"
 echo "2. 在服务器上解压: tar -xzf ${DEPLOY_DIR}.tar.gz"
 echo "3. 进入目录: cd ${DEPLOY_DIR}"
-echo "4. 复制并配置环境变量: cp backend/.env.production.example backend/.env"
+echo "4. 配置环境变量: cp backend/.env.example backend/.env"
 echo "5. 编辑 backend/.env 填入实际配置"
 echo "6. 安装依赖: cd backend && pip install -r requirements.txt"
 echo "7. 启动应用: uvicorn main:app --host 0.0.0.0 --port 8000"
