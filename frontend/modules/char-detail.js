@@ -85,13 +85,13 @@
 
      // 已登录：查询该角色有多少条开场白选项
      API.getGreetings(pendingChar.id).then(result => {
-       const greetings = result?.greetings || [];
-       if (greetings.length > 1) {
-         GreetingSelect.open(pendingChar, greetings);
-       } else {
-         Chat.enterChat(pendingChar);
-       }
-     }).catch(() => {
+      const greetings = result?.greetings || [];
+      if (greetings.length > 1) {
+        GreetingSelect.open(pendingChar, greetings);
+      } else {
+        Chat.enterChat(pendingChar);
+      }
+    }).catch(() => {
        Chat.enterChat(pendingChar);
      });
    }
