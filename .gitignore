@@ -52,3 +52,10 @@ Thumbs.db
 # 日志
 logs/
 *.log
+
+# Playwright 测试临时产物
+.playwright-cli/
+
+# 用户上传的头像（运行时生成）
+avatars/
+!avatars/.gitkeep

@@ -48,7 +48,7 @@
               此后重启服务不再更新展示字段（import_locked 机制保护）
 
         ↓ AI 分析阶段（自动化，一次性）
-        工具：python card_analyze.py [--name 角色名]
+        工具：python cli/card_analyze.py [--name 角色名]
         产出：subtitle（简介）/ tags（标签）/ opening_message（开场白）
         写入：import_locked=1，之后 PNG 重导入不再覆盖
 
@@ -354,24 +354,24 @@ PNG 卡内嵌了 JSON 数据，可用 `card_asset_parser.py` 自动解析。
 
 ### 新增角色完整流程
 
-#### 步骤 1：用 card_import.py 手动导入指定 PNG
+#### 步骤 1：用 cli/card_import.py 手动导入指定 PNG
 
 ```bash
 cd aifriend/backend
 source .venv/bin/activate
 
 # 预览解析结果（不写库）
-python card_import.py --dry-run --path /path/to/新角色.png
+python cli/card_import.py --dry-run --path /path/to/新角色.png
 
 # 确认没问题后，正式导入
-python card_import.py --path /path/to/新角色.png
+python cli/card_import.py --path /path/to/新角色.png
 
 # 查看当前数据库里有哪些角色
-python card_import.py --list
+python cli/card_import.py --list
 ```
 
 > ⚠️ 不要直接把 PNG 扔进 `角色卡/` 目录期望系统自动导入——系统不会自动扫描目录。
-> 每次导入都必须手动执行 `card_import.py`，这是有意为之，保证数据库里只有精品。
+> 每次导入都必须手动执行 `cli/card_import.py`，这是有意为之，保证数据库里只有精品。
 
 ---
 
@@ -382,13 +382,13 @@ cd aifriend/backend
 source .venv/bin/activate
 
 # 分析指定角色（模糊匹配名称）
-python card_analyze.py --name "新角色名"
+python cli/card_analyze.py --name "新角色名"
 
 # 分析所有未锁定的角色（import_locked=0 的全部跑一遍）
-python card_analyze.py
+python cli/card_analyze.py
 
 # 先查看哪些卡还没分析
-python card_analyze.py --list
+python cli/card_analyze.py --list
 ```
 
 AI 会自动读取 `raw_card_json`，生成：

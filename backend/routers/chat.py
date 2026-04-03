@@ -23,6 +23,7 @@ from __future__ import annotations
 
 # 标准库导入
 import os
+import time
 from typing import Any
 
 # 第三方库导入
@@ -72,6 +73,55 @@ from services.memory_service import (
 
 
 router = APIRouter()
+
+
+SSE_STREAM_TIMEOUT = 120
+
+
+def _stream_ai_completion(stream_messages: list, ai_config: dict):
+    """
+    公共 AI 流式调用生成器。
+    
+    消除 chat_stream / guest_stream / regenerate / continue 四处重复的流式循环代码。
+    依次 yield SSE chunk 事件，最后返回 (final_reply_raw, error_msg) 元组。
+    
+    用法:
+        for sse_event in _stream_ai_completion(messages, config):
+            yield sse_event  # chunk 或 error 事件
+        # 循环结束后，final_reply 已就绪
+    """
+    full_reply = ""
+    stream_state = {"buffer": "", "in_think": False}
+    _stream_start = time.monotonic()
+
+    try:
+        for chunk in stream_chat_completion(
+            stream_messages,
+            ai_config,
+            max_tokens=AI_CHAT_MAX_OUTPUT_TOKENS,
+        ):
+            if time.monotonic() - _stream_start > SSE_STREAM_TIMEOUT:
+                raise TimeoutError(f"SSE 流式响应超时（{SSE_STREAM_TIMEOUT}秒）")
+            visible_chunk = sanitize_stream_chunk(chunk, stream_state)
+            if not visible_chunk:
+                continue
+            full_reply += visible_chunk
+            yield format_sse("chunk", {"text": visible_chunk})
+
+        if stream_state.get("buffer") and not stream_state.get("in_think"):
+            tail = stream_state["buffer"]
+            if tail:
+                full_reply += tail
+                yield format_sse("chunk", {"text": tail})
+
+        final_reply_raw = normalize_reply_text(full_reply)
+        if not final_reply_raw:
+            raise RuntimeError("模型返回了空内容")
+
+        return final_reply_raw, None
+
+    except Exception as e:
+        return full_reply, str(e)
 
 
 def _build_guest_fallback_messages(character: dict, user_message: str) -> list[dict]:
@@ -211,14 +261,15 @@ def _persist_stream_result(
     delta: dict[str, Any] | None,
     user_message: str | None = None,  # 新增：用户消息内容
 ) -> dict[str, Any]:
-    """统一落库用户消息、流式回复、消耗日志和角色状态，任一步失败都整体回滚。"""
+    """统一落库用户消息、流式回复、消耗日志和角色状态，任一步失败都整体回滚。返回包含 character_state 和 message_id 的字典。"""
     save_conn = get_conn()
+    message_id = None
     try:
         # 先写用户消息（如果提供了）
         if user_message:
             store_user_message(save_conn, user_id, character_id, user_message, commit=False)
-        # 再写 AI 回复
-        save_assistant_message(save_conn, user_id, character_id, final_reply, commit=False)
+        # 再写 AI 回复（获取 message_id）
+        message_id = save_assistant_message(save_conn, user_id, character_id, final_reply, commit=False)
         actual_output_tokens = estimate_text_tokens(final_reply)
         log_ai_request(
             save_conn,
@@ -245,7 +296,9 @@ def _persist_stream_result(
         else:
             raw_state = get_character_state(save_conn, user_id, character_id)
         save_conn.commit()
-        return {k: v for k, v in raw_state.items() if not k.startswith("_")}
+        result = {k: v for k, v in raw_state.items() if not k.startswith("_")}
+        result["message_id"] = message_id
+        return result
     except Exception:
         save_conn.rollback()
         raise
@@ -495,33 +548,22 @@ def chat_stream(
     _ai_config = ai_config
 
     def event_generator():
-        full_reply = ""
-        stream_state = {"buffer": "", "in_think": False}
-        stream_error: str | None = None
+        stream_gen = _stream_ai_completion(stream_messages, _ai_config)
+        final_reply_raw = None
+        stream_error = None
 
         try:
-            for chunk in stream_chat_completion(
-                stream_messages,
-                _ai_config,
-                max_tokens=AI_CHAT_MAX_OUTPUT_TOKENS,
-            ):
-                visible_chunk = sanitize_stream_chunk(chunk, stream_state)
-                if not visible_chunk:
-                    continue
-                full_reply += visible_chunk
-                yield format_sse("chunk", {"text": visible_chunk})
+            while True:
+                result = next(stream_gen)
+                if isinstance(result, tuple):
+                    final_reply_raw, stream_error = result
+                    break
+                yield result
+        except StopIteration as _si:
+            if isinstance(_si.value, tuple):
+                final_reply_raw, stream_error = _si.value
 
-            if stream_state.get("buffer") and not stream_state.get("in_think"):
-                tail = stream_state["buffer"]
-                if tail:
-                    full_reply += tail
-                    yield format_sse("chunk", {"text": tail})
-
-            final_reply_raw = normalize_reply_text(full_reply)
-            if not final_reply_raw:
-                raise RuntimeError("模型返回了空内容")
-        except Exception as e:
-            stream_error = str(e)
+        if stream_error:
             _rollback_latest_user_message(_user_id, _character_id)
             _log_chat_failure(
                 user_id=_user_id,
@@ -530,9 +572,8 @@ def chat_stream(
                 endpoint="/api/chat/stream",
                 estimate=_estimate,
                 error_detail=stream_error,
-                estimated_output_tokens=estimate_text_tokens(full_reply),
+                estimated_output_tokens=estimate_text_tokens(final_reply_raw or ""),
             )
-            # 告知前端发生了网络错误，不要显示任何 mock 内容
             yield format_sse("error", {"message": "网络波动，请稍后再试"})
             return
 
@@ -564,13 +605,14 @@ def chat_stream(
             return
 
         # 后台异步触发记忆摘要
-        run_memory_summary_background(_user_id, _character_id, _character_dict)
+        run_memory_summary_background(_user_id, _character_id, _character)
 
         yield format_sse("done", {
             "reply": final_reply,
             "fallback": False,
             "summary_enabled": True,
-            "character_state": new_state,
+            "character_state": {k: v for k, v in new_state.items() if k != "message_id"},
+            "message_id": new_state.get("message_id"),
         })
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -661,40 +703,31 @@ def chat_guest_stream(payload: GuestChatPayload, request: Request) -> StreamingR
     stream_messages = _build_guest_messages()
 
     def event_generator():
-        full_reply = ""
-        stream_state = {"buffer": "", "in_think": False}
+        stream_gen = _stream_ai_completion(stream_messages, _ai_config)
+        final_reply_raw = None
+        stream_error = None
+
         try:
-            for chunk in stream_chat_completion(
-                stream_messages,
-                _ai_config,
-                max_tokens=AI_CHAT_MAX_OUTPUT_TOKENS,
-            ):
-                visible_chunk = sanitize_stream_chunk(chunk, stream_state)
-                if not visible_chunk:
-                    continue
-                full_reply += visible_chunk
-                yield format_sse("chunk", {"text": visible_chunk})
+            while True:
+                result = next(stream_gen)
+                if isinstance(result, tuple):
+                    final_reply_raw, stream_error = result
+                    break
+                yield result
+        except StopIteration as _si:
+            if isinstance(_si.value, tuple):
+                final_reply_raw, stream_error = _si.value
 
-            if stream_state.get("buffer") and not stream_state.get("in_think"):
-                tail = stream_state["buffer"]
-                if tail:
-                    full_reply += tail
-                    yield format_sse("chunk", {"text": tail})
-
-            final_reply_raw = normalize_reply_text(full_reply)
-            if not final_reply_raw:
-                raise RuntimeError("模型返回了空内容")
-        except Exception as e:
+        if stream_error:
             _log_chat_failure(
                 user_id=None,
                 guest_ip=_guest_ip,
                 character_id=payload.character_id,
                 endpoint="/api/chat/guest-stream",
                 estimate=_estimate,
-                error_detail=str(e),
-                estimated_output_tokens=estimate_text_tokens(full_reply),
+                error_detail=stream_error,
+                estimated_output_tokens=estimate_text_tokens(final_reply_raw or ""),
             )
-            # 游客接口：AI 失败时告知前端，不走 mock
             yield format_sse("error", {"message": "网络波动，请稍后再试"})
             return
 
@@ -724,6 +757,462 @@ def chat_guest_stream(payload: GuestChatPayload, request: Request) -> StreamingR
             "reply": final_reply,
             "fallback": False,
             "guest": True,
+        })
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+# ============================================================
+# Regenerate / Continue 功能 - 新增端点
+# ============================================================
+
+from models import RegeneratePayload, ContinuePayload
+from services.chat_service import (
+    get_message_for_regenerate_or_continue,
+    save_regenerated_version,
+    prepare_regenerate_context,
+    prepare_continue_context,
+    get_character_or_404,
+    get_linked_assets,
+)
+from prompt_assembler import build_layered_chat_messages
+from services.memory_service import (
+    normalize_reply_text,
+    parse_state_update_tag,
+    sanitize_stream_chunk,
+)
+
+
+@router.post("/chat/regenerate")
+def chat_regenerate(
+    payload: RegeneratePayload,
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """
+    重新生成 AI 回复（流式 SSE）。
+    
+    用户对当前 AI 回复不满意时，点击"重新生成"按钮调用此接口。
+    
+    特点：
+    - 上下文完全不变（使用相同的历史消息）
+    - 保留旧版本到 versions 字段
+    - 流式输出新回复（和 /chat/stream 相同的 SSE 格式）
+    - 更新角色状态（解析 STATE_UPDATE）
+    
+    请求体：
+        {"message_id": 123}
+    
+    响应：SSE 流式
+        event: chunk → {"text": "..."}
+        event: done  → {"reply": "...", "character_state": {...}, "version_index": N}
+        event: error → {"message": "..."}
+    """
+    enforce_rate_limit(
+        "chat_user",
+        str(user.id),
+        limit=CHAT_RATE_LIMIT_COUNT,
+        window_seconds=CHAT_RATE_LIMIT_WINDOW_SECONDS,
+        detail="操作过于频繁",
+    )
+
+    conn = get_conn()
+    try:
+        guest_ip = get_request_client_ip(request)
+        
+        # 1. 获取目标消息和上下文
+        msg_row, _raw_recent, character_id = get_message_for_regenerate_or_continue(
+            conn, user.id, payload.message_id, operation="regenerate"
+        )
+
+        _all_rows = conn.execute(
+            """SELECT id, role, content, created_at FROM chat_messages
+               WHERE user_id = %s AND character_id = %s
+               ORDER BY created_at ASC, id ASC""",
+            (user.id, character_id),
+        ).fetchall()
+        _chronological = [
+            {"id": str(r["id"]), "role": r["role"], "content": r["content"]}
+            for r in _all_rows
+        ]
+        _target_idx = None
+        for _ri, _rm in enumerate(_chronological):
+            if _rm["id"] == str(payload.message_id):
+                _target_idx = _ri
+                break
+
+        if _target_idx is not None:
+            recent_messages = _chronological[:_target_idx]
+        else:
+            recent_messages = _raw_recent
+
+        while recent_messages and recent_messages[-1].get("role") == "assistant":
+            recent_messages.pop()
+        if not recent_messages and _raw_recent:
+            recent_messages = [_raw_recent[0]]
+
+        # 2. 准备聊天上下文
+        plan_policy = get_plan_policy(user.effective_plan)
+        ai_config = get_ai_config(os.environ, profile=plan_policy["model_profile"])
+        
+        character, memory_summary, _, related_assets = prepare_regenerate_context(
+            conn, user.id, character_id, recent_messages, viewer_plan=user.effective_plan
+        )
+        
+        # 获取角色状态
+        character_state = get_character_state(conn, user.id, character_id)
+        
+        # 3. 构建 Prompt（使用原始历史消息，不包含当前 AI 回复）
+        stream_messages = build_layered_chat_messages(
+            character, recent_messages, memory_summary,
+            related_assets=related_assets, user_name=user.nickname,
+            character_state=character_state,
+        )
+
+        # 4. Token 预算检查
+        estimate = estimate_messages_tokens(stream_messages)
+        planned_tokens = estimate["tokens"] + AI_CHAT_MAX_OUTPUT_TOKENS
+        enforce_daily_budget(
+            conn,
+            user_id=user.id,
+            planned_tokens=planned_tokens,
+            token_limit=plan_policy["token_limit"],
+            token_limit_detail="你今天的 AI 使用额度已达上限，请明天再来",
+        )
+    finally:
+        conn.close()
+
+    _user_id = user.id
+    _character_id = character_id
+    _message_id = payload.message_id
+    _character = character
+    _guest_ip = guest_ip
+    _estimate = estimate
+    _ai_config = ai_config
+
+    def event_generator():
+        stream_gen = _stream_ai_completion(stream_messages, _ai_config)
+        final_reply_raw = None
+        stream_error = None
+
+        try:
+            while True:
+                result = next(stream_gen)
+                if isinstance(result, tuple):
+                    final_reply_raw, stream_error = result
+                    break
+                yield result
+        except StopIteration as _si:
+            if isinstance(_si.value, tuple):
+                final_reply_raw, stream_error = _si.value
+
+        if stream_error:
+            _log_chat_failure(
+                user_id=_user_id,
+                guest_ip=_guest_ip,
+                character_id=_character_id,
+                endpoint="/api/chat/regenerate",
+                estimate=_estimate,
+                error_detail=stream_error,
+                estimated_output_tokens=estimate_text_tokens(final_reply_raw or ""),
+            )
+            yield format_sse("error", {"message": "网络波动，请稍后再试"})
+            return
+
+        # 解析状态增量
+        final_reply, delta = parse_state_update_tag(final_reply_raw)
+
+        try:
+            # 保存到数据库（含版本管理）
+            save_conn = get_conn()
+            try:
+                # 保存新生成的版本
+                save_regenerated_version(
+                    save_conn, _message_id, final_reply, is_append=False, commit=False
+                )
+                
+                # 记录请求日志
+                actual_output_tokens = estimate_text_tokens(final_reply)
+                log_ai_request(
+                    save_conn,
+                    user_id=_user_id,
+                    guest_ip=_guest_ip,
+                    character_id=_character_id,
+                    endpoint="/api/chat/regenerate",
+                    request_chars=_estimate["chars"],
+                    estimated_input_tokens=_estimate["tokens"],
+                    estimated_output_tokens=actual_output_tokens,
+                    total_estimated_tokens=_estimate["tokens"] + actual_output_tokens,
+                    used_fallback=False,
+                    status="success",
+                    commit=False,
+                )
+                
+                # 应用状态增量
+                new_state = None
+                if delta:
+                    new_state = apply_state_delta(
+                        save_conn, _user_id, _character_id, delta, commit=False
+                    )
+                
+                save_conn.commit()
+                
+                if new_state:
+                    raw_state = {k: v for k, v in new_state.items() if not k.startswith("_")}
+                else:
+                    raw_state = get_character_state(save_conn, _user_id, _character_id)
+                    raw_state = {k: v for k, v in raw_state.items() if not k.startswith("_")}
+                    
+            except Exception as exc:
+                save_conn.rollback()
+                _log_chat_failure(
+                    user_id=_user_id,
+                    guest_ip=_guest_ip,
+                    character_id=_character_id,
+                    endpoint="/api/chat/regenerate",
+                    estimate=_estimate,
+                    error_detail=f"persist_failed: {exc}",
+                    estimated_output_tokens=estimate_text_tokens(final_reply),
+                )
+                yield format_sse("error", {"message": "消息保存失败，请稍后再试"})
+                return
+            finally:
+                save_conn.close()
+        except Exception as _regen_outer_exc:
+            import logging as _regen_log
+            _regen_log.getLogger(__name__).warning(f"[regenerate] outer error before done: {_regen_outer_exc}", exc_info=True)
+            yield format_sse("error", {"message": "保存失败，请稍后再试"})
+            return
+
+        # 后台异步触发记忆摘要
+        run_memory_summary_background(_user_id, _character_id, _character)
+
+        yield format_sse("done", {
+            "reply": final_reply,
+            "fallback": False,
+            "summary_enabled": True,
+            "character_state": raw_state,
+            "message_id": _message_id,
+            "operation": "regenerate",
+        })
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/chat/continue")
+def chat_continue(
+    payload: ContinuePayload,
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """
+    继续（追加）生成 AI 回复（流式 SSE）。
+    
+    当 AI 回复太短或被截断时，用户点击"继续"按钮追加内容。
+    
+    特点：
+    - 在当前回复末尾追加新内容
+    - 保留所有历史版本
+    - 流式输出追加的内容
+    
+    请求体：
+        {"message_id": 123}
+    
+    响应：SSE 流式
+        event: chunk → {"text": "..."}
+        event: done  → {"reply": "完整回复（原+新）", "character_state": {...}, "appended_text": "新增部分"}
+        event: error → {"message": "..."}
+    """
+    enforce_rate_limit(
+        "chat_user",
+        str(user.id),
+        limit=CHAT_RATE_LIMIT_COUNT,
+        window_seconds=CHAT_RATE_LIMIT_WINDOW_SECONDS,
+        detail="操作过于频繁",
+    )
+
+    conn = get_conn()
+    try:
+        guest_ip = get_request_client_ip(request)
+
+        # 1. 获取目标消息和上下文（使用时间排序，与 regenerate 保持一致）
+        msg_row, _raw_recent, character_id = get_message_for_regenerate_or_continue(
+            conn, user.id, payload.message_id, operation="continue"
+        )
+
+        _all_rows = conn.execute(
+            """SELECT id, role, content, created_at FROM chat_messages
+               WHERE user_id = %s AND character_id = %s
+               ORDER BY created_at ASC, id ASC""",
+            (user.id, character_id),
+        ).fetchall()
+        _chronological = [
+            {"id": str(r["id"]), "role": r["role"], "content": r["content"]}
+            for r in _all_rows
+        ]
+        _target_idx = None
+        for _ri, _rm in enumerate(_chronological):
+            if _rm["id"] == str(payload.message_id):
+                _target_idx = _ri
+                break
+
+        if _target_idx is not None:
+            recent_messages = _chronological[:_target_idx]
+        else:
+            recent_messages = _raw_recent
+
+        while recent_messages and recent_messages[-1].get("role") == "assistant":
+            recent_messages.pop()
+        if not recent_messages and _raw_recent:
+            recent_messages = [_raw_recent[0]]
+
+        current_content = msg_row["content"] or ""
+        
+        # 2. 准备聊天上下文（特殊：包含当前回复+继续指令）
+        plan_policy = get_plan_policy(user.effective_plan)
+        ai_config = get_ai_config(os.environ, profile=plan_policy["model_profile"])
+        
+        character, memory_summary, continue_messages, related_assets = prepare_continue_context(
+            conn, user.id, character_id, payload.message_id,
+            current_content, recent_messages, viewer_plan=user.effective_plan
+        )
+        
+        # 获取角色状态
+        character_state = get_character_state(conn, user.id, character_id)
+        
+        # 3. 构建 Prompt（包含当前回复和继续指令）
+        stream_messages = build_layered_chat_messages(
+            character, continue_messages, memory_summary,
+            related_assets=related_assets, user_name=user.nickname,
+            character_state=character_state,
+        )
+        
+        # 4. Token 预算检查
+        estimate = estimate_messages_tokens(stream_messages)
+        planned_tokens = estimate["tokens"] + AI_CHAT_MAX_OUTPUT_TOKENS
+        enforce_daily_budget(
+            conn,
+            user_id=user.id,
+            planned_tokens=planned_tokens,
+            token_limit=plan_policy["token_limit"],
+            token_limit_detail="你今天的 AI 使用额度已达上限，请明天再来",
+        )
+    finally:
+        conn.close()
+
+    _user_id = user.id
+    _character_id = character_id
+    _message_id = payload.message_id
+    _current_content = current_content
+    _character = character
+    _guest_ip = guest_ip
+    _estimate = estimate
+    _ai_config = ai_config
+
+    def event_generator():
+        stream_gen = _stream_ai_completion(stream_messages, _ai_config)
+        final_appended_raw = None
+        stream_error = None
+
+        try:
+            while True:
+                result = next(stream_gen)
+                if isinstance(result, tuple):
+                    final_appended_raw, stream_error = result
+                    break
+                yield result
+        except StopIteration as _si:
+            if isinstance(_si.value, tuple):
+                final_appended_raw, stream_error = _si.value
+
+        if stream_error:
+            _log_chat_failure(
+                user_id=_user_id,
+                guest_ip=_guest_ip,
+                character_id=_character_id,
+                endpoint="/api/chat/continue",
+                estimate=_estimate,
+                error_detail=stream_error,
+                estimated_output_tokens=estimate_text_tokens(final_appended_raw or ""),
+            )
+            yield format_sse("error", {"message": "网络波动，请稍后再试"})
+            return
+
+        # 解析状态增量（从追加的部分解析）
+        final_appended, delta = parse_state_update_tag(final_appended_raw)
+
+        try:
+            save_conn = get_conn()
+            try:
+                # 保存追加后的完整版本
+                save_regenerated_version(
+                    save_conn, _message_id, final_appended, is_append=True, commit=False
+                )
+                
+                # 记录请求日志
+                actual_output_tokens = estimate_text_tokens(final_appended)
+                log_ai_request(
+                    save_conn,
+                    user_id=_user_id,
+                    guest_ip=_guest_ip,
+                    character_id=_character_id,
+                    endpoint="/api/chat/continue",
+                    request_chars=_estimate["chars"],
+                    estimated_input_tokens=_estimate["tokens"],
+                    estimated_output_tokens=actual_output_tokens,
+                    total_estimated_tokens=_estimate["tokens"] + actual_output_tokens,
+                    used_fallback=False,
+                    status="success",
+                    commit=False,
+                )
+                
+                # 应用状态增量
+                new_state = None
+                if delta:
+                    new_state = apply_state_delta(
+                        save_conn, _user_id, _character_id, delta, commit=False
+                    )
+                
+                save_conn.commit()
+                
+                if new_state:
+                    raw_state = {k: v for k, v in new_state.items() if not k.startswith("_")}
+                else:
+                    raw_state = get_character_state(save_conn, _user_id, _character_id)
+                    raw_state = {k: v for k, v in raw_state.items() if not k.startswith("_")}
+                    
+            except Exception as exc:
+                save_conn.rollback()
+                _log_chat_failure(
+                    user_id=_user_id,
+                    guest_ip=_guest_ip,
+                    character_id=_character_id,
+                    endpoint="/api/chat/continue",
+                    estimate=_estimate,
+                    error_detail=f"persist_failed: {exc}",
+                    estimated_output_tokens=estimate_text_tokens(final_appended),
+                )
+                yield format_sse("error", {"message": "保存失败，请稍后再试"})
+                return
+            finally:
+                save_conn.close()
+        except Exception as _cont_outer_exc:
+            import logging as _cont_log
+            _cont_log.getLogger(__name__).warning(f"[continue] outer error before done: {_cont_outer_exc}", exc_info=True)
+            yield format_sse("error", {"message": "保存失败，请稍后再试"})
+            return
+
+        # 计算完整的回复内容（原始 + 追加）
+        full_reply = _current_content + final_appended
+
+        yield format_sse("done", {
+            "reply": full_reply,
+            "fallback": False,
+            "summary_enabled": True,
+            "character_state": raw_state,
+            "message_id": _message_id,
+            "operation": "continue",
+            "appended_text": final_appended,
         })
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 # ── 路径设置 ────────────────────────────────────────────────────────────────
-BASE_DIR = Path(__file__).parent
+BASE_DIR = Path(__file__).parent.parent  # cli/ → backend/
 
 # 把 backend/ 加入模块搜索路径
 sys.path.insert(0, str(BASE_DIR))

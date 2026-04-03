@@ -277,9 +277,24 @@ pip3 install -r requirements.txt
 5. 点击 **Run** 执行
 6. 如果成功，会显示 "Success. No rows returned"
 
+### 4.6 创建运行时目录
+
+应用需要以下运行时目录（存放用户上传的头像）：
+
+```bash
+# 创建头像目录
+mkdir -p /opt/aifriend/avatars
+
+# 创建占位文件（保持目录被 Git 跟踪）
+touch /opt/aifriend/avatars/.gitkeep
+
+# 确保应用有读写权限
+chmod 755 /opt/aifriend/avatars
+```
+
 > 如果本地已有角色数据需要迁移，请参考 Supabase 控制台的数据导入功能。
 
-### 4.6 创建系统服务
+### 4.7 创建系统服务
 
 1. 在 1Panel 终端执行：
 
@@ -350,6 +365,12 @@ systemctl status aifriend
 location / {
     root /opt/aifriend;
     try_files $uri $uri/ /index.html;
+}
+
+# 用户头像（静态目录）
+location /avatars {
+    alias /opt/aifriend/avatars;
+    expires 7d;
 }
 
 # API 代理

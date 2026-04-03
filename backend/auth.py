@@ -277,6 +277,48 @@ def delete_token(token: str, *, commit: bool = True) -> int:
         conn.close()
 
 
+_SLIDING_EXTEND_THRESHOLD = timedelta(days=7)
+
+
+def _sliding_extend_token(conn, token_hash: str, expires_at_str: str | None, now: datetime) -> None:
+    """
+    Token 滑动续期：当 token 剩余有效期不足阈值时，自动延长至 TOKEN_EXPIRE_DAYS。
+
+    仅在以下条件同时满足时执行续期：
+      1. token 有明确的过期时间（非 NULL）
+      2. 距离过期不足 _SLIDING_EXTEND_THRESHOLD（7 天）
+
+    续期操作是幂等的（重复调用不会产生副作用），
+    且使用独立的数据库连接，不影响主查询的事务上下文。
+    """
+    if not expires_at_str:
+        return
+    try:
+        expires_at = datetime.fromisoformat(expires_at_str)
+        if (expires_at - now) > _SLIDING_EXTEND_THRESHOLD:
+            return
+    except (ValueError, TypeError):
+        return
+
+    new_expires = (now + timedelta(days=TOKEN_EXPIRE_DAYS)).isoformat()
+    extend_conn = None
+    try:
+        extend_conn = get_conn()
+        extend_conn.execute(
+            "UPDATE auth_tokens SET expires_at = %s WHERE token = %s",
+            (new_expires, token_hash),
+        )
+        extend_conn.commit()
+    except Exception:
+        pass
+    finally:
+        if extend_conn is not None:
+            try:
+                extend_conn.close()
+            except Exception:
+                pass
+
+
 # ============================================================
 # FastAPI 依赖注入
 # ============================================================
@@ -322,7 +364,8 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> Curre
             """
             SELECT users.id, users.email, COALESCE(users.nickname, '') AS nickname,
                    COALESCE(users.plan_type, 'free') AS plan_type,
-                   COALESCE(CAST(users.plan_expires_at AS VARCHAR), '') AS plan_expires_at
+                   COALESCE(CAST(users.plan_expires_at AS VARCHAR), '') AS plan_expires_at,
+                   auth_tokens.expires_at
             FROM auth_tokens
             JOIN users ON users.id = auth_tokens.user_id
             WHERE auth_tokens.token = %s
@@ -338,7 +381,8 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> Curre
     if not row:
         return None
 
-    # 步骤 4：构造 CurrentUser（如果 nickname 为空，使用邮箱前缀）
+    _sliding_extend_token(conn, token_hash, row["expires_at"], datetime.now(timezone.utc))
+
     nickname = row["nickname"] or row["email"].split("@")[0]
     plan_info = serialize_plan_info(row["plan_type"], row["plan_expires_at"])
     return CurrentUser(

@@ -107,6 +107,7 @@ def get_greeting_for_phase(
     """
     # 1. 尝试从多阶段开场白表中获取
     # 如果提供了 storyline_id，优先匹配该剧情线的开场白
+    row = None
     if storyline_id:
         # 将 storyline_id 转为字符串，与数据库 TEXT 类型保持一致
         storyline_id_str = str(storyline_id)
@@ -258,14 +259,15 @@ def save_assistant_message(
     reply: str,
     *,
     commit: bool = True,
-) -> None:
-    """保存 AI 助手的回复到数据库。"""
-    conn.execute(
-        "INSERT INTO chat_messages(user_id, character_id, role, content, created_at) VALUES (%s, %s, 'assistant', %s, %s)",
+) -> int:
+    """保存 AI 助手的回复到数据库。返回新消息的 ID。"""
+    row = conn.execute(
+        "INSERT INTO chat_messages(user_id, character_id, role, content, created_at) VALUES (%s, %s, 'assistant', %s, %s) RETURNING id",
         (user_id, character_id, reply, utc_now_iso()),
-    )
+    ).fetchone()
     if commit:
         conn.commit()
+    return row["id"] if row else None
 
 
 def store_user_message(
@@ -411,3 +413,206 @@ def format_sse(event: str, data: dict[str, Any]) -> str:
         
     """
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+# ============================================================
+# Regenerate / Continue 功能 - 核心业务逻辑
+# ============================================================
+
+def get_message_for_regenerate_or_continue(
+    conn: Any,
+    user_id: int,
+    message_id: int,
+    operation: str = "regenerate",
+) -> tuple[dict[str, Any], list[dict[str, str]], str]:
+    """
+    获取要 regenerate/continue 的消息及其上下文。
+    
+    参数：
+        conn: 数据库连接
+        user_id: 当前用户 ID
+        message_id: 目标 AI 消息 ID
+        operation: 操作类型 'regenerate' 或 'continue'
+    
+    返回：
+        (message_row, recent_messages, character_id)
+        message_row: 目标 AI 消息的数据库行
+        recent_messages: 该消息之前的所有历史消息（用于构建上下文）
+        character_id: 角色 ID
+    
+    异常：
+        HTTPException 404: 消息不存在或不属于当前用户
+        HTTPException 400: 消息不是 assistant 类型
+    """
+    from fastapi import HTTPException
+    
+    # 1. 查询目标消息
+    row = conn.execute(
+        """SELECT * FROM chat_messages 
+           WHERE id = %s AND user_id = %s AND role = 'assistant'""",
+        (message_id, user_id),
+    ).fetchone()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="消息不存在或无权操作")
+    
+    character_id = row["character_id"]
+    
+    # 2. 获取该消息之前的所有历史消息（不包括目标消息本身）
+    #    这样可以保证 regenerate 时上下文完全一致
+    history_rows = conn.execute(
+        """SELECT role, content, created_at 
+           FROM chat_messages 
+           WHERE user_id = %s AND character_id = %s AND id < %s
+           ORDER BY id ASC""",
+        (user_id, character_id, message_id),
+    ).fetchall()
+    
+    recent_messages = [
+        {"role": r["role"], "content": r["content"]}
+        for r in history_rows
+    ]
+    
+    return dict(row), recent_messages, character_id
+
+
+def save_regenerated_version(
+    conn: Any,
+    message_id: str,
+    new_content: str,
+    *,
+    is_append: bool = False,
+    commit: bool = True,
+) -> None:
+    """
+    保存新生成的内容，仅保留最终版本到数据库。
+
+    策略：不累积历史版本。每次 regenerate/continue 只保存最终结果。
+
+    参数：
+        conn: 数据库连接
+        message_id: 目标消息 ID (UUID)
+        new_content: 新生成的内容（regenerate=完整替换, continue=追加部分）
+        is_append: True 表示 continue（追加），False 表示 regenerate（替换）
+        commit: 是否立即提交事务
+    """
+    from config import utc_now_iso
+
+    try:
+        current_row = conn.execute(
+            "SELECT content FROM chat_messages WHERE id = %s",
+            (message_id,),
+        ).fetchone()
+
+        if not current_row:
+            raise ValueError(f"消息 {message_id} 不存在")
+
+        import json as _json
+        now = utc_now_iso()
+
+        if is_append:
+            base_content = current_row["content"] or ""
+            final_content = base_content + new_content
+        else:
+            final_content = new_content
+
+        versions = [{
+            "content": final_content,
+            "created_at": now,
+            "operation": "continue" if is_append else "regenerate",
+        }]
+
+        conn.execute(
+            """UPDATE chat_messages
+               SET content = %s,
+                   versions = %s::jsonb,
+                   current_version_index = 0,
+                   updated_at = %s
+               WHERE id = %s""",
+            (final_content, _json.dumps(versions, ensure_ascii=False), now, message_id),
+        )
+    except Exception as e:
+        import logging
+        logging.warning(f"版本保存失败，降级为仅更新内容: {e}")
+        now = utc_now_iso()
+
+        if is_append:
+            row = conn.execute(
+                "SELECT content FROM chat_messages WHERE id = %s", (message_id,)
+            ).fetchone()
+            final_content = (row["content"] or "") + new_content if row else new_content
+        else:
+            final_content = new_content
+
+        conn.execute(
+            """UPDATE chat_messages
+               SET content = %s, updated_at = %s
+               WHERE id = %s""",
+            (final_content, now, message_id),
+        )
+
+    if commit:
+        conn.commit()
+
+    if commit:
+        conn.commit()
+
+
+def prepare_regenerate_context(
+    conn: Any,
+    user_id: int,
+    character_id: str,
+    recent_messages: list[dict[str, str]],
+    viewer_plan: str | None = None,
+) -> tuple[Any, str, list[dict[str, str]], str]:
+    """
+    为 regenerate 准备完整的聊天上下文（复用 prepare_chat_context 逻辑）。
+    
+    返回：
+        (character, memory_summary, recent_messages_with_memory, related_assets)
+    """
+    character = get_character_or_404(conn, character_id, viewer_plan=viewer_plan)
+    
+    # 读取记忆摘要
+    memory_summary = get_summary_for_prompt(conn, user_id, character_id)
+    
+    # 获取关联资产
+    related_assets = get_linked_assets(conn, character_id)
+    
+    return character, memory_summary, recent_messages, related_assets
+
+
+def prepare_continue_context(
+    conn: Any,
+    user_id: int,
+    character_id: str,
+    message_id: int,
+    current_content: str,
+    recent_messages: list[dict[str, str]],
+    viewer_plan: str | None = None,
+) -> tuple[Any, str, list[dict[str, str]], str]:
+    """
+    为 continue 准备上下文：在历史消息中追加一条"继续"指令。
+    
+    Continue 的特殊之处：
+    - 需要把当前 AI 回复作为上下文的一部分
+    - 在末尾追加一个 system/user 提示让 AI 继续生成
+    """
+    character = get_character_or_404(conn, character_id, viewer_plan=viewer_plan)
+    memory_summary = get_summary_for_prompt(conn, user_id, character_id)
+    related_assets = get_linked_assets(conn, character_id)
+    
+    # 构建用于 continue 的消息列表：
+    # 历史消息 + 当前的 assistant 回复 + 继续指令
+    continue_messages = list(recent_messages)
+    continue_messages.append({
+        "role": "assistant",
+        "content": current_content,
+    })
+    # 添加继续生成指令（以 user 角色注入，避免多条 system）
+    continue_messages.append({
+        "role": "user",
+        "content": "【请继续】请接着上面的话继续说下去，保持角色设定和语气，不要重复已说过的内容。直接继续输出即可。",
+    })
+    
+    return character, memory_summary, continue_messages, related_assets

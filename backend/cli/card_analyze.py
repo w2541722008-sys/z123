@@ -40,7 +40,7 @@ import textwrap
 from pathlib import Path
 
 # ── 路径与配置 ────────────────────────────────────────────────────────────────
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent  # cli/ → backend/
 
 # 把 backend/ 加入模块搜索路径
 sys.path.insert(0, str(BASE_DIR))

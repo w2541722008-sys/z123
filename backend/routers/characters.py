@@ -433,7 +433,7 @@ def chat_history(
             SELECT role, content, created_at
             FROM chat_messages
             WHERE user_id = %s AND character_id = %s
-            ORDER BY id ASC
+            ORDER BY created_at ASC
             """,
             (user.id, character_id),
         ).fetchall()

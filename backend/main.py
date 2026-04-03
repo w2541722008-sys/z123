@@ -27,16 +27,19 @@ from __future__ import annotations
 import logging
 import os
 import time
+import uuid
 from pathlib import Path
 
 # 第三方库导入
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-# 本地模块导入
-from config import DATABASE_URL, FRONTEND_DIR, FRONTEND_STATIC_DIR, validate_production_config
+# 项目内部导入
+import config as _cfg
+from auth import get_current_user
+from config import FRONTEND_DIR, FRONTEND_STATIC_DIR, validate_production_config
 from database import get_conn, get_db, init_db_pool, close_db_pool
 
 # 导入路由
@@ -148,7 +151,7 @@ if FRONTEND_STATIC_DIR.exists():
 @app.on_event("startup")
 def on_startup() -> None:
     """应用启动时初始化数据库连接池、验证配置并启动后台清理任务。"""
-    init_db_pool(DATABASE_URL)
+    init_db_pool(_cfg.DATABASE_URL)
     logging.info("✅ 数据库连接池已初始化")
 
     # 启动订单超时清理后台任务（每小时执行一次）
@@ -264,20 +267,26 @@ def health() -> dict[str, str | bool]:
 # ============================================================
 def _resolve_media_response(raw_value: str, *, fallback_path: Path | None = None):
     """把数据库中的图片值解析成可返回的响应。"""
+    import logging
+    _log = logging.getLogger(__name__)
+    
     media_value = (raw_value or "").strip()
 
     if media_value:
-        if media_value.startswith(("http://", "https://", "/frontend/")):
-            return RedirectResponse(media_value)
+        try:
+            if media_value.startswith(("http://", "https://", "/frontend/")):
+                return RedirectResponse(media_value)
 
-        candidate = Path(media_value)
-        if candidate.exists():
-            return FileResponse(candidate)
+            candidate = Path(media_value)
+            if candidate.exists():
+                return FileResponse(candidate)
 
-        if not candidate.is_absolute():
-            project_relative = FRONTEND_DIR / media_value
-            if project_relative.exists():
-                return FileResponse(project_relative)
+            if not candidate.is_absolute():
+                project_relative = FRONTEND_DIR / media_value
+                if project_relative.exists():
+                    return FileResponse(project_relative)
+        except Exception as _media_exc:
+            _log.warning(f"avatar resolve failed for value={media_value[:80]}: {_media_exc}")
 
     if fallback_path and fallback_path.exists():
         return FileResponse(fallback_path)
@@ -337,6 +346,89 @@ def get_cover(character_id: str):
         return _resolve_media_response(cover_value, fallback_path=default_avatar)
     finally:
         conn.close()
+
+
+# ============================================================
+# 用户头像服务
+# ============================================================
+
+AVATARS_DIR = Path(__file__).parent.parent / "avatars"
+AVATARS_DIR.mkdir(exist_ok=True)
+
+_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+_MAX_AVATAR_SIZE = 2 * 1024 * 1024  # 2MB
+_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+@app.post("/api/user/avatar")
+async def upload_user_avatar(
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+):
+    """
+    上传/更换用户头像。
+
+    安全措施：
+    - 文件类型白名单（jpg/png/webp）
+    - 文件大小限制（2MB）
+    - UUID 随机文件名（防止路径遍历和猜测）
+    - MIME 类型 + 扩展名双重校验
+    - 上传前自动清理旧头像文件（防止磁盘膨胀）
+    """
+    if file.content_type not in _ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="仅支持 JPG、PNG、WebP 格式")
+
+    content = await file.read()
+    if len(content) > _MAX_AVATAR_SIZE:
+        raise HTTPException(status_code=400, detail="图片大小不能超过 2MB")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="不支持的文件扩展名")
+
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT avatar_url FROM users WHERE id = %s", (user.id,)
+        ).fetchone()
+        old_avatar_url = row["avatar_url"] if row else None
+
+        filename = f"{uuid.uuid4().hex}{ext}"
+        filepath = AVATARS_DIR / filename
+        filepath.write_bytes(content)
+
+        avatar_url = f"/avatars/{filename}"
+
+        conn.execute(
+            "UPDATE users SET avatar_url = %s, updated_at = NOW() WHERE id = %s",
+            (avatar_url, user.id),
+        )
+
+    if old_avatar_url and old_avatar_url.startswith("/avatars/"):
+        try:
+            old_file = Path(__file__).parent.parent / old_avatar_url.lstrip("/")
+            if old_file.exists() and old_file.is_file():
+                old_file.unlink()
+        except OSError:
+            pass
+
+    return {"avatar_url": avatar_url}
+
+
+@app.get("/api/user/avatar")
+def get_user_avatar(user=Depends(get_current_user)):
+    """获取当前登录用户的头像图片。"""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT avatar_url FROM users WHERE id = %s", (user.id,)
+        ).fetchone()
+        avatar_value = row["avatar_url"] if row else None
+
+    default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
+    return _resolve_media_response(avatar_value or "", fallback_path=default_avatar)
+
+
+# 挂载用户上传的头像目录
+app.mount("/avatars", StaticFiles(directory=str(AVATARS_DIR)), name="avatars")
 
 
 # ============================================================

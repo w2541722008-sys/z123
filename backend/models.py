@@ -329,3 +329,24 @@ class MemoryCategoryPayload(BaseModel):
     description: str = Field(default="", max_length=500)
     color: str = Field(default="#1890FF", max_length=7)
     sort_order: int = Field(default=0)
+
+
+# ============================================================
+# Regenerate / Continue 功能模型
+# ============================================================
+class RegeneratePayload(BaseModel):
+    """
+    重新生成 AI 回复的请求体。
+
+    message_id: 要重新生成的 AI 消息 ID（chat_messages.id，UUID 格式）
+    """
+    message_id: str = Field(min_length=1)
+
+
+class ContinuePayload(BaseModel):
+    """
+    继续（追加）生成 AI 回复的请求体。
+
+    message_id: 要继续生成的 AI 消息 ID（chat_messages.id，UUID 格式）
+    """
+    message_id: str = Field(min_length=1)

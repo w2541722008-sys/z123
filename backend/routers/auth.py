@@ -72,6 +72,7 @@ def _build_user_payload(
     plan_type: str = "free",
     plan_expires_at: str = "",
     is_admin: bool = False,
+    avatar_url: str | None = None,
 ) -> dict[str, Any]:
     """统一构造登录态用户信息返回。"""
     plan_info = serialize_plan_info(plan_type, plan_expires_at)
@@ -80,6 +81,7 @@ def _build_user_payload(
         "email": email,
         "nickname": nickname,
         "is_admin": is_admin,
+        "avatar_url": avatar_url or "",
         **plan_info,
     }
 
@@ -221,7 +223,8 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
             """
             SELECT id, email, password_hash, password_algo, COALESCE(nickname, '') AS nickname,
                    COALESCE(plan_type, 'free') AS plan_type,
-                   COALESCE(CAST(plan_expires_at AS VARCHAR), '') AS plan_expires_at
+                   COALESCE(CAST(plan_expires_at AS VARCHAR), '') AS plan_expires_at,
+                   avatar_url
             FROM users WHERE LOWER(email) = %s
             """,
             (normalized_email,),
@@ -257,6 +260,7 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
                 plan_type=row["plan_type"],
                 plan_expires_at=row["plan_expires_at"],
                 is_admin=_is_admin_email(row["email"]),
+                avatar_url=row.get("avatar_url"),
             ),
         }
     except Exception:
@@ -284,6 +288,7 @@ def auth_me(user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
         plan_type=user.plan_type,
         plan_expires_at=user.plan_expires_at,
         is_admin=user.is_admin,
+        avatar_url=user.avatar_url,
     )
 
 

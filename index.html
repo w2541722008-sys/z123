@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="theme-color" content="#0a0e1a" />
@@ -19,7 +20,7 @@
     aifriend/index.html — 预览版（极简神秘风格）
     ============================================================
   -->
-  <link rel="stylesheet" href="frontend/style.css?v=20260331" />
+  <link rel="stylesheet" href="frontend/style.css?v=20260402v21" />
 </head>
 <body>
   <!-- ============================================================
@@ -146,6 +147,7 @@
 
         <div id="profile-header" class="profile-header" style="display:none">
           <div class="profile-avatar" id="profile-avatar-char">你</div>
+          <input type="file" id="avatar-file-input" accept=".jpg,.jpeg,.png,.webp" style="display:none" />
           <div>
             <div class="profile-name" id="profile-name">用户昵称</div>
             <div class="profile-sub"  id="profile-email">账号信息</div>
@@ -330,8 +332,20 @@
 
 
   <!-- ============================================================
-       JS 逻辑
+       JS 逻辑（模块化加载）
+       加载顺序：基础工具 → 配置 → 工具函数 → API → 主入口 → 认证 → 聊天 → 菜单 → 详情 → 开场白选择 → 初始化
+       注意：utils.js 必须在 chat/auth/char-detail 等模块之前加载（function 声明跨 script 不提升）
   ============================================================ -->
-  <script src="frontend/app.js"></script>
+  <script src="frontend/modules/ui.js?v=3"></script>
+  <script src="frontend/modules/config.js?v=3"></script>
+  <script src="frontend/modules/utils.js?v=3"></script>
+  <script src="frontend/modules/api.js?v=3"></script>
+  <script src="frontend/modules/app.js?v=4"></script>
+  <script src="frontend/modules/auth.js?v=5"></script>
+  <script src="frontend/modules/chat.js?v=24"></script>
+  <script src="frontend/modules/chat-menu.js?v=3"></script>
+  <script src="frontend/modules/char-detail.js?v=3"></script>
+  <script src="frontend/modules/greeting-select.js?v=3"></script>
+  <script src="frontend/modules/init.js?v=3"></script>
 </body>
 </html>

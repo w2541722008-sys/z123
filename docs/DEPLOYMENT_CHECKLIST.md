@@ -47,6 +47,7 @@ python main.py
 - [ ] `.env` 文件已添加到 `.gitignore`（不要提交到 Git）
 - [ ] `backend/data/app_secret.txt` 已添加到 `.gitignore`
 - [ ] 数据库文件 `backend/data/*.db` 已添加到 `.gitignore`
+- [ ] `avatars/` 目录已添加到 `.gitignore`（不提交用户上传的头像文件）
 
 ### 4. 调试功能
 
@@ -105,7 +106,9 @@ python main.py
 
 - [ ] Python 3.10+ 已安装
 - [ ] 依赖包已安装：`pip install -r backend/requirements.txt`
+  - 注意：头像上传功能需要额外安装 `python-multipart`（已包含在 requirements.txt 中）
 - [ ] 防火墙已开放必要端口（如 8000）
+- [ ] `avatars/` 目录已创建且权限正确（应用需要读写权限）
 
 ### 10. 进程管理（推荐）
 

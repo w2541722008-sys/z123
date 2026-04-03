@@ -1,9 +1,0 @@
-- generic [ref=e3]:
-  - generic [ref=e4]: 🔐
-  - heading "管理后台已拦截" [level=1] [ref=e5]
-  - paragraph [ref=e6]: 还没检测到登录令牌。请先在前台登录管理员账号，再进入管理后台。
-  - generic [ref=e7]:
-    - link "返回前台首页" [ref=e8] [cursor=pointer]:
-      - /url: /
-    - button "重新检查权限" [ref=e9] [cursor=pointer]
-  - generic [ref=e10]: 如果你本来就是管理员，请先在前台登录已授权邮箱，然后再回来打开这个页面。

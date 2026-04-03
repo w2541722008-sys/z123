@@ -6,6 +6,30 @@
 
 ## 接口列表
 
+### 0. 用户头像
+**`POST /api/user/avatar`**
+- 上传/更换当前登录用户的头像
+- 请求头：`Authorization: Bearer <token>`
+- 请求体：`multipart/form-data`，字段名 `file`
+- 安全措施：
+  - MIME 白名单：仅允许 `image/jpeg`、`image/png`、`image/webp`
+  - 文件大小限制：2MB
+  - 扩名校验：`.jpg` / `.jpeg` / `.png` / `.webp`
+  - UUID v4 随机文件名（防止路径遍历和猜测）
+- 返回：`{ "avatar_url": "/avatars/uuid.webp" }`
+- 存储路径：项目根目录 `avatars/`（通过 StaticFiles 挂载在 `/avatars`）
+
+**`GET /api/user/avatar`**
+- 获取当前登录用户的头像图片
+- 请求头：`Authorization: Bearer <token>`
+- 返回：用户头像图片（`FileResponse`），或默认头像 `default-avatar.png`
+
+### 静态文件挂载
+
+| 路径 | 说明 |
+|------|------|
+| `/avatars` | 用户上传头像静态目录（StaticFiles） |
+
 ### 1. 注册
 **`POST /auth/register`**
 - 单独注册新用户
@@ -174,6 +198,43 @@
   }
   ```
 
+### 15.2 重新生成 AI 回复
+**`POST /chat/regenerate`**
+- 需要登录（Bearer Token）
+- 请求体：`{ "message_id": "uuid" }`
+- 返回 `text/event-stream`（SSE 流式）
+- **功能**：基于用户最新消息，重新生成 AI 回复，**替换**原 AI 消息内容
+- **上下文构建**：
+  - 获取目标消息之前的所有历史消息（按 `created_at ASC, id ASC` 时间排序）
+  - 自动裁剪末尾连续的 assistant 消息（防止 continue 后的残留影响上下文）
+  - 使用与 `/chat/stream` 相同的 Prompt 组装逻辑
+- **SSE 事件格式**：
+  ```
+  event: chunk → {"type":"chunk","text":"片段"}
+  event: done  → {"type":"done","reply":"完整替换内容","message_id":"uuid","operation":"regenerate","character_state":{...}}
+  event: error → {"type":"error","message":"错误描述"}
+  ```
+- **数据库更新**：流式完成后，更新 `chat_messages.content` 为新内容；`versions` 字段只保留最终版本
+- **权限校验**：message_id 必须属于当前用户且 role=assistant
+
+### 15.3 继续生成（追加内容）
+**`POST /chat/continue`**
+- 需要登录（Bearer Token）
+- 请求体：`{ "message_id": "uuid" }`
+- 返回 `text/event-stream`（SSE 流式）
+- **功能**：在原 AI 回复基础上**追加**新内容（AI 会收到"请继续"指令）
+- **上下文构建**：与 regenerate 类似，但 Prompt 中额外注入"【请继续】"指令
+- **SSE 事件格式**：
+  ```
+  event: chunk → {"type":"chunk","text":"片段"}
+  event: done  → {"type":"done","reply":"原始+追加完整内容","appended_text":"仅新增部分","message_id":"uuid","operation":"continue","character_state":{...}}
+  event: error → {"type":"error","message":"错误描述"}
+  ```
+- **关键字段说明**：
+  - `reply`：拼接后的完整内容（用于保存到数据库）
+  - `appended_text`：仅新增的部分（前端用于渲染独立的新气泡）
+- **数据库更新**：`content` 更新为拼接后的完整内容；`versions` 只保留最终版本
+
 ### 16. 会员套餐列表
 **`GET /billing/plans`**
 - 返回当前可售卖的套餐列表
@@ -257,8 +318,8 @@
 
 ### 导卡流程（手动三步）
 - `init_db()` 只做表结构初始化，**不自动扫描任何目录**
-- `card_import.py`：手动指定 PNG，一次性解析并写库（技术字段）
-- `card_analyze.py`：AI 分析填充展示字段（subtitle/tags/opening_message），设 `import_locked=1`
+- `backend/cli/card_import.py`：手动指定 PNG，一次性解析并写库（技术字段）
+- `backend/cli/card_analyze.py`：AI 分析填充展示字段（subtitle/tags/opening_message），设 `import_locked=1`
 - 详见 `docs/CHARACTER_IMPORT_SOP.md`
 
 ### 长期记忆
@@ -266,6 +327,11 @@
 - 压缩范围：除最近 12 条外的旧消息
 - 结构：`[用户画像] / [用户偏好] / [近期事件] / [关系状态] / [待跟进事项]`
 - 失败兜底：规则化 fallback 摘要，不阻断聊天主流程
+
+### Regenerate/Continue 上下文构建（重要）
+- **UUID v4 排序问题**：数据库主键使用 UUID v4，UUID 的字典序 ≠ 时间序。因此 regenerate/continue 获取历史消息时**必须使用 `ORDER BY created_at ASC, id ASC`** 而非 `WHERE id < message_id ORDER BY id ASC`
+- **尾部裁剪**：获取历史后，会自动移除末尾连续的 assistant 消息（continue 操作可能产生连续 AI 回复，需避免影响上下文）
+- **反向查找**：前端更新 history 数组时，必须从末尾反向查找匹配 messageId（`findIndex` 总是返回第一个匹配项）
 
 ---
 

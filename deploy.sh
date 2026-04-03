@@ -24,6 +24,7 @@ cp -r backend/routers "$DEPLOY_DIR/backend/"
 cp -r backend/services "$DEPLOY_DIR/backend/"
 cp -r backend/models "$DEPLOY_DIR/backend/"
 cp -r backend/utils "$DEPLOY_DIR/backend/"
+cp -r backend/cli "$DEPLOY_DIR/backend/"
 cp backend/backup_supabase.sh "$DEPLOY_DIR/backend/" 2>/dev/null || true
 
 # 复制前端文件（包括管理后台）
