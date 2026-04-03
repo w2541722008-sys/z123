@@ -91,7 +91,7 @@
       } else {
         Chat.enterChat(pendingChar);
       }
-    }).catch(() => {
+    }).catch(function() {
        Chat.enterChat(pendingChar);
      });
    }

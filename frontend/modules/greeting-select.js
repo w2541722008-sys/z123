@@ -27,35 +27,32 @@ var GreetingSelect = (function() {
     document.getElementById('greeting-select-modal').classList.remove('open');
   }
 
+  function findGreetingItem(target) {
+    var el = target;
+    while (el && el !== document) {
+      if (el.classList && el.classList.contains('greeting-item')) return el;
+      el = el.parentNode;
+    }
+    return null;
+  }
+
   function onItemClick(e) {
-    var item = e.target.closest ? e.target.closest('.greeting-item') : e.target;
-    if (!item || !item.classList) return;
-    if (!item.classList.contains('greeting-item')) {
-      while (item && item !== e.currentTarget) {
-        item = item.parentNode;
-        if (item && item.classList && item.classList.contains('greeting-item')) break;
-      }
-    }
-    if (!item || !item.classList || !item.classList.contains('greeting-item')) return;
+    var item = findGreetingItem(e.target);
+    if (!item) return;
     var index = Number(item.getAttribute('data-greeting-index'));
-    if (!isNaN(index)) {
-      select(index);
-    }
+    if (!isNaN(index)) select(index);
   }
 
   function ensureClickDelegate() {
     if (_bound) return;
     _bound = true;
     var listEl = document.getElementById('greeting-list');
-    if (listEl) {
-      listEl.addEventListener('click', onItemClick);
-    }
+    if (listEl) listEl.addEventListener('click', onItemClick);
   }
 
   async function select(index) {
     close();
     if (!_char) return;
-
     var char = _char;
 
     if (index === 0) {
