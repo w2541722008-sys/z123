@@ -54,6 +54,8 @@ python main.py
 - [ ] **DEBUG 模式已关闭** - 环境变量 `DEBUG=false`（生产环境必须）
 - [ ] 所有调试端点已移除（`/api/debug/*`）
 - [ ] 生产环境不输出详细的错误堆栈信息
+- [ ] **HTTPS/SSL 已配置** - Let's Encrypt 证书有效且未过期
+- [ ] **HTTP → HTTPS 自动跳转** - Nginx/OpenResty 配置了 301 重定向
 
 ### 5. CORS 配置
 
@@ -107,8 +109,19 @@ python main.py
 - [ ] Python 3.10+ 已安装
 - [ ] 依赖包已安装：`pip install -r backend/requirements.txt`
   - 注意：头像上传功能需要额外安装 `python-multipart`（已包含在 requirements.txt 中）
-- [ ] 防火墙已开放必要端口（如 8000）
+- [ ] 防火墙已开放必要端口（80, 443, 8000）
 - [ ] `avatars/` 目录已创建且权限正确（应用需要读写权限）
+- [ ] `covers/` 目录已创建（角色封面存储）
+- [ ] **systemd 服务已配置**（推荐）或进程管理工具已设置
+- [ ] **OpenResty/Nginx 配置**：
+  - [ ] 静态文件 root 指向正确目录
+  - [ ] `/api` 反向代理到 `:8000`
+  - [ ] **安全规则**：隐藏文件（`.`开头）已被屏蔽
+  - [ ] **敏感目录**（backend/, docs/, tests/等）已被屏蔽
+  - [ ] **WAF 状态正常**（如使用 1Panel OpenResty，确认 WAF 文件存在或已禁用）
+  - [ ] **Docker 卷挂载**：前端文件在容器可访问的路径下
+  - [ ] **SSE 流式输出**：`/api` location 已设置 `proxy_buffering off; proxy_cache off;`
+  - [ ] **图片缓存**：静态图片资源已配置长期缓存（30d + `Cache-Control: public, immutable`）
 
 ### 10. 进程管理（推荐）
 

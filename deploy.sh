@@ -27,15 +27,14 @@ cp -r backend/utils "$DEPLOY_DIR/backend/"
 cp -r backend/cli "$DEPLOY_DIR/backend/"
 cp backend/backup_supabase.sh "$DEPLOY_DIR/backend/" 2>/dev/null || true
 
-# 复制前端文件（包括管理后台）
+# 复制前端文件（包括管理后台 + 核心 modules）
 mkdir -p "$DEPLOY_DIR/frontend"
 mkdir -p "$DEPLOY_DIR/frontend/admin/js"
 cp frontend/*.html "$DEPLOY_DIR/frontend/" 2>/dev/null || true
 cp frontend/*.js "$DEPLOY_DIR/frontend/"
 cp frontend/*.css "$DEPLOY_DIR/frontend/"
-cp -r frontend/admin/*.html "$DEPLOY_DIR/frontend/admin/" 2>/dev/null || true
-cp -r frontend/admin/*.css "$DEPLOY_DIR/frontend/admin/" 2>/dev/null || true
-cp -r frontend/admin/js/*.js "$DEPLOY_DIR/frontend/admin/js/" 2>/dev/null || true
+cp -r frontend/modules "$DEPLOY_DIR/frontend/"          # ← 11 个核心 JS 模块
+cp -r frontend/admin "$DEPLOY_DIR/frontend/"               # ← 整个 admin 目录（含 js/css/html）
 
 # 复制根目录的 HTML 文件
 cp *.html "$DEPLOY_DIR/" 2>/dev/null || true

@@ -4,6 +4,7 @@
   let history = [];
   let _streamController = null;
   let _batchContainer = null;
+  let _autoScroll = true;
 
   function abortStream() {
     if (_streamController) {
@@ -337,6 +338,7 @@
      AppState.setLastCharacterId(currentChar.id);
      updateChatHeader(currentChar);
      document.getElementById('chat-messages').innerHTML = '';
+    initSmartScroll();
      appendDateDivider();
      // 重置角色状态面板（换角色时清空上一个角色的状态）
      CharStatusPanel.reset();
@@ -523,7 +525,6 @@
            <button class="msg-action-btn continue-btn" title="继续生成" data-message-id="${messageId}">▶</button>
          `;
          
-         // 绑定事件
          actionBtns.querySelector('.regenerate-btn').addEventListener('click', (e) => {
            e.stopPropagation();
            regenerateMessage(messageId, row, bubble);
@@ -533,12 +534,21 @@
            continueMessage(messageId, row, bubble);
          });
 
-         row.appendChild(actionBtns);
-        row.dataset.messageId = messageId;
-      }
+         const body = document.createElement('div');
+         body.className = 'msg-body';
+         body.appendChild(bubble);
+         body.appendChild(actionBtns);
+         row.appendChild(body);
+         row.dataset.messageId = messageId;
+       } else if (isAi) {
+         const body = document.createElement('div');
+         body.className = 'msg-body';
+         body.appendChild(bubble);
+         row.appendChild(body);
+       } else {
+         row.appendChild(bubble);
+       }
      }
-
-     row.appendChild(bubble);
 
    if (!isAi) {
      const avatarEl = createMsgAvatar('user');
@@ -675,8 +685,11 @@
     `;
     actionBtns.style.opacity = '0';
 
-    row.appendChild(bubble);
-    row.appendChild(actionBtns);
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    body.appendChild(bubble);
+    body.appendChild(actionBtns);
+    row.appendChild(body);
     box.appendChild(row);
     _lastMsgTimestamp = msgTime;
     scrollToBottom();
@@ -917,9 +930,20 @@
      btn.classList.toggle('loading', bool);
    }
 
-   function scrollToBottom() {
+   function scrollToBottom(force = false) {
+     if (!force && !_autoScroll) return;
      const box = document.getElementById('chat-messages');
      box.scrollTop = box.scrollHeight;
+   }
+
+   function initSmartScroll() {
+     const box = document.getElementById('chat-messages');
+     if (!box) return;
+     const THRESHOLD = 120;
+     box.addEventListener('scroll', () => {
+       const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < THRESHOLD;
+       _autoScroll = atBottom;
+     }, { passive: true });
    }
 
    /* ── Regenerate / Continue 功能 ─────────────────────────── */
@@ -1047,8 +1071,11 @@
               newBubbleEl.addEventListener('touchend', () => clearTimeout(pressTimer), { passive: true });
               newBubbleEl.addEventListener('touchmove', () => clearTimeout(pressTimer), { passive: true });
 
-              newRowEl.appendChild(newBubbleEl);
-              newRowEl.appendChild(newActionBtnsEl);
+              const contBody = document.createElement('div');
+              contBody.className = 'msg-body';
+              contBody.appendChild(newBubbleEl);
+              contBody.appendChild(newActionBtnsEl);
+              newRowEl.appendChild(contBody);
 
               const sibling = rowEl.nextSibling;
               if (sibling) {

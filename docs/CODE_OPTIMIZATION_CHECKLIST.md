@@ -6,7 +6,7 @@
 
 **文档版本**: v1.0  
 **创建日期**: 2026-03-31  
-**最后更新**: 2026-04-01（标记为历史存档）  
+**最后更新**: 2026-04-03（新增 P3-3~P3-7：聊天UI/智能滚动/头像预加载/Nginx缓存/语法修复）  
 **项目路径**: `/Users/jjj/aifriend`
 
 ---
@@ -89,6 +89,7 @@
 - ✅ 更新 README.md（目录结构、API 路由、依赖列表、已完成功能）
 - ✅ 更新 docs/FRONTEND_ARCHITECTURE.md（模块接口、头像系统、智能时间戳）
 - ✅ 更新 docs/backend_api.md（补充头像 API）
+- ✅ 同步更新本文档（CODE_OPTIMIZATION_CHECKLIST.md）状态标记
 
 ### 10. 单元测试套件建立（2026-04-03）
 - ✅ **测试基础设施**: `tests/conftest.py` — FakeConn / Mock 数据工厂 / 测试辅助函数
@@ -101,6 +102,21 @@
 - ✅ **test_character_state.py** (22 用例): 好感度三防机制 / 阶段推进 / 状态增量白名单
 - ✅ **test_frontend_utils.js** (31 用例): SSE 事件解析 / XSS 防护 / 日期格式化
 - **总计: 265 个用例，100% 通过率，覆盖 9 个核心模块**
+
+### 11. 生产部署 Bug 修复（2026-04-03）
+- ✅ **P3-1**: `auth.py` CurrentUser 类缺少 `avatar_url` 字段 → `/api/auth/me` 返回 500 → 管理后台无法访问
+  - 根因：[auth.py:291](../backend/auth.py#L291) 引用 `user.avatar_url` 但 CurrentUser dataclass 未定义该字段
+  - 修复：添加 `avatar_url: str = ""` 字段 + SQL 查询补充 `COALESCE(users.avatar_url, '')`
+- ✅ **P3-2**: `main.py` 头像/封面接口 `get_db()` 用法错误 → 所有头像/封面请求返回 500
+  - 根因：[main.py:316,335](../backend/main.py#L316) 将生成器函数 `get_db()` 直接赋值给变量，未使用 `with` 语句
+  - 错误：`AttributeError: '_GeneratorContextManager' object has no attribute 'execute'`
+  - 修复：改为 `with get_db() as conn:` 正确用法
+- ✅ **生产部署**: HTTPS 配置完成（Let's Encrypt + OpenResty）、systemd 开机自启、WAF 问题排查与绕过
+- ✅ **P3-3**: 聊天 UI 按钮位置重构 — 新增 `.msg-body` 垂直容器统一 AI 消息 DOM 结构，Regenerate/Continue 按钮固定在气泡左下角（[chat.js](../frontend/modules/chat.js)）
+- ✅ **P3-4**: 智能滚动 — 流式输出时用户上滑查看历史自动暂停跟滚，回底 120px 内恢复（`_autoScroll` 状态 + scroll 事件监听）
+- ✅ **P3-5**: 角色头像预加载 — 首页角色列表渲染后通过 `new Image()` 预加载所有头像/封面到浏览器缓存（[app.js](../frontend/modules/app.js) `preloadCharacterImages()`）
+- ✅ **P3-6**: Nginx 图片长期缓存 — 静态图片资源设置 30d 缓存 + `Cache-Control: public, immutable`（[aifriend.conf](../aifriend.conf)）
+- ✅ **P3-7**: chat.js 语法修复 — `appendMsg()` else 块缺少闭合大括号导致整个 IIFE 模块崩溃，页面无法进入聊天界面
 
 ---
 
@@ -243,7 +259,7 @@
 |------|------|------|
 | 安全性 | 7/10 | 已修复主要安全问题，但需要持续关注 |
 | 可维护性 | 6/10 | 部分文件过长，需要重构 |
-| 可测试性 | 7/10 | 已建立 265 个单元测试（8 Python + 1 JS），覆盖 9 个核心模块 |
+| 可测试性 | 8/10 | 已建立 265 个单元测试（8 Python + 1 JS），覆盖 9 个核心模块；生产 bug 修复后补充验证 |
 | 文档完整性 | 7/10 | 有基础文档，持续同步更新中 |
 | 代码规范 | 7/10 | 整体规范，但缺少自动化检查 |
 | 性能 | 7/10 | 基本满足需求，有优化空间 |

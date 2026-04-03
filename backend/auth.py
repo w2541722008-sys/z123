@@ -174,6 +174,7 @@ class CurrentUser:
     effective_plan: str = "free"
     plan_expires_at: str = ""
     is_admin: bool = False
+    avatar_url: str = ""
 
 
 def _is_admin_email(email: str) -> bool:
@@ -365,6 +366,7 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> Curre
             SELECT users.id, users.email, COALESCE(users.nickname, '') AS nickname,
                    COALESCE(users.plan_type, 'free') AS plan_type,
                    COALESCE(CAST(users.plan_expires_at AS VARCHAR), '') AS plan_expires_at,
+                   COALESCE(users.avatar_url, '') AS avatar_url,
                    auth_tokens.expires_at
             FROM auth_tokens
             JOIN users ON users.id = auth_tokens.user_id
@@ -393,6 +395,7 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> Curre
         effective_plan=plan_info["effective_plan"],
         plan_expires_at=plan_info["plan_expires_at"],
         is_admin=_is_admin_email(row["email"]),
+        avatar_url=row.get("avatar_url", ""),
     )
 
 

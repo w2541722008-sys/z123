@@ -313,9 +313,7 @@ def get_avatar(character_id: str):
     Raises:
         HTTPException: 404 角色不存在或头像未找到
     """
-    conn = get_db()
-    try:
-        # 查询角色头像路径
+    with get_db() as conn:
         row = conn.execute(
             "SELECT avatar_url FROM characters WHERE id = %s",
             (character_id,),
@@ -325,15 +323,12 @@ def get_avatar(character_id: str):
 
         default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
         return _resolve_media_response(row["avatar_url"] or "", fallback_path=default_avatar)
-    finally:
-        conn.close()
 
 
 @app.get("/api/cover/{character_id}")
 def get_cover(character_id: str):
     """返回角色卡封面图片，支持本地文件、静态路径和外链。"""
-    conn = get_db()
-    try:
+    with get_db() as conn:
         row = conn.execute(
             "SELECT avatar_url, cover_url FROM characters WHERE id = %s",
             (character_id,),
@@ -344,8 +339,6 @@ def get_cover(character_id: str):
         default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
         cover_value = (row["cover_url"] or "").strip() or (row["avatar_url"] or "").strip()
         return _resolve_media_response(cover_value, fallback_path=default_avatar)
-    finally:
-        conn.close()
 
 
 # ============================================================

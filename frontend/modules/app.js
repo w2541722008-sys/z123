@@ -49,18 +49,33 @@
      nav('square');
    }
 
-   async function init() {
+  function preloadCharacterImages(characters) {
+    const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
+    const loaded = new Set();
+    characters.forEach(char => {
+      [char.avatarImg, char.coverImg].forEach(img => {
+        if (!img || loaded.has(img)) return;
+        loaded.add(img);
+        const url = img.startsWith('/') ? SERVER_ORIGIN + img : img;
+        const i = new Image();
+        i.src = url;
+      });
+    });
+  }
+
+  async function init() {
      renderNav();
      await loadCharacters();
      Auth.bootstrap();
    }
 
    async function loadCharacters() {
-     try {
-       const characters = await API.getCharacters();
-       CHARACTERS = characters;
-       renderCharGrid();
-     } catch (err) {
+    try {
+      const characters = await API.getCharacters();
+      CHARACTERS = characters;
+      renderCharGrid();
+      preloadCharacterImages(characters);
+    } catch (err) {
        document.getElementById('char-grid').innerHTML = `
          <div class="card" style="padding:16px;color:var(--muted);grid-column:1 / -1;">
            角色加载失败：${err.message}<br/>请先启动本地后端，再刷新页面。

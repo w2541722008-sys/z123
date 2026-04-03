@@ -84,22 +84,25 @@ const AdminAPI = (() => {
   async function bootstrapAdminPage() {
     if (_bootstrapped) return true;
     const token = localStorage.getItem(TOKEN_KEY) || '';
+    console.log('[Admin Debug] TOKEN_KEY=', TOKEN_KEY, 'token=', token ? token.substring(0, 20) + '...' : '(empty)');
     if (!token) {
-      renderAccessDenied('还没检测到登录令牌。请先在前台登录管理员账号，再进入管理后台。');
+      renderAccessDenied('还没检测到登录令牌（localStorage 中无 aifriend_token）。请先在前台 http://lunawhisp.com 登录管理员账号，再刷新本页面。');
       return false;
     }
     try {
       const me = await apiFetch(`${_baseUrl}/auth/me`);
+      console.log('[Admin Debug] /auth/me response:', JSON.stringify(me));
       _currentUser = me || null;
       localStorage.setItem(USER_KEY, JSON.stringify(me || null));
       if (!me?.is_admin) {
-        renderAccessDenied('当前账号已登录，但不在管理员白名单里，所以后台不会继续加载。');
+        renderAccessDenied('当前账号已登录，但 is_admin=false。邮箱: ' + (me?.email || '未知') + ', 请检查 .env 的 ADMIN_EMAILS 是否包含此邮箱。');
         return false;
       }
       _bootstrapped = true;
       return true;
     } catch (e) {
-      renderAccessDenied(e.message || '管理员权限检查失败，请重新登录后再试。');
+      console.error('[Admin Error]', e);
+      renderAccessDenied('请求失败: ' + (e.message || e.toString()) + '。API地址: ' + _baseUrl + '/auth/me');
       return false;
     }
   }

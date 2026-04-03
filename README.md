@@ -56,11 +56,13 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                       用户（浏览器/手机）                      │
 │                  访问 https://yourdomain.com                 │
+│                  （生产环境必须 HTTPS，                     │
+│                   Nginx/OpenResty 反向代理 + SSL 证书）       │
 └─────────────────────┬───────────────────────────────────────┘
                       │  HTTP / SSE 流式
 ┌─────────────────────▼───────────────────────────────────────┐
 │                  FastAPI 后端 (Python 3.10+)                  │
-│  Gunicorn + Nginx 反向代理                                   │
+│  Uvicorn + OpenResty(Docker) 反向代理                        │
 │                                                             │
 │  ┌───────────┐  ┌────────────────┐  ┌───────────────────┐  │
 │  │  main.py  │  │prompt_assembler│  │ model_adapter.py  │  │
@@ -82,7 +84,7 @@
   aifriend/frontend/style.css     ← 全局样式（深色毛玻璃风格）
 
 AI 接口：
-  MiniMax M2.5（国内版 minimaxi.com）
+  MiniMax M2.7（国内版 minimaxi.com）
   接口兼容 OpenAI Chat Completions 格式
   支持 SSE 流式输出
   三套模型策略：Basic / VIP / SVIP
@@ -97,7 +99,7 @@ AI 接口：
 | 前端 | 原生 HTML/CSS/JS | 无框架，单页应用 |
 | AI | MiniMax API | OpenAI 兼容格式 |
 | 邮件 | Resend API | 密码重置验证码 |
-| 部署 | VPS + Nginx + Gunicorn | 生产环境 |
+| 部署 | VPS + OpenResty(Docker) + Uvicorn + Let's Encrypt SSL | 生产环境 |
 
 ---
 
@@ -108,8 +110,9 @@ aifriend/
 ├── README.md                    # 本文件
 ├── index.html                   # 前端入口页（Lunar 品牌）
 ├── deploy.sh                    # 部署打包脚本
-├── avatars/                     # 用户上传头像存储目录（运行时生成）
-│   └── .gitkeep                 # 占位文件，保持目录被 Git 跟踪
+├── avatars/                     # 角色头像存储目录（运行时生成）
+├── covers/                      # 角色封面存储目录（运行时生成）
+│   └── .gitkeep                 # 占位文件
 │
 ├── backend/                     # Python 后端
 │   ├── main.py                  # FastAPI 主入口，路由挂载、静态文件、头像 API
@@ -272,7 +275,7 @@ DATABASE_URL=postgresql://postgres:[密码]@db.xxx.supabase.co:5432/postgres
 # AI 模型（至少填一组通用配置）
 AIFRIEND_API_KEY=sk-api-your-api-key-here
 AIFRIEND_BASE_URL=https://api.minimaxi.com/v1
-AIFRIEND_MODEL=MiniMax-M2.5
+AIFRIEND_MODEL=MiniMax-M2.7
 
 # 邮件服务（密码重置需要）
 RESEND_API_KEY=re_your_resend_api_key_here
@@ -321,6 +324,13 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 | `http://127.0.0.1:8000` | 主 H5 应用（Lunar 品牌） |
 | `http://127.0.0.1:8000/admin.html` | 后台管理界面 |
 | `http://127.0.0.1:8000/api/health` | 健康检查 |
+
+> **生产环境**：通过 OpenResty 反向代理 + Let's Encrypt SSL 证书访问：
+> | 地址 | 说明 |
+> |------|------|
+> | `https://yourdomain.com` | 主应用（HTTP 自动跳转 HTTPS） |
+> | `https://yourdomain.com/admin.html` | 后台管理界面 |
+> | `https://yourdomain.com/api/*` | API 接口（Nginx 代理到 :8000） |
 
 ### Step 6：导入角色卡（首次需要）
 
@@ -741,7 +751,9 @@ index.html（入口）
 - **SSE 流式聊天**：POST `/api/chat/stream`，chunk-by-chunk 实时渲染
 - **重新生成（Regenerate）**：点击 ↻ 按钮 → 按钮转圈 loading → SSE 流式替换原气泡内容
 - **继续生成（Continue）**：点击 ▶ 按钮 → typing 指示器 → 在原气泡下方新建气泡展示追加内容
+- **智能滚动**：流式输出时用户上滑查看历史自动暂停跟滚，回底 120px 内自动恢复
 - **并发控制**：`isSending` 标志位防止重复提交，操作中禁用按钮
+- **统一 DOM 结构**：所有 AI 消息使用 `.msg-body` 垂直容器包裹，按钮位置固定在气泡左下角
 
 ### 游客模式
 
@@ -773,7 +785,7 @@ DATABASE_URL=postgresql://postgres:[密码]@db.xxx.supabase.co:5432/postgres
 # AI 模型通用兜底配置（至少填这一组）
 AIFRIEND_API_KEY=sk-api-your-api-key-here
 AIFRIEND_BASE_URL=https://api.minimaxi.com/v1
-AIFRIEND_MODEL=MiniMax-M2.5
+AIFRIEND_MODEL=MiniMax-M2.7
 
 # 邮件服务（密码重置）
 RESEND_API_KEY=re_your_resend_api_key_here
@@ -850,7 +862,11 @@ cp backend/.env.example backend/.env
 # 5. 安装依赖并启动
 cd backend
 pip install -r requirements.txt
-gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+
+# 方式 A：直接启动（开发用）
+uvicorn main:app --host 0.0.0.0 --port 8000
+
+# 方式 B：systemd 服务（生产推荐，见下方说明）
 ```
 
 ### 部署清单
@@ -864,8 +880,44 @@ gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bin
 - [ ] `.env` 中 `ALLOWED_ORIGINS` 已改为真实域名
 - [ ] `.env` 中 `ADMIN_EMAILS` 已设置
 - [ ] `ENV=production` 且 `DEBUG=false`
-- [ ] Nginx 反向代理已配置
+- [ ] **HTTPS/SSL 证书已配置**（Let's Encrypt + certbot）
+- [ ] **systemd 服务已创建并设为开机自启**
 - [ ] 数据库备份计划已设置（`backend/backup_supabase.sh` + cron）
+
+### 生产环境 systemd 服务
+
+```bash
+# 创建服务文件 /etc/systemd/system/aifriend.service：
+[Unit]
+Description=AIFriend Backend (Uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/aifriend_deploy_xxx/backend
+ExecStart=/opt/aifriend_deploy_xxx/backend/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+Environment=ENV=production
+
+[Install]
+WantedBy=multi-user.target
+
+# 启用服务
+systemctl daemon-reload && systemctl enable aifriend && systemctl start aifriend
+```
+
+### HTTPS 配置要点（OpenResty Docker 环境）
+
+1. **SSL 证书**：Let's Encrypt 免费证书，需复制到 OpenResty 容器可访问的路径（如 `/www/ssl/`）
+2. **HTTP→HTTPS 跳转**：Nginx `return 301 https://$host$request_uri`
+3. **ACME 挑战**：`.well-known/acme-challenge/` 必须在安全规则之前放行
+4. **WAF 注意**：1Panel OpenResty 内置 WAF 可能导致 500 错误，确认 WAF 文件存在或注释掉
+5. **Docker 卷挂载**：容器内只能看到 docker-compose.yml 声明的卷目录
+6. **SSE 流式输出**：`/api` location 必须设置 `proxy_buffering off; proxy_cache off;`
+7. **图片缓存**：静态图片资源（png/jpg/webp 等）设置 30 天长期缓存 + `Cache-Control: public, immutable`
+8. **头像预加载**：前端在角色列表渲染后通过 `new Image()` 预加载所有头像到浏览器缓存
 
 ### 数据库备份
 
@@ -967,6 +1019,13 @@ bash backend/backup_supabase.sh
 - **P2-1**: SSE 连接切换自动 abort 旧连接（`_streamController` + `abortStream()`，4 处流式 API 全覆盖）
 - **P2-2**: fetch 请求添加 AbortController 超时控制（`api.js request()` 20s 默认超时 + 友好错误提示）
 - **P2-3**: 大量消息渲染性能优化（`chat.js renderHistory()` DocumentFragment 批量渲染，N 条消息仅 1 次 reflow）
+- **P3-1**: `auth.py` CurrentUser 类补全 `avatar_url` 字段，修复 `/api/auth/me` 500 错误
+- **P3-2**: `main.py` 头像/封面接口修复 `get_db()` 上下文管理器用法（`with get_db() as conn:`）
+- **生产部署**: HTTPS 配置（Let's Encrypt + OpenResty）、systemd 开机自启、WAF 问题排查与绕过
+- **P3-3**: 聊天 UI 按钮位置重构：新增 `.msg-body` 垂直容器，统一 AI 消息 DOM 结构，Regenerate/Continue 按钮固定在气泡左下角
+- **P3-4**: 智能滚动：流式输出时用户上滑查看历史自动暂停跟滚，回底后恢复（120px 阈值检测）
+- **P3-5**: 角色头像预加载：首页加载角色列表后立即后台预加载所有头像/封面到浏览器缓存（`new Image()`），消除进入聊天页的加载延迟
+- **P3-6**: Nginx 图片长期缓存：头像/封面等静态图片资源设置 30 天缓存（`Cache-Control: public, immutable`），减少重复请求
 
 ### 单元测试套件
 
@@ -996,4 +1055,4 @@ python -m pytest tests/ --cov=backend --cov-report=term-missing
 
 ---
 
-*文档更新时间：2026-04-03*
+*文档更新时间：2026-04-03（全面审查：新增 P3-3~P3-6 聊天UI重构/智能滚动/头像预加载/Nginx图片缓存）*

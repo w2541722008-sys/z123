@@ -21,7 +21,7 @@ ERROR_MESSAGE_MAX_LENGTH = 300
 # - 后续换模型 / 换供应商，优先改这里
 # ============================================================
 DEFAULT_AI_BASE_URL = "https://api.minimaxi.com/v1"
-DEFAULT_AI_MODEL = "MiniMax-M2.5"
+DEFAULT_AI_MODEL = "MiniMax-M2.7"
 
 _MODEL_PROFILE_PREFIX = {
     "basic": "AIFRIEND_BASIC",

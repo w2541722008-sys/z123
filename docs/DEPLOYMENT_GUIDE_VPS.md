@@ -1,16 +1,20 @@
 # VPS 部署完整教程
 
-> 本教程适合代码新手，每一步都有详细说明。预计完成时间：1-2 小时
+> 本教程基于**实际部署经验**编写，每一步都经过验证。预计完成时间：1-2 小时
+> **文档更新时间**: 2026-04-03（新增 SSE 流式配置 + 图片长期缓存规则）
 
-## 📋 部署方案概览
+## 📋 实际部署方案
 
-- **服务器**：Vultr VPS（新加坡机房）
-- **配置**：1核 1GB 内存，25GB SSD
-- **管理面板**：1Panel（中文图形化界面）
-- **数据库**：Supabase（PostgreSQL 云数据库）
-- **域名**：.xyz 或其他便宜域名
-- **CDN**：Cloudflare（免费加速）
-- **成本**：约 $6-8/月
+- **服务器**: VPS（新加坡机房，1核 1GB+ 内存）
+- **管理面板**: 1Panel（中文图形化界面，端口 10086）
+- **Web 服务器**: **OpenResty（Docker 容器）** — 1Panel 内置，注意与系统 Nginx 不同
+- **后端服务**: **Uvicorn**（Python ASGI 服务器）— 通过 systemd 管理开机自启
+- **数据库**: Supabase（PostgreSQL 云数据库）
+- **域名**: 自有域名（如 Spaceship.com）
+- **SSL**: Let's Encrypt 免费证书（certbot + webroot 模式）
+- **成本**: 约 $6-8/月
+
+> ⚠️ **重要提示**：本项目的部署有几个**容易踩的坑**，都在下方标注了。
 
 ---
 
@@ -277,138 +281,211 @@ pip3 install -r requirements.txt
 5. 点击 **Run** 执行
 6. 如果成功，会显示 "Success. No rows returned"
 
-### 4.6 创建运行时目录
+### 4.7 创建系统服务（重要！）
 
-应用需要以下运行时目录（存放用户上传的头像）：
-
-```bash
-# 创建头像目录
-mkdir -p /opt/aifriend/avatars
-
-# 创建占位文件（保持目录被 Git 跟踪）
-touch /opt/aifriend/avatars/.gitkeep
-
-# 确保应用有读写权限
-chmod 755 /opt/aifriend/avatars
-```
-
-> 如果本地已有角色数据需要迁移，请参考 Supabase 控制台的数据导入功能。
-
-### 4.7 创建系统服务
-
-1. 在 1Panel 终端执行：
+> ⚠️ **踩坑**：不要用 `python3 -m uvicorn` 直接启动，因为：
+> 1. 无法开机自启
+> 2. 崩溃后不会自动重启
+> 3. 虚拟环境路径必须写完整（包括 venv/bin/）
 
 ```bash
 cat > /etc/systemd/system/aifriend.service << 'EOF'
 [Unit]
-Description=AIFriend Backend Service
+Description=AIFriend Backend (Uvicorn)
 After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/aifriend/backend
-Environment="PATH=/usr/local/bin:/usr/bin:/bin"
-ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+WorkingDirectory=/opt/aifriend_deploy_你的时间戳/backend
+ExecStart=/opt/aifriend_deploy_你的时间戳/backend/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
 Restart=always
-RestartSec=10
+RestartSec=5
+Environment=ENV=production
 
 [Install]
 WantedBy=multi-user.target
 EOF
 ```
 
-2. 启动服务：
+2. 启动并设为开机自启：
 
 ```bash
 systemctl daemon-reload
 systemctl start aifriend
 systemctl enable aifriend
+
+# 验证
+systemctl status aifriend
+# 应该显示 "active (running)"
+curl http://127.0.0.1:8000/api/health
+# 应该返回 {"status":"ok","database":true,"config":true}
 ```
 
-3. 检查服务状态：
+---
+
+## 第五步：配置 OpenResty 反向代理（⚠️ 踩坑重灾区）
+
+> ⚠️ **1Panel 的 OpenResty 是 Docker 容器**，和系统 Nginx 完全不同！
+> - 配置文件在：`/opt/1panel/apps/openresty/openresty/conf/conf.d/`
+> - 主配置在：`/opt/1panel/apps/openresty/openresty/conf/nginx.conf`
+> - **容器内只能看到 docker-compose.yml 声明的卷目录**
+> - 重启命令：`cd /opt/1panel/apps/openresty/openresty && docker compose restart`
+
+### 5.1 确认 OpenResty 状态
 
 ```bash
-systemctl status aifriend
+# 查看容器是否运行
+docker ps | grep openresty
+
+# 查看容器内的卷挂载
+cat /opt/1panel/apps/openresty/openresty/docker-compose.yml | grep volumes -A 10
 ```
 
-如果看到 "active (running)"，说明启动成功！
+关键卷挂载：
+```yaml
+volumes:
+  - ./conf/conf.d:/usr/local/openresty/nginx/conf/conf.d/   # ← 你的网站配置放这里
+  - ./www:/www                                                   # ← 静态文件放这里（容器内路径）
+```
 
----
+### 5.2 ⚠️ 踩坑1：WAF 导致所有请求 500
 
-## 第五步：配置 Nginx 反向代理
+**现象**：配置正确但所有请求返回 HTTP 500
 
-### 5.1 安装 Nginx
+**原因**：1Panel OpenResty 主配置引用了不存在的 WAF 文件：
+```nginx
+# /usr/local/openresty/nginx/conf/nginx.conf 第42行
+include /usr/local/openresty/1pwaf/data/conf/waf.conf;  # ← 文件不存在！
+```
 
-1. 在 1Panel 应用商店搜索 "OpenResty"
-2. 点击安装
-3. 等待安装完成
+**修复**：
+```bash
+# 注释掉 WAF 行
+sed -i 's|include /usr/local/openresty/1pwaf/data/conf/waf.conf;|# DISABLED|' \
+  /opt/1panel/apps/openresty/openresty/conf/nginx.conf
 
-### 5.2 创建网站
+# 重启
+cd /opt/1panel/apps/openresty/openresty && docker compose restart
+```
 
-1. 在 1Panel 左侧菜单，点击 "网站"
-2. 点击 "创建网站"
-3. 填写信息：
-   - **域名**: 你的域名（比如 `aifriend.xyz`）或暂时用 IP
-   - **类型**: 反向代理
-   - **代理地址**: `http://127.0.0.1:8000`
-4. 点击 "确定"
+### 5.3 ⚠️ 踩坑2：Docker 容器看不到宿主机文件
 
-### 5.3 配置静态文件
+**现象**：Nginx 配置 `root /opt/aifriend_deploy_xxx` 但返回 404
 
-1. 点击刚创建的网站，选择 "配置"
-2. 在配置文件中，找到 `location /` 部分
-3. 在前面添加静态文件配置：
+**原因**：容器只能访问 `./www` 映射的 `/www`，看不到 `/opt/` 其他路径
+
+**修复**：
+```bash
+# 把前端文件复制到 www 目录（已挂载到容器）
+cp -r /opt/aifriend_deploy_xxx/* /opt/1panel/apps/openresty/openresty/www/
+cp -r /opt/aifriend_deploy_xxx/frontend/admin /opt/1panel/apps/openresty/openresty/www/
+
+# Nginx 配置中 root 用容器内路径
+root /www;    # 不是 /opt/aifriend_deploy_xxx
+```
+
+### 5.4 ⚠️ 踩坑3：默认站点拦截你的域名
+
+**现象**：访问域名返回的是 Nginx 默认页面而不是你的应用
+
+**原因**：`00.default.conf` 和 `default.conf` 的 `server_name _` 通配符优先匹配了
+
+**修复**：
+```bash
+# 禁用默认站点
+cd /opt/1panel/apps/openresty/openresty/conf/conf.d/
+mv 00.default.conf 00.default.conf.disabled
+mv default.conf default_conf.disabled
+docker compose restart
+```
+
+### 5.5 创建网站配置
+
+在 `/opt/1panel/apps/openresty/openresty/conf/conf.d/` 下创建 `aifriend.conf`：
 
 ```nginx
-# 静态文件
-location / {
-    root /opt/aifriend;
-    try_files $uri $uri/ /index.html;
-}
+server {
+    listen 80;
+    server_name yourdomain.com www.yourdomain.com 你的服务器IP;
 
-# 用户头像（静态目录）
-location /avatars {
-    alias /opt/aifriend/avatars;
-    expires 7d;
-}
+    root /www;
+    index index.html;
 
-# API 代理
-location /api {
-    proxy_pass http://127.0.0.1:8000;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-}
+    # Let's Encrypt ACME（必须在安全规则之前）
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        try_files $uri =404;
+    }
 
-# WebSocket 支持（流式响应）
-location /api/chat/stream {
-    proxy_pass http://127.0.0.1:8000;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-    proxy_set_header Host $host;
-    proxy_read_timeout 300s;
+    # 安全：屏蔽隐藏文件
+    location ~ /\.\. {
+        deny all;
+        return 404;
+    }
+
+    # 屏蔽敏感目录
+    location ~ ^/(backend|docs|tests|data|venv)/ {
+        deny all;
+        return 404;
+    }
+
+    # 后台管理页面 → 后端动态路由
+    location = /admin.html {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # 前端 SPA
+    location / {
+        try_files $uri $uri/ /index.html;
+        expires 7d;
+    }
+
+    # API 反向代理
+    location /api {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE 流式输出必须关闭缓冲（否则 Nginx 会攒着数据一起发）
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+
+    # 图片资源长期缓存（头像、封面等）
+    location ~* \.(png|jpg|jpeg|webp|gif|ico|svg)$ {
+        try_files $uri =404;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
 }
 ```
 
-4. 保存配置
-5. 点击 "重载配置"
+### 5.6 重启并验证
+
+```bash
+cd /opt/1panel/apps/openresty/openresty && docker compose restart
+sleep 2
+
+# 验证
+curl -sI http://127.0.0.1:80/          # 应该返回 200
+curl -s http://127.0.0.1:80/api/health  # 应该返回 {"status":"ok",...}
+```
 
 ---
 
-## 第六步：配置域名和 SSL
+## 第六步：配置域名和 SSL（HTTPS）
 
-### 6.1 购买域名
+### 6.1 配置 DNS
 
-1. 访问 [Namesilo](https://www.namesilo.com/) 或 [Namecheap](https://www.namecheap.com/)
-2. 搜索你想要的 .xyz 域名
-3. 加入购物车，结账（约 $1-2/年）
-4. 完成购买
-
-### 6.2 配置 DNS
-
-1. 登录域名注册商后台
+1. 登录域名注册商后台（如 Spaceship.com、Namesilo 等）
 2. 找到你的域名，点击 "Manage DNS"
 3. 添加 A 记录：
    - **Type**: A
@@ -420,20 +497,82 @@ location /api/chat/stream {
    - **Host**: www
    - **Value**: 你的域名
    - **TTL**: 3600
-5. 保存
+5. 保存，等待 10-30 分钟 DNS 生效
 
-等待 10-30 分钟，DNS 生效。
+验证：`dig yourdomain.com` 应该返回你的服务器 IP
 
-### 6.3 配置 SSL 证书
+### 6.2 ⚠️ 踩坑4：Let's Encrypt 证书 + Docker 容器
 
-1. 在 1Panel 网站列表，点击你的网站
-2. 点击 "SSL" 标签
-3. 选择 "Let's Encrypt"
-4. 点击 "申请证书"
-5. 等待 1-2 分钟，证书申请成功
-6. 勾选 "强制 HTTPS"
+> **问题**：Let's Encrypt 证书是**符号链接**（symlink），Docker 容器内无法跟随解析
 
-现在你的网站已经支持 HTTPS 了！
+**解决方案**：把实际证书文件复制到已挂载的 www 目录
+
+```bash
+# 1. 安装 certbot
+apt-get install -y certbot python3-certbot-nginx
+
+# 2. 申请证书（webroot 模式）
+certbot certonly --webroot -w /opt/1panel/apps/openresty/openresty/www \
+  -d yourdomain.com -d www.yourdomain.com \
+  --non-interactive --agree-tos --email your@email.com
+
+# 3. 复制证书到容器可访问的路径
+mkdir -p /opt/1panel/apps/openresty/openresty/www/ssl
+cp -L /etc/letsencrypt/live/yourdomain.com/fullchain.pem \
+  /opt/1panel/apps/openresty/openresty/www/ssl/fullchain.pem
+cp -L /etc/letsencrypt/live/yourdomain.com/privkey.pem \
+  /opt/1panel/apps/openresty/openresty/www/ssl/privkey.pem
+```
+
+### 6.3 配置 HTTPS
+
+更新 `aifriend.conf`（在 `conf.d/` 下），添加 SSL server 块：
+
+```nginx
+# HTTP → HTTPS 重定向
+server {
+    listen 80;
+    server_name yourdomain.com www.yourdomain.com;
+    return 301 https://yourdomain.com$request_uri;
+}
+
+# HTTPS 主配置
+server {
+    listen 443 ssl;
+    server_name yourdomain.com www.yourdomain.com;
+
+    # 证书路径（容器内路径！）
+    ssl_certificate /www/ssl/fullchain.pem;
+    ssl_certificate_key /www/ssl/privkey.pem;
+
+    # ... 其余配置同上（root, location 等） ...
+}
+```
+
+重启 OpenResty：`docker compose restart`
+
+### 6.4 验证 HTTPS
+
+```bash
+curl -skI https://yourdomain.com/       # HTTP 200
+curl -skI http://yourdomain.com/        # 301 → https://
+curl -sk https://yourdomain.com/api/health  # {"status":"ok",...}
+```
+
+### 6.5 设置证书自动续期
+
+Let's Encrypt 证书有效期为 90 天。设置 cron 自动续期：
+
+```bash
+# 编辑 crontab
+crontab -e
+
+# 每月1号凌晨3点续期并复制到www目录
+0 3 1 * * certbot renew --quiet && \
+  cp -L /etc/letsencrypt/live/yourdomain.com/*.pem \
+     /opt/1panel/apps/openresty/openresty/www/ssl/ && \
+  cd /opt/1panel/apps/openresty/openresty && docker compose restart
+```
 
 ---
 
@@ -480,9 +619,59 @@ location /api/chat/stream {
 
 ---
 
-## 第八步：配置自动备份
+## 第八步：验证部署
 
-### 8.1 创建备份脚本
+### 8.1 基础检查
+
+```bash
+# 1. 后端服务状态
+systemctl status aifriend
+# 应该显示 "active (running)"
+
+# 2. 后端健康检查
+curl http://127.0.0.1:8000/api/health
+# 应该返回 {"status":"ok","database":true,"config":true}
+
+# 3. OpenResty 状态
+docker ps | grep openresty
+
+# 4. HTTP 访问（前端）
+curl -sI http://yourdomain.com/
+# 应该返回 301 → https:// 或 200
+
+# 5. HTTPS 访问
+curl -skI https://yourdomain.com/
+# 应该返回 200 OK
+
+# 6. API 代理
+curl -sk https://yourdomain.com/api/health
+# 应该返回 {"status":"ok",...}
+```
+
+### 8.2 浏览器访问
+
+打开浏览器，访问：
+
+| 地址 | 预期结果 |
+|------|----------|
+| `https://yourdomain.com` | 主页正常加载 |
+| `https://yourdomain.com/admin.html` | 后台管理页面 |
+| `https://yourdomain.com/api/health` | `{"status":"ok",...}` |
+
+### 8.3 功能测试清单
+
+- [ ] 注册新用户 → 收到验证邮件
+- [ ] 登录 → 进入主页
+- [ ] 选择角色 → 打开对话框
+- [ ] 发送消息 → AI 正常回复（SSE 流式输出）
+- [ ] 刷新页面 → 聊天记录保留
+- [ ] 管理员登录后台 → 能看到仪表盘
+
+---
+
+## 第九步：配置自动备份
+
+### 9.1 创建备份脚本
 
 在 1Panel 终端执行：
 
@@ -552,13 +741,126 @@ chmod +x /opt/aifriend/backend/backup_supabase.sh
 
 ---
 
+## 📋 故障排查（基于实际部署经验）
+
+> 以下问题都是**实际踩过的坑**，按出现频率排序
+
+### 问题1：所有请求返回 HTTP 500
+
+**现象**：Nginx 配置正确，但访问任何路径都返回 500
+
+**原因**：1Panel OpenResty WAF 文件不存在
+```bash
+# 检查
+docker exec <容器名> tail -5 /var/log/nginx/error.log
+# 如果看到: open() "/usr/local/openresty/1pwaf/data/conf/waf.conf" failed (No such file)
+```
+
+**修复**：注释掉 WAF include 行（见上方 5.2 节）
+
+---
+
+### 问题2：Nginx 返回 404 但文件确实存在
+
+**现象**：`root /opt/aifriend_deploy_xxx` 配置正确，文件存在但 404
+
+**原因**：Docker 容器内看不到宿主机 `/opt/` 路径（卷未挂载）
+
+**修复**：把文件复制到 `./www/` 目录（容器已挂载的路径），见上方 5.3 节
+
+---
+
+### 问题3：访问域名显示 Nginx 默认页面
+
+**现象**：DNS 已生效，但显示的是 Nginx 的 Welcome 页面
+
+**原因**：默认站点配置的 `server_name _` 通配符拦截了请求
+
+**修复**：禁用 `00.default.conf` 和 `default.conf`（见上方 5.4 节）
+
+---
+
+### 问题4：HTTPS 证书配置后容器崩溃循环
+
+**现象**：加了 SSL 配置后 `docker compose restart` 容器一直 Restarting
+
+**原因**：Let's Encrypt 证书是符号链接（symlink），Docker 容器内无法解析
+
+**错误日志**：`docker logs <容器名>` 显示 `cannot load certificate`
+**修复**：复制证书到 www/ssl/ 目录（见上方 6.2 节）
+
+---
+
+### 问题5：后台管理页面 403/404 或显示主页
+
+**现象**：访问 `/admin.html` 返回主页或 404
+
+**原因**：
+- admin 文件夹未复制到 www 目录 → SPA 路由回退到 index.html
+- 安全规则屏蔽了隐藏文件（`.well-known` 等）
+
+**修复**：
+```bash
+cp -r frontend/admin /opt/1panel/apps/openresty/openresty/www/admin/
+# 确保配置中有 location = /admin.html { proxy_pass ...; }
+```
+
+---
+
+### 问题6：头像/封面图片不显示
+
+**现象**：角色卡片上没有图片，或浏览器加载失败
+
+**原因**：
+- 后端 `get_avatar()` / `get_cover()` 接口报错（`get_db()` 用法错误）
+- 数据库只有 avatar 没有 cover 文件（首页优先用 cover）
+
+**检查**：
+```bash
+curl http://127.0.0.1:8000/api/avatar/<character_id>
+# 如果返回 500，查看后端日志
+journalctl -u aifriend -n 20
+```
+
+**修复**：确保代码使用 `with get_db() as conn:` 而非 `conn = get_db()`
+
+---
+
+### 问题7：后端启动失败 "Could not import module 'main'"
+
+**现象**：systemd 启动 uvicorn 报错找不到 main.py
+
+**原因**：systemd 服务中 `WorkingDirectory` 应指向 `backend/` 子目录而非项目根目录
+
+**修复**：
+```
+WorkingDirectory=/opt/aifriend_deploy_xxx/backend   # 不是 /opt/aifriend_deploy_xxx/
+ExecStart=.../backend/venv/bin/uvicorn main:app ...
+```
+
+---
+
+### 问题8：管理员无法访问后台
+
+**现象**：登录后在 `/admin.html` 提示"没有权限"或 500 错误
+
+**原因链**：
+1. `/api/auth/me` 返回 500 → CurrentUser 缺少 `avatar_url` 字段
+2. Token 中 is_admin=false → .env ADMIN_EMAILS 未正确加载
+3. 前端 JS API 地址错误 → 走了错误的端口
+
+**诊断**：打开 F12 Console 查看 `[Admin Debug]` 日志和具体错误信息
+
+---
+
 ## 🎉 部署完成！
 
 现在你可以：
 1. 访问 `https://你的域名` 使用应用
-2. 访问 `https://你的域名/frontend/admin/` 管理后台
+2. 访问 `https://你的域名/admin.html` 管理后台
 3. 在 1Panel 查看服务器状态和日志
 4. 每天自动备份数据库
+5. Let's Encrypt 证书自动续期
 
 ---
 
