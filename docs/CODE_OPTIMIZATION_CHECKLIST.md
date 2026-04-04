@@ -6,7 +6,7 @@
 
 **文档版本**: v1.0  
 **创建日期**: 2026-03-31  
-**最后更新**: 2026-04-03（新增 P3-3~P3-7：聊天UI/智能滚动/头像预加载/Nginx缓存/语法修复）  
+**最后更新**: 2026-04-04（新增 P3-8~P3-10：开场白选择修复/智能判断逻辑/试聊说明文案）  
 **项目路径**: `/Users/jjj/aifriend`
 
 ---
@@ -117,6 +117,11 @@
 - ✅ **P3-5**: 角色头像预加载 — 首页角色列表渲染后通过 `new Image()` 预加载所有头像/封面到浏览器缓存（[app.js](../frontend/modules/app.js) `preloadCharacterImages()`）
 - ✅ **P3-6**: Nginx 图片长期缓存 — 静态图片资源设置 30d 缓存 + `Cache-Control: public, immutable`（[aifriend.conf](../aifriend.conf)）
 - ✅ **P3-7**: chat.js 语法修复 — `appendMsg()` else 块缺少闭合大括号导致整个 IIFE 模块崩溃，页面无法进入聊天界面
+- ✅ **P3-8**: 开场白选择功能修复（2026-04-04）
+  - 修复 `ClearChatPayload.greeting_index` 类型不匹配：`int` → `int | str`（[models.py](../backend/models.py)）
+  - 修复 UUID 字符串与 int 比较 TypeError：`clear_chat_history()` 添加 `_is_non_default` 安全判断（[characters.py](../backend/routers/characters.py)）
+  - `char-detail.js startChat()` 改为智能判断逻辑：先 `getHistory()` 检查历史，有记录直接进聊天，无记录才弹开场白选择器（[char-detail.js](../frontend/modules/char-detail.js) v6）
+- ✅ **P3-9**: 试聊说明文案更新（2026-04-04）— "我的"页面试聊说明更新为「登录后可先试聊，但无法使用继续生成、重新生成回复功能」（[index.html](../index.html)）
 
 ---
 

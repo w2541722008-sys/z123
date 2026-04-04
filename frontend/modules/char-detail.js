@@ -74,27 +74,34 @@
    }
 
    function startChat() {
-     document.getElementById('char-detail-modal').classList.remove('open');
-     if (!pendingChar) return;
+    document.getElementById('char-detail-modal').classList.remove('open');
+    if (!pendingChar) return;
 
-     // 游客未登录：直接进聊天（用默认开场白，不弹剧情线选择）
-     if (!Auth.isLoggedIn()) {
-       Chat.enterChat(pendingChar);
-       return;
-     }
+    if (!Auth.isLoggedIn()) {
+      Chat.enterChat(pendingChar);
+      return;
+    }
 
-     // 已登录：查询该角色有多少条开场白选项
-     API.getGreetings(pendingChar.id).then(result => {
-      const greetings = result?.greetings || [];
-      if (greetings.length > 1) {
-        GreetingSelect.open(pendingChar, greetings);
-      } else {
+    API.getHistory(pendingChar.id).then(function(result) {
+      var messages = (result && result.messages) || [];
+      if (messages.length > 0) {
         Chat.enterChat(pendingChar);
+      } else {
+        API.getGreetings(pendingChar.id).then(function(greetResult) {
+          var greetings = (greetResult && greetResult.greetings) || [];
+          if (greetings.length > 1) {
+            GreetingSelect.open(pendingChar, greetings);
+          } else {
+            Chat.enterChat(pendingChar);
+          }
+        }).catch(function() {
+          Chat.enterChat(pendingChar);
+        });
       }
     }).catch(function() {
-       Chat.enterChat(pendingChar);
-     });
-   }
+      Chat.enterChat(pendingChar);
+    });
+  }
 
    return { open, close, startChat };
  })();

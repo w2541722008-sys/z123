@@ -62,9 +62,10 @@ class ClearChatPayload(BaseModel):
       - None / -1 → 使用角色默认开场白（first_mes）
       - 0          → 同上（0 号即 first_mes）
       - 1, 2, …   → alternate_greetings 列表下标（从 1 起算，与前端展示序号一致）
+      - 也支持字符串格式的 DB 主键 ID（兼容 greetings 接口返回值）
     """
     character_id: str
-    greeting_index: int = Field(default=-1)  # -1 表示使用默认
+    greeting_index: int | str = Field(default=-1)  # 支持 int 下标或 str(DB主键)
 
 
 # ============================================================

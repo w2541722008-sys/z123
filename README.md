@@ -1026,6 +1026,9 @@ bash backend/backup_supabase.sh
 - **P3-4**: 智能滚动：流式输出时用户上滑查看历史自动暂停跟滚，回底后恢复（120px 阈值检测）
 - **P3-5**: 角色头像预加载：首页加载角色列表后立即后台预加载所有头像/封面到浏览器缓存（`new Image()`），消除进入聊天页的加载延迟
 - **P3-6**: Nginx 图片长期缓存：头像/封面等静态图片资源设置 30 天缓存（`Cache-Control: public, immutable`），减少重复请求
+- **P3-7**: chat.js 语法修复 — `appendMsg()` else 块缺少闭合大括号导致整个 IIFE 模块崩溃，页面无法进入聊天界面
+- **P3-8**: 开场白选择功能修复 — 修复 `ClearChatPayload.greeting_index` 类型不匹配（int→int|str）导致 422 错误；修复 UUID 字符串与 int 比较 TypeError；`char-detail.js` 改为智能判断逻辑（有历史直接进聊天，无历史/首次才弹开场白选择器）
+- **P3-9**: 试聊说明文案更新 — "我的"页面试聊说明文字更新为更准确的限制说明
 
 ### 单元测试套件
 

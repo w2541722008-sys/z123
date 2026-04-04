@@ -381,14 +381,25 @@ def clear_chat_history(
 
         greeting = "你好，很高兴认识你。"
         if char_row:
-            if payload.greeting_index > 0:
+            _gi = payload.greeting_index
+            _gi_int: int
+            if isinstance(_gi, int):
+                _gi_int = _gi
+            elif isinstance(_gi, str) and _gi.lstrip('-').isdigit():
+                _gi_int = int(_gi)
+            else:
+                _gi_int = -1
+
+            _is_non_default = (_gi_int > 0) if _gi_int >= 0 else (isinstance(_gi, str) and _gi not in ('', '0', '-1'))
+
+            if _is_non_default:
                 greeting_row = conn.execute(
                     """
                     SELECT content FROM character_greetings
                     WHERE id = %s AND character_id = %s AND is_active = 1
                     LIMIT 1
                     """,
-                    (payload.greeting_index, payload.character_id),
+                    (_gi, payload.character_id),
                 ).fetchone()
                 if greeting_row and (greeting_row["content"] or "").strip():
                     greeting = greeting_row["content"].strip()
@@ -396,11 +407,10 @@ def clear_chat_history(
             structured = parse_json_object(char_row["structured_asset_json"], fallback={})
             alts = structured.get("alternate_greetings", [])
             
-            idx = payload.greeting_index
-            if idx <= 0:
+            if not _is_non_default:
                 greeting = char_row["opening_message"] or (alts[0] if alts else greeting)
-            elif greeting == "你好，很高兴认识你。" and isinstance(alts, list) and 1 <= idx <= len(alts):
-                greeting = alts[idx - 1]
+            elif greeting == "你好，很高兴认识你。" and isinstance(alts, list) and 1 <= _gi_int <= len(alts):
+                greeting = alts[_gi_int - 1]
 
         # 插入新的开场白
         conn.execute(
