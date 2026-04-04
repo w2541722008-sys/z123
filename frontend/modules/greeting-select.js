@@ -62,13 +62,15 @@ var GreetingSelect = (function() {
     }).then(function(result) {
       Chat.enterChat(char);
     }).catch(function(err) {
-      if (err && err.message && err.message !== '\u672a\u767b\u5f55') {
+      var msg = (err && err.message) ? err.message : JSON.stringify(err);
+      if (msg === '[object Object]') msg = String(err);
+      if (msg && msg !== '\u672a\u767b\u5f55') {
         if (typeof UI !== 'undefined' && UI.toast) {
-          UI.toast('\u5207\u6362\u5931\u8d25:' + err.message, 'error');
+          console.error('[GreetingSelect] clearChat error:', err);
+          UI.toast('\u5207\u6362\u5931\u8d25:' + msg, 'error');
         }
-      } else {
-        Chat.enterChat(char);
       }
+      Chat.enterChat(char);
     });
   }
 
