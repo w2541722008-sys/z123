@@ -60,10 +60,13 @@
      const featuredSub = featuredChar.subtitle || '';
      const featuredIdx = CHARACTERS.indexOf(featuredChar);
      bannerEl.style.display = '';
+     const safeColor = escapeHtml(featuredChar.color || '#1a1b30');
+     const safeImgSrc = escapeHtml(imgSrc || '');
+     const safeIdx = featuredIdx;
      bannerEl.innerHTML = `
-       <div class="featured-banner-card" onclick="CharDetail.open(CHARACTERS[${featuredIdx}])">
-         <div class="featured-banner-bg" style="background-color:${featuredChar.color || '#1a1b30'};${imgSrc ? `background-image:url(${imgSrc});` : ''}"></div>
-         <button class="featured-banner-btn" onclick="event.stopPropagation();Chat.enterChat(CHARACTERS[${featuredIdx}])">立即聊天</button>
+       <div class="featured-banner-card" onclick="CharDetail.open(CHARACTERS[${safeIdx}])">
+         <div class="featured-banner-bg" style="background-color:${safeColor};${safeImgSrc ? `background-image:url('${safeImgSrc}');` : ''}"></div>
+         <button class="featured-banner-btn" onclick="event.stopPropagation();Chat.enterChat(CHARACTERS[${safeIdx}])">立即聊天</button>
          <div class="featured-banner-content">
            <div class="featured-banner-label">✦ 今日推荐</div>
            <div class="featured-banner-name">${escapeHtml(featuredName)}</div>

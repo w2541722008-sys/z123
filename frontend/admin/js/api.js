@@ -5,9 +5,13 @@
  * 所有模块都通过 AdminAPI.apiFetch() 发起请求。
  */
 const AdminAPI = (() => {
+  const shared = window.AIFriendShared;
   // API 地址动态适配（本地开发 vs ngrok/生产）
-  const { protocol, hostname, port } = location;
   const _apiBase = (() => {
+    if (shared && typeof shared.resolveApiBase === 'function') {
+      return shared.resolveApiBase({ admin: true });
+    }
+    const { protocol, hostname, port } = location;
     if (port === '8000' || port === '' || port === '443' || port === '80') {
       return `${protocol}//${hostname}${port ? ':' + port : ''}/api/admin`;
     }
@@ -17,8 +21,8 @@ const AdminAPI = (() => {
   const _baseUrl = _apiBase.replace(/\/admin$/, '');
 
   // localStorage key
-  const TOKEN_KEY = 'aifriend_token';
-  const USER_KEY = 'aifriend_user';
+  const TOKEN_KEY = shared?.STORAGE_KEYS?.TOKEN_KEY || 'aifriend_token';
+  const USER_KEY = shared?.STORAGE_KEYS?.USER_KEY || 'aifriend_user';
 
   // 管理员权限是否已通过验证
   let _bootstrapped = false;
@@ -68,7 +72,7 @@ const AdminAPI = (() => {
           <p style="font-size:14px;line-height:1.8;color:#b6bac7;margin-bottom:18px;">${escHtml(message || '你暂时没有管理后台权限。')}</p>
           <div style="display:flex;gap:10px;flex-wrap:wrap;">
             <a href="/" style="display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:10px;background:#7c3aed;color:#fff;text-decoration:none;font-size:14px;font-weight:600;">返回前台首页</a>
-            <button onclick="location.reload()" style="padding:10px 16px;border-radius:10px;border:1px solid #3a3a4a;background:#2a2a3a;color:#e8e8f0;font-size:14px;cursor:pointer;">重新检查权限</button>
+            <button data-action="admin-reload" style="padding:10px 16px;border-radius:10px;border:1px solid #3a3a4a;background:#2a2a3a;color:#e8e8f0;font-size:14px;cursor:pointer;">重新检查权限</button>
           </div>
           <div style="margin-top:16px;font-size:12px;line-height:1.7;color:#888;">如果你本来就是管理员，请先在前台登录已授权邮箱，然后再回来打开这个页面。</div>
         </div>

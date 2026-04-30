@@ -6,6 +6,7 @@
     - 缓存用户信息
     - 自动过期机制
     - 线程安全
+    - max_size 上限保护，防止内存泄漏
 
 使用方法：
     from services.cache_service import cache
@@ -26,18 +27,20 @@ from typing import Any
 
 
 class SimpleCache:
-    """简单的内存缓存，支持过期时间。"""
+    """简单的内存缓存，支持过期时间和大小上限。"""
     
-    def __init__(self, default_ttl: int = 300):
+    def __init__(self, default_ttl: int = 300, max_size: int = 500):
         """
         初始化缓存。
         
         Args:
             default_ttl: 默认过期时间（秒），默认 5 分钟
+            max_size: 缓存条目上限，超过时触发过期清理和最旧项淘汰
         """
         self._cache: dict[str, tuple[Any, float]] = {}
         self._lock = Lock()
         self.default_ttl = default_ttl
+        self.max_size = max_size
     
     def get(self, key: str) -> Any | None:
         """获取缓存值，如果过期则返回 None。"""
@@ -55,13 +58,20 @@ class SimpleCache:
             return value
     
     def set(self, key: str, value: Any, ttl: int | None = None) -> None:
-        """设置缓存值。"""
+        """设置缓存值。当缓存满时，先清理过期项，仍超限则淘汰最旧项。"""
         if ttl is None:
             ttl = self.default_ttl
         
         expires_at = time.time() + ttl
         
         with self._lock:
+            # 缓存满时触发清理
+            if len(self._cache) >= self.max_size and key not in self._cache:
+                self._cleanup_expired_unlocked()
+                # 清理后仍超限，淘汰最旧项
+                if len(self._cache) >= self.max_size:
+                    self._evict_oldest_unlocked()
+            
             self._cache[key] = (value, expires_at)
     
     def delete(self, key: str) -> None:
@@ -76,22 +86,32 @@ class SimpleCache:
     
     def cleanup_expired(self) -> int:
         """清理过期的缓存项，返回清理数量。"""
-        now = time.time()
-        expired_keys = []
-        
         with self._lock:
-            for key, (_, expires_at) in self._cache.items():
-                if now > expires_at:
-                    expired_keys.append(key)
-            
-            for key in expired_keys:
-                del self._cache[key]
-        
+            return self._cleanup_expired_unlocked()
+    
+    def _cleanup_expired_unlocked(self) -> int:
+        """清理过期的缓存项（不加锁，调用方需持有锁）。"""
+        now = time.time()
+        expired_keys = [key for key, (_, expires_at) in self._cache.items() if now > expires_at]
+        for key in expired_keys:
+            del self._cache[key]
         return len(expired_keys)
+    
+    def _evict_oldest_unlocked(self) -> None:
+        """淘汰最旧（最早过期）的缓存项（不加锁，调用方需持有锁）。"""
+        if not self._cache:
+            return
+        oldest_key = min(self._cache, key=lambda k: self._cache[k][1])
+        del self._cache[oldest_key]
+    
+    def __len__(self) -> int:
+        """返回当前缓存条目数。"""
+        with self._lock:
+            return len(self._cache)
 
 
 # 全局缓存实例
-cache = SimpleCache(default_ttl=300)  # 5 分钟过期
+cache = SimpleCache(default_ttl=300, max_size=500)  # 5 分钟过期，最多 500 条
 
 
 # 便捷方法：角色缓存

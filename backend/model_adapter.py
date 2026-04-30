@@ -1,27 +1,30 @@
 from __future__ import annotations
 
 import json
-import urllib.error
-import urllib.request
+import logging
 from typing import Any, Callable, Iterable
 
-from config import AI_CHAT_MAX_OUTPUT_TOKENS
+import httpx
+
+from config import AI_CHAT_MAX_OUTPUT_TOKENS, DEFAULT_AI_BASE_URL, DEFAULT_AI_MODEL
 import os
+
+logger = logging.getLogger(__name__)
 
 # 常量定义
 DEFAULT_TIMEOUT = 60
 STREAM_TIMEOUT = 120
-ERROR_MESSAGE_MAX_LENGTH = 300
 
 # ============================================================
 # 模型配置与调用适配层
 # 说明：
-# - 这里只处理“如何与模型接口通信”
+# - 这里只处理"如何与模型接口通信"
 # - 不关心角色卡、记忆、上下文编排细节
 # - 后续换模型 / 换供应商，优先改这里
 # ============================================================
-DEFAULT_AI_BASE_URL = "https://api.minimaxi.com/v1"
-DEFAULT_AI_MODEL = "MiniMax-M2.7"
+
+# 重导出配置常量，保持向后兼容（cli/card_analyze.py 等仍可 from model_adapter import ...）
+# 实际定义已迁移到 config.py
 
 _MODEL_PROFILE_PREFIX = {
     "basic": "AIFRIEND_BASIC",
@@ -32,7 +35,7 @@ _MODEL_PROFILE_PREFIX = {
 
 def get_ai_config(env: dict[str, str | None], profile: str = "basic") -> dict[str, str]:
     """从环境变量中读取模型配置，支持 basic / vip / svip 三套策略。"""
-    profile_name = (profile or "basic").strip().lower()
+    profile_name = (profile or "").strip().lower() or "basic"
     prefix = _MODEL_PROFILE_PREFIX.get(profile_name, "AIFRIEND_BASIC")
 
     profile_api_key = (env.get(f"{prefix}_API_KEY") or "").strip()
@@ -86,18 +89,6 @@ def build_chat_payload(
     return payload
 
 
-def _build_request(config: dict[str, str], payload: dict[str, Any]) -> urllib.request.Request:
-    return urllib.request.Request(
-        url=f"{config['base_url']}/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {config['api_key']}",
-        },
-        method="POST",
-    )
-
-
 def _get_optional_params() -> dict[str, float]:
     """从环境变量读取可选的模型参数。
 
@@ -138,19 +129,35 @@ def request_chat_completion(
         max_tokens=max_tokens or AI_CHAT_MAX_OUTPUT_TOKENS,
         **optional_params,
     )
-    req = _build_request(config, payload)
+
+    url = f"{config['base_url']}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {config['api_key']}",
+    }
 
     try:
-        with urllib.request.urlopen(req, timeout=DEFAULT_TIMEOUT) as resp:
-            body = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"模型接口错误 {exc.code}: {detail[:ERROR_MESSAGE_MAX_LENGTH]}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"模型接口连接失败: {exc}") from exc
+        with httpx.Client(timeout=DEFAULT_TIMEOUT) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            body = resp.text
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text[:300]
+        logger.error(f"模型接口错误 {exc.response.status_code}: {detail}")
+        raise RuntimeError("模型接口调用失败") from exc
+    except httpx.ConnectError as exc:
+        logger.error(f"模型接口连接失败: {exc}")
+        raise RuntimeError("模型接口连接失败") from exc
+    except httpx.TimeoutException as exc:
+        logger.error(f"模型接口超时: {exc}")
+        raise RuntimeError("模型接口请求超时") from exc
+    except httpx.HTTPError as exc:
+        logger.error(f"模型接口请求异常: {exc}")
+        raise RuntimeError("模型接口请求失败") from exc
 
     data = json.loads(body)
-    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    choices = data.get("choices", [])
+    content = choices[0].get("message", {}).get("content", "") if choices else ""
     reply = normalize_reply_text(content)
     if not reply:
         raise RuntimeError("模型返回了空内容")
@@ -174,29 +181,42 @@ def stream_chat_completion(
         max_tokens=max_tokens or AI_CHAT_MAX_OUTPUT_TOKENS,
         **optional_params,
     )
-    req = _build_request(config, payload)
+
+    url = f"{config['base_url']}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {config['api_key']}",
+    }
 
     try:
-        with urllib.request.urlopen(req, timeout=STREAM_TIMEOUT) as resp:
-            while True:
-                raw_line = resp.readline()
-                if not raw_line:
-                    break
-                line = raw_line.decode("utf-8", errors="ignore").strip()
-                if not line or not line.startswith("data: "):
-                    continue
-                payload_text = line[6:]
-                if payload_text == "[DONE]":
-                    break
-                try:
-                    data = json.loads(payload_text)
-                except json.JSONDecodeError:
-                    continue
-                delta = data.get("choices", [{}])[0].get("delta", {}).get("content")
-                if delta:
-                    yield delta
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"模型接口错误 {exc.code}: {detail[:ERROR_MESSAGE_MAX_LENGTH]}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"模型接口连接失败: {exc}") from exc
+        with httpx.Client(timeout=STREAM_TIMEOUT) as client:
+            with client.stream("POST", url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                for raw_line in resp.iter_lines():
+                    line = raw_line.strip()
+                    if not line or not line.startswith("data: "):
+                        continue
+                    payload_text = line[6:]
+                    if payload_text == "[DONE]":
+                        break
+                    try:
+                        data = json.loads(payload_text)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = data.get("choices", [])
+                    delta = choices[0].get("delta", {}).get("content") if choices else None
+                    if delta:
+                        yield delta
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text[:300]
+        logger.error(f"流式模型接口错误 {exc.response.status_code}: {detail}")
+        raise RuntimeError("模型接口调用失败") from exc
+    except httpx.ConnectError as exc:
+        logger.error(f"流式模型接口连接失败: {exc}")
+        raise RuntimeError("模型接口连接失败") from exc
+    except httpx.TimeoutException as exc:
+        logger.error(f"流式模型接口超时: {exc}")
+        raise RuntimeError("模型接口请求超时") from exc
+    except httpx.HTTPError as exc:
+        logger.error(f"流式模型接口请求异常: {exc}")
+        raise RuntimeError("模型接口请求失败") from exc

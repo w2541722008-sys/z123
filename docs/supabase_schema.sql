@@ -93,8 +93,11 @@ create table if not exists chat_messages (
   character_id text   not null references characters(id) on delete cascade,
   role         text   not null check (role in ('user', 'assistant', 'system')),
   content      text   not null,
+  versions     jsonb  not null default '[]',
+  current_version_index int not null default 0,
   is_summarized int   not null default 0,   -- 0=未摘要 1=已摘要
-  created_at   text   not null
+  created_at   text   not null,
+  updated_at   text   not null default ''
 );
 
 create index if not exists idx_chat_messages_user_char on chat_messages(user_id, character_id);
@@ -156,10 +159,16 @@ create table if not exists membership_orders (
   user_id        bigint   not null references users(id) on delete cascade,
   plan_type      text     not null,
   amount_cents   int      not null default 0,   -- 单位：分
+  currency       text     not null default 'CNY',
+  duration_days  int      not null default 30,
   status         text     not null default 'pending',  -- pending|paid|cancelled|expired
-  payment_method text,
+  payment_provider text,
+  provider_trade_no text,
+  checkout_url   text,
   paid_at        text,
   expires_at     text,
+  closed_at      text,
+  meta_json      text     not null default '{}',
   created_at     text     not null,
   updated_at     text     not null
 );

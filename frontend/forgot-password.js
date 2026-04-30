@@ -19,6 +19,10 @@ const ForgotPassword = {
   
   // API 基础地址
   get API_BASE() {
+    const shared = window.AIFriendShared;
+    if (shared && typeof shared.resolveApiBase === 'function') {
+      return shared.resolveApiBase();
+    }
     const isLocal = location.hostname === '127.0.0.1' || location.hostname === 'localhost';
     return isLocal ? 'http://127.0.0.1:8000/api' : '/api';
   },

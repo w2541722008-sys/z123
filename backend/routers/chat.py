@@ -22,9 +22,11 @@
 from __future__ import annotations
 
 # 标准库导入
+import logging
 import os
-import time
-from typing import Any
+from functools import partial
+from typing import Any, TypedDict
+from typing_extensions import NotRequired
 
 # 第三方库导入
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -40,215 +42,1177 @@ from config import (
     GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS,
 )
 from database import get_conn
-from model_adapter import get_ai_config, stream_chat_completion
-from models import ChatSendPayload, GuestChatPayload
+from model_adapter import get_ai_config
+from models import ChatSendPayload, ContinuePayload, GuestChatPayload, RegeneratePayload
+from prompt_assembler import build_layered_chat_messages
 from services.plan_service import GUEST_PLAN, get_plan_policy
 from services.rate_limit import enforce_rate_limit, get_request_client_ip
 from services.usage_guard import (
     enforce_daily_budget,
     estimate_messages_tokens,
     estimate_text_tokens,
-    get_daily_usage,
     log_ai_request,
 )
 from services.character_state import apply_state_delta, get_character_state
+from services.chat_stream_service import (
+    StreamConsumeDeps,
+    StreamShellDeps,
+    RetryPostprocessDeps,
+    PersistStreamDeps,
+    MainPostprocessDeps,
+    _build_sse_response,
+    _build_stream_done_payload,
+    _build_stream_done_payload_from_persisted_result as _build_stream_done_payload_from_persisted_result_impl,
+    _build_streaming_chat_response as _build_streaming_chat_response_impl,
+    _consume_stream_result as _consume_stream_result_impl,
+    _persist_stream_result as _persist_stream_result_impl,
+    _postprocess_main_stream_result as _postprocess_main_stream_result_impl,
+    _postprocess_regenerate_or_continue_result as _postprocess_regenerate_or_continue_result_impl,
+    _public_character_state,
+    _stream_ai_completion,
+)
+from services.memory_service import parse_state_update_tag, run_memory_summary_background
 from services.chat_service import (
     AIChatError,
-    build_layered_chat_messages,
+    _build_chat_send_response,
+    _build_guest_quota_payload,
+    _build_guest_stream_messages,
+    _build_prompt_context_payload,
+    _build_stream_prepare_result,
+    _build_user_stream_messages_and_budget,
+    _log_failed_chat_request,
+    _log_successful_chat_request,
+    _normalize_non_empty_message,
+    _prepare_ai_budget,
+    _prepare_user_ai_budget,
+    _prepare_user_chat_request,
+    _prepare_regenerate_or_continue_request,
+    _message_projection,
+    _resolve_public_character_state,
     build_reply_with_fallback,
     count_chat_messages,
+    format_done_event,
+    format_error_event,
     format_sse,
     get_character_or_404,
-    get_linked_assets,
-    prepare_chat_context,
     save_assistant_message,
+    save_regenerated_version,
     store_user_message,
 )
-from services.memory_service import (
-    normalize_reply_text,
-    parse_state_update_tag,
-    run_memory_summary_background,
-    sanitize_stream_chunk,
-)
+
+logger = logging.getLogger(__name__)
+router = APIRouter(tags=["chat"])
 
 
-router = APIRouter()
+class StreamPrepareResult(TypedDict):
+    guest_ip: str
+    ai_config: dict[str, Any]
+    character: dict[str, Any]
+    clean_text: str
+    stream_messages: list[dict[str, str]]
+    estimate: dict[str, int]
+    recent_messages: NotRequired[list[dict[str, Any]]]
+    memory_summary: NotRequired[str]
+    related_assets: NotRequired[list[Any]]
+    character_id: NotRequired[str]
+    current_content: NotRequired[str]
 
 
-SSE_STREAM_TIMEOUT = 120
+def _default_stream_headers() -> dict[str, str]:
+    return {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
-def _stream_ai_completion(stream_messages: list, ai_config: dict):
-    """
-    公共 AI 流式调用生成器。
-    
-    消除 chat_stream / guest_stream / regenerate / continue 四处重复的流式循环代码。
-    依次 yield SSE chunk 事件，最后返回 (final_reply_raw, error_msg) 元组。
-    
-    用法:
-        for sse_event in _stream_ai_completion(messages, config):
-            yield sse_event  # chunk 或 error 事件
-        # 循环结束后，final_reply 已就绪
-    """
-    full_reply = ""
-    stream_state = {"buffer": "", "in_think": False}
-    _stream_start = time.monotonic()
 
-    try:
-        for chunk in stream_chat_completion(
-            stream_messages,
-            ai_config,
-            max_tokens=AI_CHAT_MAX_OUTPUT_TOKENS,
-        ):
-            if time.monotonic() - _stream_start > SSE_STREAM_TIMEOUT:
-                raise TimeoutError(f"SSE 流式响应超时（{SSE_STREAM_TIMEOUT}秒）")
-            visible_chunk = sanitize_stream_chunk(chunk, stream_state)
-            if not visible_chunk:
-                continue
-            full_reply += visible_chunk
-            yield format_sse("chunk", {"text": visible_chunk})
-
-        if stream_state.get("buffer") and not stream_state.get("in_think"):
-            tail = stream_state["buffer"]
-            if tail:
-                full_reply += tail
-                yield format_sse("chunk", {"text": tail})
-
-        final_reply_raw = normalize_reply_text(full_reply)
-        if not final_reply_raw:
-            raise RuntimeError("模型返回了空内容")
-
-        return final_reply_raw, None
-
-    except Exception as e:
-        return full_reply, str(e)
+def _default_stream_error_message() -> str:
+    return "网络波动，请稍后再试"
 
 
-def _build_guest_fallback_messages(character: dict, user_message: str) -> list[dict]:
-    """
-    构建游客模式的降级Prompt，在主流程失败时使用。
-    
-    尽可能保留角色的核心设定，确保游客也能获得完整的角色体验。
-    包含：角色基础信息、详细描述、性格、世界观、示例对话等。
-    
-    Args:
-        character: 角色数据字典
-        user_message: 用户输入的消息
-        
-    Returns:
-        组装好的消息列表，可直接用于AI调用
-    """
-    # 构建系统提示词，尽可能包含角色的完整设定
-    system_parts = []
-    
-    # 1. 角色身份基础
-    name = character.get('name', 'AI角色')
-    subtitle = character.get('subtitle', '')
-    base_identity = f"你是{name}"
-    if subtitle:
-        base_identity += f"，{subtitle}"
-    system_parts.append(base_identity)
-    
-    # 2. 详细描述（description）
-    description = character.get('description', '')
-    if description:
-        system_parts.append(f"\n【角色背景】\n{description}")
-    
-    # 3. 性格特征（personality）
-    personality = character.get('personality', '')
-    if personality:
-        system_parts.append(f"\n【性格特点】\n{personality}")
-    
-    # 4. 世界观/场景（scenario）
-    scenario = character.get('scenario', '')
-    if scenario:
-        system_parts.append(f"\n【世界观/场景】\n{scenario}")
-    
-    # 5. 角色设定前（world_info_before）
-    world_info_before = character.get('world_info_before', '')
-    if world_info_before:
-        system_parts.append(f"\n【角色设定】\n{world_info_before}")
-    
-    # 6. 示例对话（example_dialogue）
-    example_dialogue = character.get('example_dialogue', '')
-    if example_dialogue:
-        system_parts.append(f"\n【参考对话风格】\n{example_dialogue}")
-    
-    # 7. 角色设定后（world_info_after）
-    world_info_after = character.get('world_info_after', '')
-    if world_info_after:
-        system_parts.append(f"\n【补充设定】\n{world_info_after}")
-    
-    # 8. 后置规则（post_history_rules）
-    post_rules = character.get('post_history_rules', '')
-    if post_rules:
-        system_parts.append(f"\n【回复规则】\n{post_rules}")
-    
-    # 9. 系统指令
-    system_parts.append("\n【重要指令】")
-    system_parts.append("1. 始终保持角色设定，用第一人称回复")
-    system_parts.append("2. 回复自然、有温度，符合角色性格")
-    system_parts.append("3. 在回复末尾添加状态更新标签，格式：<STATE_UPDATE>{\"mood\": \"心情\", \"affection\": 数值}</STATE_UPDATE>")
-    
-    # 组装完整系统提示词
-    system_content = "\n".join(system_parts)
-    
-    return [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": user_message},
-    ]
+
+def _bind_stream_postprocess(fn, **kwargs):
+    def bound(final_text: str, delta: dict[str, Any] | None = None):
+        return fn(final_text=final_text, delta=delta, **kwargs)
+
+    return bound
 
 
-def _rollback_latest_user_message(user_id: int, character_id: str) -> None:
-    """回滚最近一条用户消息（在AI回复失败时调用）。"""
-    conn = get_conn()
-    try:
-        conn.execute(
-            """
-            DELETE FROM chat_messages 
-            WHERE user_id = %s AND character_id = %s AND role = 'user'
-            AND id = (SELECT MAX(id) FROM chat_messages WHERE user_id = %s AND character_id = %s AND role = 'user')
-            """,
-            (user_id, character_id, user_id, character_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
-
-def _log_chat_failure(
+def _consume_stream_result(
     *,
+    stream_messages: list[dict[str, str]],
+    ai_config: dict[str, Any],
     user_id: int | None,
     guest_ip: str,
     character_id: str,
     endpoint: str,
     estimate: dict[str, int],
+    stream_error_message: str,
+):
+    return (yield from _consume_stream_result_impl(
+        stream_messages=stream_messages,
+        ai_config=ai_config,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint=endpoint,
+        estimate=estimate,
+        stream_error_message=stream_error_message,
+        deps=StreamConsumeDeps(
+            stream_ai_completion=_stream_ai_completion,
+            log_chat_failure=_log_failed_chat_request,
+            estimate_output_tokens=estimate_text_tokens,
+            parse_stream_reply=parse_state_update_tag,
+            format_error_event=format_error_event,
+        ),
+    ))
+
+
+
+def _stream_with_postprocess(
+    *,
+    stream_messages: list[dict[str, str]],
+    ai_config: Any,
+    user_id: int | None,
+    guest_ip: str,
+    character_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    stream_error_message: str,
+    postprocess,
+    consume_stream_result=_consume_stream_result,
+):
+    stream_result = yield from consume_stream_result(
+        stream_messages=stream_messages,
+        ai_config=ai_config,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint=endpoint,
+        estimate=estimate,
+        stream_error_message=stream_error_message,
+    )
+    if stream_result is None:
+        return
+
+    final_text, delta = stream_result
+    yield from postprocess(final_text, delta)
+
+
+
+def _build_streaming_chat_response(
+    *,
+    stream_messages: list[dict[str, str]],
+    ai_config: Any,
+    user_id: int | None,
+    guest_ip: str,
+    character_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    stream_error_message: str,
+    postprocess,
+    headers: dict[str, str] | None = None,
+):
+    return _build_streaming_chat_response_impl(
+        stream_messages=stream_messages,
+        ai_config=ai_config,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint=endpoint,
+        estimate=estimate,
+        stream_error_message=stream_error_message,
+        postprocess=postprocess,
+        deps=StreamShellDeps(
+            build_sse_response=_build_sse_response,
+            stream_with_postprocess=_stream_with_postprocess,
+        ),
+        headers=headers,
+    )
+
+
+
+def _build_default_stream_response(
+    *,
+    stream_messages: list[dict[str, str]],
+    ai_config: dict[str, Any],
+    user_id: int | None,
+    guest_ip: str,
+    character_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    postprocess,
+    stream_error_message: str | None = None,
+    headers: dict[str, str] | None = None,
+):
+    return _build_streaming_chat_response(
+        stream_messages=stream_messages,
+        ai_config=ai_config,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint=endpoint,
+        estimate=estimate,
+        stream_error_message=stream_error_message or _default_stream_error_message(),
+        postprocess=postprocess,
+        headers=headers or _default_stream_headers(),
+    )
+
+
+
+def _build_persist_stream_deps() -> PersistStreamDeps:
+    return PersistStreamDeps(
+        get_conn=get_conn,
+        store_user_message=store_user_message,
+        save_assistant_message=save_assistant_message,
+        log_successful_chat_request=_log_successful_chat_request,
+        resolve_public_character_state=_resolve_public_character_state,
+    )
+
+
+
+def _emit_stream_persist_failure(
+    *,
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
     error_detail: str,
-    estimated_output_tokens: int = 0,
-) -> None:
-    """尽量补记失败请求日志，避免线上排查时只看到成功请求。"""
-    log_conn = get_conn()
+    reply_text: str,
+    client_message: str,
+):
+    _log_failed_chat_request(
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint=endpoint,
+        estimate=estimate,
+        error_detail=error_detail,
+        estimated_output_tokens=estimate_text_tokens(reply_text),
+    )
+    return format_error_event(client_message)
+
+
+
+def _build_main_postprocess_deps() -> MainPostprocessDeps:
+    return MainPostprocessDeps(
+        persist_stream_result=_persist_stream_result,
+        emit_stream_persist_failure=_emit_stream_persist_failure,
+        build_done_payload_from_persisted_result=lambda *, reply, persisted_result: _build_stream_done_payload_from_persisted_result_impl(
+            reply=reply,
+            persisted_result=persisted_result,
+            build_stream_done_payload=_build_stream_done_payload,
+        ),
+        run_memory_summary_background=run_memory_summary_background,
+        format_done_event=format_done_event,
+    )
+
+
+
+def _build_retry_postprocess_deps() -> RetryPostprocessDeps:
+    return RetryPostprocessDeps(
+        get_conn=get_conn,
+        save_regenerated_version=save_regenerated_version,
+        log_successful_chat_request=_log_successful_chat_request,
+        resolve_public_character_state=_resolve_public_character_state,
+        emit_stream_persist_failure=_emit_stream_persist_failure,
+        build_stream_done_payload=_build_stream_done_payload,
+        format_done_event=format_done_event,
+        format_error_event=format_error_event,
+        logger=logger,
+    )
+
+
+
+def _postprocess_guest_stream_result(
+    final_text: str,
+    delta: dict[str, Any] | None = None,
+    *,
+    guest_ip: str,
+    character_id: str,
+    estimate: dict[str, int],
+):
+    _ = delta
+    yield format_done_event(
+        _legacy_postprocess_guest_stream_result_impl(
+            final_text,
+            guest_ip=guest_ip,
+            character_id=character_id,
+            estimate=estimate,
+        )
+    )
+
+
+
+def _build_main_stream_postprocess(
+    *,
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    estimate: dict[str, int],
+    user_message: str,
+    character: dict[str, Any],
+):
+    return _bind_stream_postprocess(
+        _postprocess_main_stream_result_impl,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        estimate=estimate,
+        user_message=user_message,
+        character=character,
+        deps=_build_main_postprocess_deps(),
+    )
+
+
+
+def _build_guest_stream_postprocess(
+    *,
+    guest_ip: str,
+    character_id: str,
+    estimate: dict[str, int],
+):
+    return _bind_stream_postprocess(
+        _postprocess_guest_stream_result,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        estimate=estimate,
+    )
+
+
+
+def _build_retry_stream_postprocess(
+    *,
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    message_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    is_append: bool,
+    base_reply: str,
+    operation: str,
+):
+    return _bind_stream_postprocess(
+        _postprocess_regenerate_or_continue_result_impl,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        message_id=message_id,
+        endpoint=endpoint,
+        estimate=estimate,
+        is_append=is_append,
+        base_reply=base_reply,
+        operation=operation,
+        deps=_build_retry_postprocess_deps(),
+    )
+
+
+
+def _build_main_stream_response(
+    *,
+    stream_messages: list[dict[str, str]],
+    ai_config: dict[str, Any],
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    estimate: dict[str, int],
+    postprocess,
+):
+    return _build_default_stream_response(
+        stream_messages=stream_messages,
+        ai_config=ai_config,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint="/api/chat/stream",
+        estimate=estimate,
+        postprocess=postprocess,
+    )
+
+
+
+def _build_guest_stream_response(
+    *,
+    stream_messages: list[dict[str, str]],
+    ai_config: dict[str, Any],
+    guest_ip: str,
+    character_id: str,
+    estimate: dict[str, int],
+    postprocess,
+):
+    return _build_default_stream_response(
+        stream_messages=stream_messages,
+        ai_config=ai_config,
+        user_id=None,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint="/api/chat/guest-stream",
+        estimate=estimate,
+        postprocess=postprocess,
+    )
+
+
+
+def _build_retry_stream_response(
+    *,
+    stream_messages: list[dict[str, str]],
+    ai_config: dict[str, Any],
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    postprocess,
+):
+    return _build_default_stream_response(
+        stream_messages=stream_messages,
+        ai_config=ai_config,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint=endpoint,
+        estimate=estimate,
+        postprocess=postprocess,
+    )
+
+
+
+def _stream_regenerate_or_continue_events(
+    *,
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    message_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    ai_config: dict[str, Any],
+    stream_messages: list[dict[str, str]],
+    is_append: bool,
+    base_reply: str = "",
+    operation: str,
+) -> StreamingResponse:
+    return _build_retry_stream_response(
+        stream_messages=stream_messages,
+        ai_config=ai_config,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint=endpoint,
+        estimate=estimate,
+        postprocess=_build_retry_stream_postprocess(
+            user_id=user_id,
+            guest_ip=guest_ip,
+            character_id=character_id,
+            message_id=message_id,
+            endpoint=endpoint,
+            estimate=estimate,
+            is_append=is_append,
+            base_reply=base_reply,
+            operation=operation,
+        ),
+    )
+
+
+
+def _stream_chat_events(
+    *,
+    stream_messages: list[dict[str, str]],
+    ai_config: dict[str, Any],
+    user_id: int | None,
+    guest_ip: str,
+    character_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    stream_error_message: str,
+    postprocess,
+):
     try:
-        total_estimated_tokens = estimate["tokens"] + max(0, estimated_output_tokens)
-        log_ai_request(
-            log_conn,
+        reply_text = ""
+        for chunk in build_reply_with_fallback(
+            character={"id": character_id},
+            recent_messages=stream_messages,
+            memory_summary="",
+            related_assets=[],
+            user_name="游客" if user_id is None else "用户",
+            conn=None,
+            user_id=user_id,
+            ai_config=ai_config,
+            commit=False,
+            stream=True,
+        ):
+            if isinstance(chunk, str):
+                reply_text += chunk
+                yield format_sse("chunk", {"text": chunk})
+
+        done_payload = postprocess(reply_text)
+        yield format_done_event(done_payload)
+    except Exception as exc:
+        logger.exception("stream chat events failed")
+        yield format_error_event(stream_error_message)
+        raise exc
+
+
+
+def _legacy_postprocess_stream_result_impl(
+    reply_text: str,
+    *,
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    estimate: dict[str, int],
+    user_message: str,
+    character: dict[str, Any],
+):
+    conn = get_conn()
+    try:
+        save_assistant_message(conn, user_id, character_id, reply_text, commit=False)
+        history_count = count_chat_messages(conn, user_id, character_id)
+        character_state = _resolve_public_character_state(
+            conn,
+            user_id=user_id,
+            character_id=character_id,
+            delta=apply_state_delta(character, user_message, reply_text),
+        )
+        _log_successful_chat_request(
+            conn,
+            user_id=user_id,
+            guest_ip=guest_ip,
+            character_id=character_id,
+            endpoint="/api/chat/stream",
+            estimate=estimate,
+            reply_text=reply_text,
+        )
+        conn.commit()
+        return {
+            "reply": reply_text,
+            "history_count": history_count,
+            "summary_enabled": True,
+            "character_state": character_state,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+
+def _legacy_postprocess_guest_stream_result_impl(
+    reply_text: str,
+    *,
+    guest_ip: str,
+    character_id: str,
+    estimate: dict[str, int],
+):
+    log_ai_request(
+        user_id=None,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint="/api/chat/guest-stream",
+        estimate=estimate,
+        success=True,
+        error_detail=None,
+    )
+    return {
+        "reply": reply_text,
+        "history_count": 0,
+        "summary_enabled": False,
+        "character_state": None,
+    }
+
+
+
+def _legacy_postprocess_regenerate_or_continue_result_impl(
+    reply_text: str,
+    *,
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    message_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    operation: str,
+):
+    conn = get_conn()
+    try:
+        save_regenerated_version(
+            conn,
+            user_id=user_id,
+            character_id=character_id,
+            message_id=message_id,
+            reply=reply_text,
+            is_append=(operation == "continue"),
+            commit=False,
+        )
+        history_count = count_chat_messages(conn, user_id, character_id)
+        character_state = _resolve_public_character_state(
+            conn,
+            user_id=user_id,
+            character_id=character_id,
+            delta=None,
+        )
+        _log_successful_chat_request(
+            conn,
             user_id=user_id,
             guest_ip=guest_ip,
             character_id=character_id,
             endpoint=endpoint,
-            request_chars=estimate["chars"],
-            estimated_input_tokens=estimate["tokens"],
-            estimated_output_tokens=max(0, estimated_output_tokens),
-            total_estimated_tokens=total_estimated_tokens,
-            used_fallback=False,
-            status="error",
-            error_detail=error_detail,
+            estimate=estimate,
+            reply_text=reply_text,
         )
+        conn.commit()
+        return {
+            "reply": reply_text,
+            "history_count": history_count,
+            "summary_enabled": True,
+            "character_state": character_state,
+        }
     except Exception:
-        # 失败日志写入不能反过来影响主流程
-        pass
+        conn.rollback()
+        raise
     finally:
-        log_conn.close()
+        conn.close()
+
+
+
+def _prepare_stream_request_with_conn(prepare_fn, **kwargs):
+    conn = get_conn()
+    try:
+        return prepare_fn(conn, **kwargs)
+    finally:
+        conn.close()
+
+
+
+def _read_stream_state_with_conn(prepare_fn, read_fn, **kwargs):
+    prepared = _prepare_stream_request_with_conn(prepare_fn, **kwargs)
+    return read_fn(prepared)
+
+
+
+def _read_main_stream_prepared(prepared: StreamPrepareResult) -> dict[str, Any]:
+    return {
+        "guest_ip": prepared["guest_ip"],
+        "ai_config": prepared["ai_config"],
+        "character": prepared["character"],
+        "clean_text": prepared["clean_text"],
+        "stream_messages": prepared["stream_messages"],
+        "estimate": prepared["estimate"],
+    }
+
+
+
+def _read_guest_stream_prepared(prepared: StreamPrepareResult) -> dict[str, Any]:
+    return {
+        "guest_ip": prepared["guest_ip"],
+        "ai_config": prepared["ai_config"],
+        "stream_messages": prepared["stream_messages"],
+        "estimate": prepared["estimate"],
+    }
+
+
+
+def _read_retry_stream_prepared(prepared: StreamPrepareResult) -> dict[str, Any]:
+    result = {
+        "guest_ip": prepared["guest_ip"],
+        "character_id": prepared["character_id"],
+        "stream_messages": prepared["stream_messages"],
+        "ai_config": prepared["ai_config"],
+        "estimate": prepared["estimate"],
+    }
+    if "current_content" in prepared:
+        result["current_content"] = prepared["current_content"]
+    return result
+
+
+
+def _read_chat_send_prepared(prepared: StreamPrepareResult) -> dict[str, Any]:
+    return {
+        "guest_ip": prepared["guest_ip"],
+        "ai_config": prepared["ai_config"],
+        "character": prepared["character"],
+        "clean_text": prepared["clean_text"],
+        "recent_messages": prepared["recent_messages"],
+        "memory_summary": prepared["memory_summary"],
+        "related_assets": prepared["related_assets"],
+        "estimate": prepared["estimate"],
+    }
+
+
+
+def _build_main_route_postprocess_kwargs(
+    *,
+    stream_state: dict[str, Any],
+    user_id: int,
+    character_id: str,
+) -> dict[str, Any]:
+    return {
+        "user_id": user_id,
+        **_build_guest_route_postprocess_kwargs(
+            stream_state=stream_state,
+            character_id=character_id,
+        ),
+        "user_message": stream_state["clean_text"],
+        "character": stream_state["character"],
+    }
+
+
+
+def _build_guest_route_postprocess_kwargs(
+    *,
+    stream_state: dict[str, Any],
+    character_id: str,
+) -> dict[str, Any]:
+    return {
+        "guest_ip": stream_state["guest_ip"],
+        "character_id": character_id,
+        "estimate": stream_state["estimate"],
+    }
+
+
+
+def _build_main_route_response_kwargs(
+    *,
+    stream_state: dict[str, Any],
+    user_id: int,
+    character_id: str,
+) -> dict[str, Any]:
+    return _build_common_stream_response_kwargs(
+        stream_state=stream_state,
+        character_id=character_id,
+        user_id=user_id,
+    )
+
+
+
+def _build_guest_route_response_kwargs(
+    *,
+    stream_state: dict[str, Any],
+    character_id: str,
+) -> dict[str, Any]:
+    return _build_common_stream_response_kwargs(
+        stream_state=stream_state,
+        character_id=character_id,
+    )
+
+
+
+def _build_stream_state_builder(target, **fixed_kwargs):
+    def builder(stream_state: dict[str, Any]) -> dict[str, Any]:
+        return target(
+            stream_state=stream_state,
+            **fixed_kwargs,
+        )
+
+    return builder
+
+
+
+def _build_main_route_postprocess_builder(
+    *,
+    user_id: int,
+    character_id: str,
+):
+    return _build_stream_state_builder(
+        _build_main_route_postprocess_kwargs,
+        user_id=user_id,
+        character_id=character_id,
+    )
+
+
+
+def _build_main_route_response_builder(
+    *,
+    user_id: int,
+    character_id: str,
+):
+    return _build_stream_state_builder(
+        _build_main_route_response_kwargs,
+        user_id=user_id,
+        character_id=character_id,
+    )
+
+
+
+def _build_guest_route_postprocess_builder(*, character_id: str):
+    return _build_stream_state_builder(
+        _build_guest_route_postprocess_kwargs,
+        character_id=character_id,
+    )
+
+
+
+def _build_guest_route_response_builder(*, character_id: str):
+    return _build_stream_state_builder(
+        _build_guest_route_response_kwargs,
+        character_id=character_id,
+    )
+
+
+
+def _build_common_stream_response_kwargs(
+    *,
+    stream_state: dict[str, Any],
+    character_id: str,
+    user_id: int | None = None,
+) -> dict[str, Any]:
+    result = {
+        "stream_messages": stream_state["stream_messages"],
+        "ai_config": stream_state["ai_config"],
+        "guest_ip": stream_state["guest_ip"],
+        "character_id": character_id,
+        "estimate": stream_state["estimate"],
+    }
+    if user_id is not None:
+        result["user_id"] = user_id
+    return result
+
+
+
+def _build_retry_stream_event_kwargs(
+    *,
+    stream_state: dict[str, Any],
+    user_id: int,
+    message_id: str,
+    endpoint: str,
+    is_append: bool,
+    operation: str,
+) -> dict[str, Any]:
+    return {
+        "user_id": user_id,
+        "guest_ip": stream_state["guest_ip"],
+        "character_id": stream_state["character_id"],
+        "message_id": message_id,
+        "endpoint": endpoint,
+        "estimate": stream_state["estimate"],
+        "ai_config": stream_state["ai_config"],
+        "stream_messages": stream_state["stream_messages"],
+        "is_append": is_append,
+        "base_reply": stream_state.get("current_content", ""),
+        "operation": operation,
+    }
+
+
+
+def _build_retry_route_prepare_kwargs(
+    *,
+    user: CurrentUser,
+    request: Request,
+    message_id: str,
+    operation: str,
+) -> dict[str, Any]:
+    return {
+        "user": user,
+        "message_id": message_id,
+        "guest_ip": get_request_client_ip(request),
+        "operation": operation,
+    }
+
+
+
+def _build_retry_route_event_builder(
+    *,
+    user_id: int,
+    message_id: str,
+    endpoint: str,
+    is_append: bool,
+    operation: str,
+):
+    def builder(stream_state: dict[str, Any]) -> dict[str, Any]:
+        return _build_retry_stream_event_kwargs(
+            stream_state=stream_state,
+            user_id=user_id,
+            message_id=message_id,
+            endpoint=endpoint,
+            is_append=is_append,
+            operation=operation,
+        )
+
+    return builder
+
+
+
+def _build_retry_route_bindings(
+    *,
+    user_id: int,
+    message_id: str,
+    endpoint: str,
+    is_append: bool,
+    operation: str,
+) -> dict[str, Any]:
+    return {
+        "build_response": _stream_regenerate_or_continue_events,
+        "response_kwargs_builder": _build_retry_route_event_builder(
+            user_id=user_id,
+            message_id=message_id,
+            endpoint=endpoint,
+            is_append=is_append,
+            operation=operation,
+        ),
+    }
+
+
+
+def _execute_stream_response(
+    *,
+    build_response,
+    response_kwargs_builder,
+    stream_state: dict[str, Any],
+):
+    return build_response(**response_kwargs_builder(stream_state))
+
+
+
+def _build_composed_response_kwargs_builder(
+    *,
+    build_postprocess,
+    postprocess_kwargs_builder,
+    build_response,
+    response_kwargs_builder,
+):
+    def builder(stream_state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "build_postprocess": build_postprocess,
+            "postprocess_kwargs": postprocess_kwargs_builder(stream_state),
+            "build_response": build_response,
+            "response_kwargs": response_kwargs_builder(stream_state),
+        }
+
+    return builder
+
+
+
+def _compose_stream_response(
+    *,
+    build_postprocess,
+    postprocess_kwargs: dict[str, Any],
+    build_response,
+    response_kwargs: dict[str, Any],
+):
+    postprocess = build_postprocess(**postprocess_kwargs)
+    return build_response(
+        postprocess=postprocess,
+        **response_kwargs,
+    )
+
+
+
+def _build_stream_route_bindings(
+    *,
+    character_id: str,
+    build_postprocess,
+    build_response,
+    postprocess_kwargs_builder,
+    response_kwargs_builder,
+) -> dict[str, Any]:
+    return {
+        "build_postprocess": build_postprocess,
+        "build_response": build_response,
+        "postprocess_kwargs_builder": postprocess_kwargs_builder(
+            character_id=character_id,
+        ),
+        "response_kwargs_builder": response_kwargs_builder(
+            character_id=character_id,
+        ),
+    }
+
+
+
+def _build_main_route_bindings(*, user_id: int, character_id: str) -> dict[str, Any]:
+    return _build_stream_route_bindings(
+        character_id=character_id,
+        build_postprocess=_build_main_stream_postprocess,
+        build_response=_build_main_stream_response,
+        postprocess_kwargs_builder=lambda *, character_id: _build_main_route_postprocess_builder(
+            user_id=user_id,
+            character_id=character_id,
+        ),
+        response_kwargs_builder=lambda *, character_id: _build_main_route_response_builder(
+            user_id=user_id,
+            character_id=character_id,
+        ),
+    )
+
+
+
+def _build_guest_route_bindings(*, character_id: str) -> dict[str, Any]:
+    return _build_stream_route_bindings(
+        character_id=character_id,
+        build_postprocess=_build_guest_stream_postprocess,
+        build_response=_build_guest_stream_response,
+        postprocess_kwargs_builder=_build_guest_route_postprocess_builder,
+        response_kwargs_builder=_build_guest_route_response_builder,
+    )
+
+
+
+def _build_composed_route_response(
+    *,
+    prepare_fn,
+    read_fn,
+    prepare_kwargs: dict[str, Any],
+    build_postprocess,
+    postprocess_kwargs_builder,
+    build_response,
+    response_kwargs_builder,
+) -> StreamingResponse:
+    stream_state = _read_stream_state_with_conn(
+        prepare_fn,
+        read_fn,
+        **prepare_kwargs,
+    )
+    return _execute_stream_response(
+        build_response=_compose_stream_response,
+        response_kwargs_builder=_build_composed_response_kwargs_builder(
+            build_postprocess=build_postprocess,
+            postprocess_kwargs_builder=postprocess_kwargs_builder,
+            build_response=build_response,
+            response_kwargs_builder=response_kwargs_builder,
+        ),
+        stream_state=stream_state,
+    )
+
+
+
+def _build_retry_route_response(
+    *,
+    user: CurrentUser,
+    request: Request,
+    message_id: str,
+    operation: str,
+    endpoint: str,
+    is_append: bool,
+) -> StreamingResponse:
+    stream_state = _read_stream_state_with_conn(
+        _prepare_regenerate_or_continue_request,
+        _read_retry_stream_prepared,
+        **_build_retry_route_prepare_kwargs(
+            user=user,
+            request=request,
+            message_id=message_id,
+            operation=operation,
+        ),
+    )
+    return _execute_stream_response(
+        stream_state=stream_state,
+        **_build_retry_route_bindings(
+            user_id=user.id,
+            message_id=message_id,
+            endpoint=endpoint,
+            is_append=is_append,
+            operation=operation,
+        ),
+    )
+
+
+
+def _build_main_route_response(
+    *,
+    user: CurrentUser,
+    payload: ChatSendPayload,
+    request: Request,
+) -> StreamingResponse:
+    return _build_composed_route_response(
+        prepare_fn=_prepare_user_chat_request,
+        read_fn=_read_main_stream_prepared,
+        prepare_kwargs={
+            "user": user,
+            "payload": payload,
+            "guest_ip": get_request_client_ip(request),
+        },
+        **_build_main_route_bindings(
+            user_id=user.id,
+            character_id=payload.character_id,
+        ),
+    )
+
+
+
+def _build_guest_route_response(
+    *,
+    payload: GuestChatPayload,
+    request: Request,
+) -> StreamingResponse:
+    return _build_composed_route_response(
+        prepare_fn=_prepare_guest_stream_request,
+        read_fn=_read_guest_stream_prepared,
+        prepare_kwargs={
+            "payload": payload,
+            "request": request,
+        },
+        **_build_guest_route_bindings(character_id=payload.character_id),
+    )
+
+
+
+def _enforce_user_chat_rate_limit(user_id: int, *, detail: str) -> None:
+    enforce_rate_limit(
+        "chat_user",
+        str(user_id),
+        limit=CHAT_RATE_LIMIT_COUNT,
+        window_seconds=CHAT_RATE_LIMIT_WINDOW_SECONDS,
+        detail=detail,
+    )
+
+
+
+def _build_chat_send_request_context(
+    *,
+    prepared_state: dict[str, Any],
+    character_id: str,
+) -> dict[str, Any]:
+    return {
+        "guest_ip": prepared_state["guest_ip"],
+        "character_id": character_id,
+        "estimate": prepared_state["estimate"],
+    }
+
+
+
+def _build_chat_send_success_kwargs(
+    *,
+    user: CurrentUser,
+    payload: ChatSendPayload,
+    prepared_state: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "user": user,
+        "payload": payload,
+        **_build_chat_send_request_context(
+            prepared_state=prepared_state,
+            character_id=payload.character_id,
+        ),
+        "character": prepared_state["character"],
+        "recent_messages": prepared_state["recent_messages"],
+        "memory_summary": prepared_state["memory_summary"],
+        "related_assets": prepared_state["related_assets"],
+        "ai_config": prepared_state["ai_config"],
+    }
+
+
+
+def _build_chat_send_reply_kwargs(
+    *,
+    conn,
+    user: CurrentUser,
+    character: dict[str, Any],
+    recent_messages: list[dict[str, Any]],
+    memory_summary: str,
+    related_assets: list[Any],
+    ai_config: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "character": character,
+        "recent_messages": recent_messages,
+        "memory_summary": memory_summary,
+        "related_assets": related_assets,
+        "user_name": user.nickname,
+        "conn": conn,
+        "user_id": user.id,
+        "ai_config": ai_config,
+        "commit": False,
+    }
+
 
 
 def _persist_stream_result(
@@ -259,88 +1223,215 @@ def _persist_stream_result(
     final_reply: str,
     estimate: dict[str, int],
     delta: dict[str, Any] | None,
-    user_message: str | None = None,  # 新增：用户消息内容
-) -> dict[str, Any]:
-    """统一落库用户消息、流式回复、消耗日志和角色状态，任一步失败都整体回滚。返回包含 character_state 和 message_id 的字典。"""
-    save_conn = get_conn()
-    message_id = None
-    try:
-        # 先写用户消息（如果提供了）
-        if user_message:
-            store_user_message(save_conn, user_id, character_id, user_message, commit=False)
-        # 再写 AI 回复（获取 message_id）
-        message_id = save_assistant_message(save_conn, user_id, character_id, final_reply, commit=False)
-        actual_output_tokens = estimate_text_tokens(final_reply)
-        log_ai_request(
-            save_conn,
-            user_id=user_id,
-            guest_ip=guest_ip,
-            character_id=character_id,
-            endpoint="/api/chat/stream",
-            request_chars=estimate["chars"],
-            estimated_input_tokens=estimate["tokens"],
-            estimated_output_tokens=actual_output_tokens,
-            total_estimated_tokens=estimate["tokens"] + actual_output_tokens,
-            used_fallback=False,
-            status="success",
-            commit=False,
+    user_message: str | None = None,
+):
+    return _persist_stream_result_impl(
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        final_reply=final_reply,
+        estimate=estimate,
+        delta=delta,
+        user_message=user_message,
+        deps=_build_persist_stream_deps(),
+    )
+
+
+
+def _finalize_chat_send_success(
+    conn,
+    *,
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    estimate: dict[str, int],
+    reply: str,
+) -> tuple[int, dict[str, Any]]:
+    save_assistant_message(conn, user_id, character_id, reply, commit=False)
+    history_count = count_chat_messages(conn, user_id, character_id)
+    character_state = _resolve_public_character_state(
+        conn,
+        user_id=user_id,
+        character_id=character_id,
+        delta=None,
+    )
+    _log_successful_chat_request(
+        conn,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint="/api/chat/send",
+        estimate=estimate,
+        reply_text=reply,
+    )
+    conn.commit()
+    return history_count, character_state
+
+
+
+def _execute_chat_send_success_flow(
+    conn,
+    *,
+    user: CurrentUser,
+    payload: ChatSendPayload,
+    guest_ip: str,
+    estimate: dict[str, int],
+    character: dict[str, Any],
+    recent_messages: list[dict[str, Any]],
+    memory_summary: str,
+    related_assets: list[Any],
+    ai_config: dict[str, Any],
+) -> tuple[str, int, dict[str, Any]]:
+    reply, _new_state = build_reply_with_fallback(
+        **_build_chat_send_reply_kwargs(
+            conn=conn,
+            user=user,
+            character=character,
+            recent_messages=recent_messages,
+            memory_summary=memory_summary,
+            related_assets=related_assets,
+            ai_config=ai_config,
         )
-        if delta:
-            raw_state = apply_state_delta(
-                save_conn,
-                user_id,
-                character_id,
-                delta,
-                commit=False,
-            )
-        else:
-            raw_state = get_character_state(save_conn, user_id, character_id)
-        save_conn.commit()
-        result = {k: v for k, v in raw_state.items() if not k.startswith("_")}
-        result["message_id"] = message_id
-        return result
-    except Exception:
-        save_conn.rollback()
-        raise
-    finally:
-        save_conn.close()
+    )
+
+    history_count, character_state = _finalize_chat_send_success(
+        conn,
+        user_id=user.id,
+        guest_ip=guest_ip,
+        character_id=payload.character_id,
+        estimate=estimate,
+        reply=reply,
+    )
+    return reply, history_count, character_state
 
 
-def _build_guest_quota_payload(conn, guest_ip: str) -> dict[str, Any]:
-    """返回游客体验额度的简化状态，供前端轻提示展示。"""
-    plan_policy = get_plan_policy(GUEST_PLAN)
-    token_limit = max(0, int(plan_policy["token_limit"] or 0))
-    usage = get_daily_usage(conn, guest_ip=guest_ip)
-    used_tokens = max(0, int(usage["total_tokens"] or 0))
-    remaining_tokens = max(0, token_limit - used_tokens)
-    remaining_percent = int(remaining_tokens * 100 / token_limit) if token_limit > 0 else 100
 
-    if remaining_tokens <= 0:
-        status_text = "额度已用完"
-    elif remaining_percent <= 35:
-        status_text = "额度不多"
-    else:
-        status_text = "额度充足"
-
+def _build_chat_send_failure_kwargs(
+    *,
+    user: CurrentUser,
+    payload: ChatSendPayload,
+    prepared_state: dict[str, Any],
+    exc: Exception,
+) -> dict[str, Any]:
     return {
-        "guest": True,
-        "status_text": status_text,
-        "remaining_percent": max(0, min(100, remaining_percent)),
-        "used_tokens": used_tokens,
-        "remaining_tokens": remaining_tokens,
-        "token_limit": token_limit,
+        "user_id": user.id,
+        **_build_chat_send_request_context(
+            prepared_state=prepared_state,
+            character_id=payload.character_id,
+        ),
+        "error_detail": str(exc),
     }
 
 
-@router.get("/chat/guest-quota")
-def chat_guest_quota(request: Request) -> dict[str, Any]:
-    """获取游客当前剩余体验额度，用于前端游客专属提示。"""
+
+def _process_chat_send_exception(
+    conn,
+    *,
+    user: CurrentUser,
+    payload: ChatSendPayload,
+    prepared_state: dict[str, Any],
+    exc: Exception,
+) -> None:
+    _handle_chat_send_failure(
+        conn,
+        **_build_chat_send_failure_kwargs(
+            user=user,
+            payload=payload,
+            prepared_state=prepared_state,
+            exc=exc,
+        ),
+    )
+    _rethrow_chat_send_exception(exc)
+
+
+
+def _handle_chat_send_failure(
+    conn,
+    *,
+    user_id: int,
+    guest_ip: str,
+    character_id: str,
+    estimate: dict[str, int],
+    error_detail: str,
+) -> None:
+    conn.rollback()
+    _log_failed_chat_request(
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint="/api/chat/send",
+        estimate=estimate,
+        error_detail=error_detail,
+    )
+
+
+
+def _rethrow_chat_send_exception(exc: Exception) -> None:
+    if isinstance(exc, AIChatError):
+        raise HTTPException(status_code=503, detail="网络波动，请稍后再试")
+    raise exc
+
+
+
+def _run_chat_send_transaction(
+    conn,
+    *,
+    user: CurrentUser,
+    payload: ChatSendPayload,
+    prepared: StreamPrepareResult,
+) -> dict[str, Any]:
+    prepared_state = _read_chat_send_prepared(prepared)
+
+    store_user_message(conn, user.id, payload.character_id, prepared_state["clean_text"], commit=False)
+    try:
+        reply, history_count, character_state = _execute_chat_send_success_flow(
+            conn,
+            **_build_chat_send_success_kwargs(
+                user=user,
+                payload=payload,
+                prepared_state=prepared_state,
+            )
+        )
+    except Exception as exc:
+        _process_chat_send_exception(
+            conn,
+            user=user,
+            payload=payload,
+            prepared_state=prepared_state,
+            exc=exc,
+        )
+
+    return _build_chat_send_response(
+        reply=reply,
+        history_count=history_count,
+        character_state=character_state,
+    )
+
+
+
+def _build_chat_send_route_response(
+    *,
+    user: CurrentUser,
+    payload: ChatSendPayload,
+    request: Request,
+) -> dict[str, Any]:
     conn = get_conn()
     try:
-        guest_ip = get_request_client_ip(request)
-        return _build_guest_quota_payload(conn, guest_ip)
+        prepared = _prepare_user_chat_request(
+            conn,
+            user=user,
+            payload=payload,
+            guest_ip=get_request_client_ip(request),
+        )
+        return _run_chat_send_transaction(
+            conn,
+            user=user,
+            payload=payload,
+            prepared=prepared,
+        )
     finally:
         conn.close()
+
 
 
 @router.post("/chat/send")
@@ -348,138 +1439,9 @@ def chat_send(
     payload: ChatSendPayload,
     request: Request,
     user: CurrentUser = Depends(get_current_user),
-) -> dict[str, Any]:
-    """
-    同步发送聊天消息。
-
-    流程：
-        1. 准备聊天上下文（角色、历史消息、记忆摘要）
-        2. 构建分层提示词
-        3. 调用 AI 生成回复（带降级策略）
-        4. 保存消息到数据库
-        5. 返回完整回复和角色状态
-
-    Args:
-        payload: 聊天请求体（角色ID、消息内容）
-        user: 当前登录用户
-
-    Returns:
-        包含 AI 回复、历史消息数、角色状态的对象
-    """
-    enforce_rate_limit(
-        "chat_user",
-        str(user.id),
-        limit=CHAT_RATE_LIMIT_COUNT,
-        window_seconds=CHAT_RATE_LIMIT_WINDOW_SECONDS,
-        detail="聊天请求过于频繁",
-    )
-
-    conn = get_conn()
-    try:
-        guest_ip = get_request_client_ip(request)
-        plan_policy = get_plan_policy(user.effective_plan)
-        ai_config = get_ai_config(os.environ, profile=plan_policy["model_profile"])
-
-        # 先预览上下文，不立刻写入用户消息，避免预算超限时留下孤儿消息
-        character, clean_text, recent_messages, memory_summary = prepare_chat_context(
-            conn,
-            user.id,
-            payload.character_id,
-            payload.message,
-            persist_user_message=False,
-            viewer_plan=user.effective_plan,
-            commit=False,
-        )
-        related_assets = get_linked_assets(conn, payload.character_id)
-        character_state = get_character_state(conn, user.id, payload.character_id)
-        preview_messages = build_layered_chat_messages(
-            character,
-            recent_messages,
-            memory_summary,
-            related_assets=related_assets,
-            user_name=user.nickname,
-            character_state=character_state,
-        )
-        estimate = estimate_messages_tokens(preview_messages)
-        planned_tokens = estimate["tokens"] + AI_CHAT_MAX_OUTPUT_TOKENS
-        enforce_daily_budget(
-            conn,
-            user_id=user.id,
-            planned_tokens=planned_tokens,
-            token_limit=plan_policy["token_limit"],
-            token_limit_detail="你今天的 AI 使用额度已达上限，请明天再来",
-        )
-
-        # 预算通过后再落库
-        store_user_message(conn, user.id, payload.character_id, clean_text, commit=False)
-
-        # 步骤 3：生成回复
-        # AI 失败时抛出 AIChatError，此时用户消息已写但AI回复未写，
-        # 需要回滚用户消息以保持数据一致性
-        try:
-            reply, new_state = build_reply_with_fallback(
-                character, recent_messages, memory_summary,
-                related_assets=related_assets, user_name=user.nickname,
-                conn=conn, user_id=user.id,
-                ai_config=ai_config,
-                commit=False,
-            )
-
-            # 步骤 4：保存消息、日志和状态，统一在一次事务里提交
-            save_assistant_message(conn, user.id, payload.character_id, reply, commit=False)
-            history_count = count_chat_messages(conn, user.id, payload.character_id)
-
-            # 步骤 5：读取最新状态（过滤内部字段）
-            raw_state = get_character_state(conn, user.id, payload.character_id)
-            character_state = {k: v for k, v in raw_state.items() if not k.startswith("_")}
-
-            actual_output_tokens = estimate_text_tokens(reply)
-            log_ai_request(
-                conn,
-                user_id=user.id,
-                guest_ip=guest_ip,
-                character_id=payload.character_id,
-                endpoint="/api/chat/send",
-                request_chars=estimate["chars"],
-                estimated_input_tokens=estimate["tokens"],
-                estimated_output_tokens=actual_output_tokens,
-                total_estimated_tokens=estimate["tokens"] + actual_output_tokens,
-                used_fallback=False,
-                status="success",
-                commit=False,
-            )
-            conn.commit()
-        except AIChatError as exc:
-            conn.rollback()
-            _log_chat_failure(
-                user_id=user.id,
-                guest_ip=guest_ip,
-                character_id=payload.character_id,
-                endpoint="/api/chat/send",
-                estimate=estimate,
-                error_detail=str(exc),
-            )
-            raise HTTPException(status_code=503, detail="网络波动，请稍后再试")
-        except Exception as exc:
-            conn.rollback()
-            _log_chat_failure(
-                user_id=user.id,
-                guest_ip=guest_ip,
-                character_id=payload.character_id,
-                endpoint="/api/chat/send",
-                estimate=estimate,
-                error_detail=str(exc),
-            )
-            raise
-    finally:
-        conn.close()
-
-    return {
-        "reply": reply,
-        "history_count": history_count,
-        "summary_enabled": True,
-        "character_state": character_state,
-    }
+):
+    _enforce_user_chat_rate_limit(user.id, detail="聊天请求过于频繁")
+    return _build_chat_send_route_response(user=user, payload=payload, request=request)
 
 
 @router.post("/chat/stream")
@@ -487,300 +1449,38 @@ def chat_stream(
     payload: ChatSendPayload,
     request: Request,
     user: CurrentUser = Depends(get_current_user),
-) -> StreamingResponse:
-    """
-    流式发送聊天消息（Server-Sent Events）。
-    
-    前端通过 EventSource 接收：
-        - event: chunk, data: {text: "..."}      # 逐字返回
-        - event: done, data: {reply: "...", character_state: {...}}  # 完成
-    """
-    enforce_rate_limit(
-        "chat_user",
-        str(user.id),
-        limit=CHAT_RATE_LIMIT_COUNT,
-        window_seconds=CHAT_RATE_LIMIT_WINDOW_SECONDS,
-        detail="聊天请求过于频繁",
-    )
-
-    conn = get_conn()
-    try:
-        guest_ip = get_request_client_ip(request)
-        plan_policy = get_plan_policy(user.effective_plan)
-        ai_config = get_ai_config(os.environ, profile=plan_policy["model_profile"])
-        character, clean_text, recent_messages, memory_summary = prepare_chat_context(
-            conn,
-            user.id,
-            payload.character_id,
-            payload.message,
-            persist_user_message=False,
-            viewer_plan=user.effective_plan,
-            commit=False,
-        )
-        related_assets = get_linked_assets(conn, payload.character_id)
-        character_state = get_character_state(conn, user.id, payload.character_id)
-        stream_messages = build_layered_chat_messages(
-            character, recent_messages, memory_summary,
-            related_assets=related_assets, user_name=user.nickname,
-            character_state=character_state,
-        )
-        estimate = estimate_messages_tokens(stream_messages)
-        planned_tokens = estimate["tokens"] + AI_CHAT_MAX_OUTPUT_TOKENS
-        enforce_daily_budget(
-            conn,
-            user_id=user.id,
-            planned_tokens=planned_tokens,
-            token_limit=plan_policy["token_limit"],
-            token_limit_detail="你今天的 AI 使用额度已达上限，请明天再来",
-        )
-        # 用户消息留到流式完成后，与 AI 回复一起在 _persist_stream_result 中统一写入
-    finally:
-        conn.close()
-
-    # 保存到闭包
-    _user_id = user.id
-    _character_id = payload.character_id
-    _character = character
-    _character_dict = dict(character)
-    _guest_ip = guest_ip
-    _estimate = estimate
-    _user_message = clean_text  # 新增：保存用户消息内容
-    _ai_config = ai_config
-
-    def event_generator():
-        stream_gen = _stream_ai_completion(stream_messages, _ai_config)
-        final_reply_raw = None
-        stream_error = None
-
-        try:
-            while True:
-                result = next(stream_gen)
-                if isinstance(result, tuple):
-                    final_reply_raw, stream_error = result
-                    break
-                yield result
-        except StopIteration as _si:
-            if isinstance(_si.value, tuple):
-                final_reply_raw, stream_error = _si.value
-
-        if stream_error:
-            _rollback_latest_user_message(_user_id, _character_id)
-            _log_chat_failure(
-                user_id=_user_id,
-                guest_ip=_guest_ip,
-                character_id=_character_id,
-                endpoint="/api/chat/stream",
-                estimate=_estimate,
-                error_detail=stream_error,
-                estimated_output_tokens=estimate_text_tokens(final_reply_raw or ""),
-            )
-            yield format_sse("error", {"message": "网络波动，请稍后再试"})
-            return
-
-        # 解析状态增量
-        final_reply, delta = parse_state_update_tag(final_reply_raw)
-
-        try:
-            new_state = _persist_stream_result(
-                user_id=_user_id,
-                guest_ip=_guest_ip,
-                character_id=_character_id,
-                final_reply=final_reply,
-                estimate=_estimate,
-                delta=delta,
-                user_message=_user_message,  # 传入用户消息
-            )
-        except Exception as exc:
-            # 用户消息还未写入，无需回滚；AI 回复写入失败，所有操作已自动回滚
-            _log_chat_failure(
-                user_id=_user_id,
-                guest_ip=_guest_ip,
-                character_id=_character_id,
-                endpoint="/api/chat/stream",
-                estimate=_estimate,
-                error_detail=f"persist_failed: {exc}",
-                estimated_output_tokens=estimate_text_tokens(final_reply),
-            )
-            yield format_sse("error", {"message": "消息保存失败，请稍后再试"})
-            return
-
-        # 后台异步触发记忆摘要
-        run_memory_summary_background(_user_id, _character_id, _character)
-
-        yield format_sse("done", {
-            "reply": final_reply,
-            "fallback": False,
-            "summary_enabled": True,
-            "character_state": {k: v for k, v in new_state.items() if k != "message_id"},
-            "message_id": new_state.get("message_id"),
-        })
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
+):
+    return _build_main_route_response(user=user, payload=payload, request=request)
 
 
 @router.post("/chat/guest-stream")
-def chat_guest_stream(payload: GuestChatPayload, request: Request) -> StreamingResponse:
-    """
-    游客试聊流式接口（无需登录）。
-    
-    - 不要求 token，不写数据库
-    - 前端传入 guest_history（临时历史，最多 10 条）
-    - 每次只做一次无状态的 AI 调用
-    """
-    enforce_rate_limit(
-        "guest_chat_ip",
-        get_request_client_ip(request),
-        limit=GUEST_CHAT_RATE_LIMIT_COUNT,
-        window_seconds=GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS,
-        detail="发送太快了",
+def chat_guest_stream(
+    payload: GuestChatPayload,
+    request: Request,
+):
+    return _build_guest_route_response(payload=payload, request=request)
+
+
+
+def _build_retry_route_with_rate_limit(
+    *,
+    user: CurrentUser,
+    request: Request,
+    message_id: str,
+    operation: str,
+    endpoint: str,
+    is_append: bool,
+) -> StreamingResponse:
+    _enforce_user_chat_rate_limit(user.id, detail="操作过于频繁")
+    return _build_retry_route_response(
+        user=user,
+        request=request,
+        message_id=message_id,
+        operation=operation,
+        endpoint=endpoint,
+        is_append=is_append,
     )
 
-    conn = get_conn()
-    try:
-        guest_ip = get_request_client_ip(request)
-        plan_policy = get_plan_policy(GUEST_PLAN)
-        ai_config = get_ai_config(os.environ, profile=plan_policy["model_profile"])
-        character = get_character_or_404(conn, payload.character_id, viewer_plan=GUEST_PLAN)
-
-        fake_history = [
-            {"role": item.role, "content": item.content}
-            for item in payload.guest_history
-        ]
-        try:
-            preview_messages = build_layered_chat_messages(
-                character=character,
-                recent_messages=fake_history,
-                memory_summary="",
-                related_assets=[],
-                user_name="访客",
-                character_state=None,
-            )
-            preview_messages.append({"role": "user", "content": payload.message.strip()})
-        except Exception:
-            # 降级方案：尽可能保留角色核心设定，给游客完整体验
-            preview_messages = _build_guest_fallback_messages(character, payload.message.strip())
-
-        estimate = estimate_messages_tokens(preview_messages)
-        planned_tokens = estimate["tokens"] + AI_CHAT_MAX_OUTPUT_TOKENS
-        enforce_daily_budget(
-            conn,
-            guest_ip=guest_ip,
-            planned_tokens=planned_tokens,
-            token_limit=plan_policy["token_limit"],
-            token_limit_detail="今日游客体验额度已用完，登录后可继续聊天",
-        )
-    finally:
-        conn.close()
-
-    _character = character
-    _clean_text = payload.message.strip()
-    _guest_ip = guest_ip
-    _estimate = estimate
-    _ai_config = ai_config
-
-    def _build_guest_messages():
-        """组装游客对话的消息列表。"""
-        fake_history = [
-            {"role": item.role, "content": item.content}
-            for item in payload.guest_history
-        ]
-        try:
-            msgs = build_layered_chat_messages(
-                character=character,
-                recent_messages=fake_history,
-                memory_summary="",
-                related_assets=[],
-                user_name="访客",
-                character_state=None,
-            )
-            msgs.append({"role": "user", "content": _clean_text})
-            return msgs
-        except Exception:
-            # 降级方案：尽可能保留角色核心设定
-            return _build_guest_fallback_messages(character, _clean_text)
-
-    stream_messages = _build_guest_messages()
-
-    def event_generator():
-        stream_gen = _stream_ai_completion(stream_messages, _ai_config)
-        final_reply_raw = None
-        stream_error = None
-
-        try:
-            while True:
-                result = next(stream_gen)
-                if isinstance(result, tuple):
-                    final_reply_raw, stream_error = result
-                    break
-                yield result
-        except StopIteration as _si:
-            if isinstance(_si.value, tuple):
-                final_reply_raw, stream_error = _si.value
-
-        if stream_error:
-            _log_chat_failure(
-                user_id=None,
-                guest_ip=_guest_ip,
-                character_id=payload.character_id,
-                endpoint="/api/chat/guest-stream",
-                estimate=_estimate,
-                error_detail=stream_error,
-                estimated_output_tokens=estimate_text_tokens(final_reply_raw or ""),
-            )
-            yield format_sse("error", {"message": "网络波动，请稍后再试"})
-            return
-
-        # 游客接口：不解析 STATE_UPDATE，不写库
-        final_reply, _ = parse_state_update_tag(final_reply_raw)
-
-        log_conn = get_conn()
-        try:
-            actual_output_tokens = estimate_text_tokens(final_reply)
-            log_ai_request(
-                log_conn,
-                user_id=None,
-                guest_ip=_guest_ip,
-                character_id=payload.character_id,
-                endpoint="/api/chat/guest-stream",
-                request_chars=_estimate["chars"],
-                estimated_input_tokens=_estimate["tokens"],
-                estimated_output_tokens=actual_output_tokens,
-                total_estimated_tokens=_estimate["tokens"] + actual_output_tokens,
-                used_fallback=False,
-                status="success",
-            )
-        finally:
-            log_conn.close()
-
-        yield format_sse("done", {
-            "reply": final_reply,
-            "fallback": False,
-            "guest": True,
-        })
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-# ============================================================
-# Regenerate / Continue 功能 - 新增端点
-# ============================================================
-
-from models import RegeneratePayload, ContinuePayload
-from services.chat_service import (
-    get_message_for_regenerate_or_continue,
-    save_regenerated_version,
-    prepare_regenerate_context,
-    prepare_continue_context,
-    get_character_or_404,
-    get_linked_assets,
-)
-from prompt_assembler import build_layered_chat_messages
-from services.memory_service import (
-    normalize_reply_text,
-    parse_state_update_tag,
-    sanitize_stream_chunk,
-)
 
 
 @router.post("/chat/regenerate")
@@ -788,215 +1488,16 @@ def chat_regenerate(
     payload: RegeneratePayload,
     request: Request,
     user: CurrentUser = Depends(get_current_user),
-) -> StreamingResponse:
-    """
-    重新生成 AI 回复（流式 SSE）。
-    
-    用户对当前 AI 回复不满意时，点击"重新生成"按钮调用此接口。
-    
-    特点：
-    - 上下文完全不变（使用相同的历史消息）
-    - 保留旧版本到 versions 字段
-    - 流式输出新回复（和 /chat/stream 相同的 SSE 格式）
-    - 更新角色状态（解析 STATE_UPDATE）
-    
-    请求体：
-        {"message_id": 123}
-    
-    响应：SSE 流式
-        event: chunk → {"text": "..."}
-        event: done  → {"reply": "...", "character_state": {...}, "version_index": N}
-        event: error → {"message": "..."}
-    """
-    enforce_rate_limit(
-        "chat_user",
-        str(user.id),
-        limit=CHAT_RATE_LIMIT_COUNT,
-        window_seconds=CHAT_RATE_LIMIT_WINDOW_SECONDS,
-        detail="操作过于频繁",
+):
+    return _build_retry_route_with_rate_limit(
+        user=user,
+        request=request,
+        message_id=payload.message_id,
+        operation="regenerate",
+        endpoint="/api/chat/regenerate",
+        is_append=False,
     )
 
-    conn = get_conn()
-    try:
-        guest_ip = get_request_client_ip(request)
-        
-        # 1. 获取目标消息和上下文
-        msg_row, _raw_recent, character_id = get_message_for_regenerate_or_continue(
-            conn, user.id, payload.message_id, operation="regenerate"
-        )
-
-        _all_rows = conn.execute(
-            """SELECT id, role, content, created_at FROM chat_messages
-               WHERE user_id = %s AND character_id = %s
-               ORDER BY created_at ASC, id ASC""",
-            (user.id, character_id),
-        ).fetchall()
-        _chronological = [
-            {"id": str(r["id"]), "role": r["role"], "content": r["content"]}
-            for r in _all_rows
-        ]
-        _target_idx = None
-        for _ri, _rm in enumerate(_chronological):
-            if _rm["id"] == str(payload.message_id):
-                _target_idx = _ri
-                break
-
-        if _target_idx is not None:
-            recent_messages = _chronological[:_target_idx]
-        else:
-            recent_messages = _raw_recent
-
-        while recent_messages and recent_messages[-1].get("role") == "assistant":
-            recent_messages.pop()
-        if not recent_messages and _raw_recent:
-            recent_messages = [_raw_recent[0]]
-
-        # 2. 准备聊天上下文
-        plan_policy = get_plan_policy(user.effective_plan)
-        ai_config = get_ai_config(os.environ, profile=plan_policy["model_profile"])
-        
-        character, memory_summary, _, related_assets = prepare_regenerate_context(
-            conn, user.id, character_id, recent_messages, viewer_plan=user.effective_plan
-        )
-        
-        # 获取角色状态
-        character_state = get_character_state(conn, user.id, character_id)
-        
-        # 3. 构建 Prompt（使用原始历史消息，不包含当前 AI 回复）
-        stream_messages = build_layered_chat_messages(
-            character, recent_messages, memory_summary,
-            related_assets=related_assets, user_name=user.nickname,
-            character_state=character_state,
-        )
-
-        # 4. Token 预算检查
-        estimate = estimate_messages_tokens(stream_messages)
-        planned_tokens = estimate["tokens"] + AI_CHAT_MAX_OUTPUT_TOKENS
-        enforce_daily_budget(
-            conn,
-            user_id=user.id,
-            planned_tokens=planned_tokens,
-            token_limit=plan_policy["token_limit"],
-            token_limit_detail="你今天的 AI 使用额度已达上限，请明天再来",
-        )
-    finally:
-        conn.close()
-
-    _user_id = user.id
-    _character_id = character_id
-    _message_id = payload.message_id
-    _character = character
-    _guest_ip = guest_ip
-    _estimate = estimate
-    _ai_config = ai_config
-
-    def event_generator():
-        stream_gen = _stream_ai_completion(stream_messages, _ai_config)
-        final_reply_raw = None
-        stream_error = None
-
-        try:
-            while True:
-                result = next(stream_gen)
-                if isinstance(result, tuple):
-                    final_reply_raw, stream_error = result
-                    break
-                yield result
-        except StopIteration as _si:
-            if isinstance(_si.value, tuple):
-                final_reply_raw, stream_error = _si.value
-
-        if stream_error:
-            _log_chat_failure(
-                user_id=_user_id,
-                guest_ip=_guest_ip,
-                character_id=_character_id,
-                endpoint="/api/chat/regenerate",
-                estimate=_estimate,
-                error_detail=stream_error,
-                estimated_output_tokens=estimate_text_tokens(final_reply_raw or ""),
-            )
-            yield format_sse("error", {"message": "网络波动，请稍后再试"})
-            return
-
-        # 解析状态增量
-        final_reply, delta = parse_state_update_tag(final_reply_raw)
-
-        try:
-            # 保存到数据库（含版本管理）
-            save_conn = get_conn()
-            try:
-                # 保存新生成的版本
-                save_regenerated_version(
-                    save_conn, _message_id, final_reply, is_append=False, commit=False
-                )
-                
-                # 记录请求日志
-                actual_output_tokens = estimate_text_tokens(final_reply)
-                log_ai_request(
-                    save_conn,
-                    user_id=_user_id,
-                    guest_ip=_guest_ip,
-                    character_id=_character_id,
-                    endpoint="/api/chat/regenerate",
-                    request_chars=_estimate["chars"],
-                    estimated_input_tokens=_estimate["tokens"],
-                    estimated_output_tokens=actual_output_tokens,
-                    total_estimated_tokens=_estimate["tokens"] + actual_output_tokens,
-                    used_fallback=False,
-                    status="success",
-                    commit=False,
-                )
-                
-                # 应用状态增量
-                new_state = None
-                if delta:
-                    new_state = apply_state_delta(
-                        save_conn, _user_id, _character_id, delta, commit=False
-                    )
-                
-                save_conn.commit()
-                
-                if new_state:
-                    raw_state = {k: v for k, v in new_state.items() if not k.startswith("_")}
-                else:
-                    raw_state = get_character_state(save_conn, _user_id, _character_id)
-                    raw_state = {k: v for k, v in raw_state.items() if not k.startswith("_")}
-                    
-            except Exception as exc:
-                save_conn.rollback()
-                _log_chat_failure(
-                    user_id=_user_id,
-                    guest_ip=_guest_ip,
-                    character_id=_character_id,
-                    endpoint="/api/chat/regenerate",
-                    estimate=_estimate,
-                    error_detail=f"persist_failed: {exc}",
-                    estimated_output_tokens=estimate_text_tokens(final_reply),
-                )
-                yield format_sse("error", {"message": "消息保存失败，请稍后再试"})
-                return
-            finally:
-                save_conn.close()
-        except Exception as _regen_outer_exc:
-            import logging as _regen_log
-            _regen_log.getLogger(__name__).warning(f"[regenerate] outer error before done: {_regen_outer_exc}", exc_info=True)
-            yield format_sse("error", {"message": "保存失败，请稍后再试"})
-            return
-
-        # 后台异步触发记忆摘要
-        run_memory_summary_background(_user_id, _character_id, _character)
-
-        yield format_sse("done", {
-            "reply": final_reply,
-            "fallback": False,
-            "summary_enabled": True,
-            "character_state": raw_state,
-            "message_id": _message_id,
-            "operation": "regenerate",
-        })
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post("/chat/continue")
@@ -1004,215 +1505,200 @@ def chat_continue(
     payload: ContinuePayload,
     request: Request,
     user: CurrentUser = Depends(get_current_user),
-) -> StreamingResponse:
-    """
-    继续（追加）生成 AI 回复（流式 SSE）。
-    
-    当 AI 回复太短或被截断时，用户点击"继续"按钮追加内容。
-    
-    特点：
-    - 在当前回复末尾追加新内容
-    - 保留所有历史版本
-    - 流式输出追加的内容
-    
-    请求体：
-        {"message_id": 123}
-    
-    响应：SSE 流式
-        event: chunk → {"text": "..."}
-        event: done  → {"reply": "完整回复（原+新）", "character_state": {...}, "appended_text": "新增部分"}
-        event: error → {"message": "..."}
-    """
-    enforce_rate_limit(
-        "chat_user",
-        str(user.id),
-        limit=CHAT_RATE_LIMIT_COUNT,
-        window_seconds=CHAT_RATE_LIMIT_WINDOW_SECONDS,
-        detail="操作过于频繁",
+):
+    return _build_retry_route_with_rate_limit(
+        user=user,
+        request=request,
+        message_id=payload.message_id,
+        operation="continue",
+        endpoint="/api/chat/continue",
+        is_append=True,
     )
 
-    conn = get_conn()
-    try:
-        guest_ip = get_request_client_ip(request)
 
-        # 1. 获取目标消息和上下文（使用时间排序，与 regenerate 保持一致）
-        msg_row, _raw_recent, character_id = get_message_for_regenerate_or_continue(
-            conn, user.id, payload.message_id, operation="continue"
+
+def _prepare_guest_stream_request(conn, *, payload: GuestChatPayload, request: Request) -> StreamPrepareResult:
+    guest_ip = get_request_client_ip(request)
+    character = get_character_or_404(conn, payload.character_id, viewer_plan=GUEST_PLAN)
+    clean_text, prompt_messages = _build_guest_stream_messages(character, payload.message, payload.guest_history)
+    guest_policy = get_plan_policy(GUEST_PLAN)
+    budget = _prepare_ai_budget(
+        conn,
+        stream_messages=prompt_messages,
+        model_profile=guest_policy["model_profile"],
+        token_limit=guest_policy["token_limit"],
+        token_limit_detail="今日游客体验额度已用完，登录后可继续聊天",
+        guest_ip=guest_ip,
+    )
+    return _build_stream_prepare_result(
+        guest_ip=guest_ip,
+        stream_payload={
+            "stream_messages": prompt_messages,
+            "ai_config": budget["ai_config"],
+            "estimate": budget["estimate"],
+        },
+        character=character,
+        clean_text=clean_text,
+    )
+
+
+
+def _prepare_prompt_context_result(
+    context_tuple: tuple[dict[str, Any], str, list[dict[str, Any]], str]
+) -> dict[str, Any]:
+    character, clean_text, recent_messages, memory_summary = context_tuple
+    return {
+        "character": character,
+        "clean_text": clean_text,
+        "recent_messages": recent_messages,
+        "memory_summary": memory_summary,
+    }
+
+
+
+def _prepare_regenerate_context_result(
+    context_tuple: tuple[dict[str, Any], str, list[dict[str, Any]], str, str]
+) -> dict[str, Any]:
+    character, character_id, recent_messages, memory_summary, current_content = context_tuple
+    return {
+        "character": character,
+        "character_id": character_id,
+        "recent_messages": recent_messages,
+        "memory_summary": memory_summary,
+        "current_content": current_content,
+    }
+
+
+
+def _prepare_user_stream_context(
+    conn,
+    *,
+    user: CurrentUser,
+    payload: ChatSendPayload,
+    persist_user_message: bool,
+) -> dict[str, Any]:
+    return _prepare_prompt_context_result(
+        _build_prompt_context_payload(
+            conn,
+            user.id,
+            payload.character_id,
+            payload.message,
+            persist_user_message=persist_user_message,
+            viewer_plan=user.effective_plan,
+            commit=False,
         )
+    )
 
-        _all_rows = conn.execute(
-            """SELECT id, role, content, created_at FROM chat_messages
-               WHERE user_id = %s AND character_id = %s
-               ORDER BY created_at ASC, id ASC""",
-            (user.id, character_id),
-        ).fetchall()
-        _chronological = [
-            {"id": str(r["id"]), "role": r["role"], "content": r["content"]}
-            for r in _all_rows
-        ]
-        _target_idx = None
-        for _ri, _rm in enumerate(_chronological):
-            if _rm["id"] == str(payload.message_id):
-                _target_idx = _ri
-                break
 
-        if _target_idx is not None:
-            recent_messages = _chronological[:_target_idx]
-        else:
-            recent_messages = _raw_recent
 
-        while recent_messages and recent_messages[-1].get("role") == "assistant":
-            recent_messages.pop()
-        if not recent_messages and _raw_recent:
-            recent_messages = [_raw_recent[0]]
-
-        current_content = msg_row["content"] or ""
-        
-        # 2. 准备聊天上下文（特殊：包含当前回复+继续指令）
-        plan_policy = get_plan_policy(user.effective_plan)
-        ai_config = get_ai_config(os.environ, profile=plan_policy["model_profile"])
-        
-        character, memory_summary, continue_messages, related_assets = prepare_continue_context(
-            conn, user.id, character_id, payload.message_id,
-            current_content, recent_messages, viewer_plan=user.effective_plan
-        )
-        
-        # 获取角色状态
-        character_state = get_character_state(conn, user.id, character_id)
-        
-        # 3. 构建 Prompt（包含当前回复和继续指令）
-        stream_messages = build_layered_chat_messages(
-            character, continue_messages, memory_summary,
-            related_assets=related_assets, user_name=user.nickname,
-            character_state=character_state,
-        )
-        
-        # 4. Token 预算检查
-        estimate = estimate_messages_tokens(stream_messages)
-        planned_tokens = estimate["tokens"] + AI_CHAT_MAX_OUTPUT_TOKENS
-        enforce_daily_budget(
+def _prepare_retry_stream_context(
+    conn,
+    *,
+    user: CurrentUser,
+    message_id: str,
+    operation: str,
+) -> dict[str, Any]:
+    return _prepare_regenerate_context_result(
+        _message_projection(
             conn,
             user_id=user.id,
-            planned_tokens=planned_tokens,
-            token_limit=plan_policy["token_limit"],
-            token_limit_detail="你今天的 AI 使用额度已达上限，请明天再来",
+            message_id=message_id,
+            operation=operation,
+            commit=False,
         )
-    finally:
-        conn.close()
+    )
 
-    _user_id = user.id
-    _character_id = character_id
-    _message_id = payload.message_id
-    _current_content = current_content
-    _character = character
-    _guest_ip = guest_ip
-    _estimate = estimate
-    _ai_config = ai_config
 
-    def event_generator():
-        stream_gen = _stream_ai_completion(stream_messages, _ai_config)
-        final_appended_raw = None
-        stream_error = None
 
-        try:
-            while True:
-                result = next(stream_gen)
-                if isinstance(result, tuple):
-                    final_appended_raw, stream_error = result
-                    break
-                yield result
-        except StopIteration as _si:
-            if isinstance(_si.value, tuple):
-                final_appended_raw, stream_error = _si.value
+def _prepare_retry_stream_messages(
+    *,
+    user: CurrentUser,
+    payload_context: dict[str, Any],
+) -> dict[str, Any]:
+    stream_messages = build_layered_chat_messages(
+        character=payload_context["character"],
+        recent_messages=payload_context["recent_messages"],
+        memory_summary=payload_context["memory_summary"],
+        related_assets=[],
+        user_name=user.nickname,
+    )
+    budget = _prepare_user_ai_budget(
+        stream_messages=stream_messages,
+        plan_name=user.effective_plan,
+        user_id=user.id,
+        guest_ip=None,
+    )
+    return {
+        "stream_messages": stream_messages,
+        "ai_config": budget["ai_config"],
+        "estimate": budget["estimate"],
+    }
 
-        if stream_error:
-            _log_chat_failure(
-                user_id=_user_id,
-                guest_ip=_guest_ip,
-                character_id=_character_id,
-                endpoint="/api/chat/continue",
-                estimate=_estimate,
-                error_detail=stream_error,
-                estimated_output_tokens=estimate_text_tokens(final_appended_raw or ""),
-            )
-            yield format_sse("error", {"message": "网络波动，请稍后再试"})
-            return
 
-        # 解析状态增量（从追加的部分解析）
-        final_appended, delta = parse_state_update_tag(final_appended_raw)
 
-        try:
-            save_conn = get_conn()
-            try:
-                # 保存追加后的完整版本
-                save_regenerated_version(
-                    save_conn, _message_id, final_appended, is_append=True, commit=False
-                )
-                
-                # 记录请求日志
-                actual_output_tokens = estimate_text_tokens(final_appended)
-                log_ai_request(
-                    save_conn,
-                    user_id=_user_id,
-                    guest_ip=_guest_ip,
-                    character_id=_character_id,
-                    endpoint="/api/chat/continue",
-                    request_chars=_estimate["chars"],
-                    estimated_input_tokens=_estimate["tokens"],
-                    estimated_output_tokens=actual_output_tokens,
-                    total_estimated_tokens=_estimate["tokens"] + actual_output_tokens,
-                    used_fallback=False,
-                    status="success",
-                    commit=False,
-                )
-                
-                # 应用状态增量
-                new_state = None
-                if delta:
-                    new_state = apply_state_delta(
-                        save_conn, _user_id, _character_id, delta, commit=False
-                    )
-                
-                save_conn.commit()
-                
-                if new_state:
-                    raw_state = {k: v for k, v in new_state.items() if not k.startswith("_")}
-                else:
-                    raw_state = get_character_state(save_conn, _user_id, _character_id)
-                    raw_state = {k: v for k, v in raw_state.items() if not k.startswith("_")}
-                    
-            except Exception as exc:
-                save_conn.rollback()
-                _log_chat_failure(
-                    user_id=_user_id,
-                    guest_ip=_guest_ip,
-                    character_id=_character_id,
-                    endpoint="/api/chat/continue",
-                    estimate=_estimate,
-                    error_detail=f"persist_failed: {exc}",
-                    estimated_output_tokens=estimate_text_tokens(final_appended),
-                )
-                yield format_sse("error", {"message": "保存失败，请稍后再试"})
-                return
-            finally:
-                save_conn.close()
-        except Exception as _cont_outer_exc:
-            import logging as _cont_log
-            _cont_log.getLogger(__name__).warning(f"[continue] outer error before done: {_cont_outer_exc}", exc_info=True)
-            yield format_sse("error", {"message": "保存失败，请稍后再试"})
-            return
+def _prepare_user_stream_payload(
+    conn,
+    *,
+    user: CurrentUser,
+    payload: ChatSendPayload,
+    guest_ip: str,
+) -> StreamPrepareResult:
+    context_payload = _prepare_user_stream_context(
+        conn,
+        user=user,
+        payload=payload,
+        persist_user_message=False,
+    )
+    related_assets = []
+    built = _build_user_stream_messages_and_budget(
+        conn,
+        user=user,
+        character_id=payload.character_id,
+        character=context_payload["character"],
+        prompt_messages=context_payload["recent_messages"],
+        memory_summary=context_payload["memory_summary"],
+        related_assets=related_assets,
+    )
+    return _build_stream_prepare_result(
+        guest_ip=guest_ip,
+        stream_payload={
+            "stream_messages": built["stream_messages"],
+            "ai_config": built["ai_config"],
+            "estimate": built["estimate"],
+        },
+        character=context_payload["character"],
+        clean_text=context_payload["clean_text"],
+        recent_messages=context_payload["recent_messages"],
+        memory_summary=context_payload["memory_summary"],
+        related_assets=related_assets,
+    )
 
-        # 计算完整的回复内容（原始 + 追加）
-        full_reply = _current_content + final_appended
 
-        yield format_sse("done", {
-            "reply": full_reply,
-            "fallback": False,
-            "summary_enabled": True,
-            "character_state": raw_state,
-            "message_id": _message_id,
-            "operation": "continue",
-            "appended_text": final_appended,
-        })
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+def _prepare_regenerate_or_continue_request(
+    conn,
+    *,
+    user: CurrentUser,
+    message_id: str,
+    guest_ip: str,
+    operation: str,
+) -> StreamPrepareResult:
+    context_payload = _prepare_retry_stream_context(
+        conn,
+        user=user,
+        message_id=message_id,
+        operation=operation,
+    )
+    built = _prepare_retry_stream_messages(user=user, payload_context=context_payload)
+    return _build_stream_prepare_result(
+        guest_ip=guest_ip,
+        stream_payload={
+            "stream_messages": built["stream_messages"],
+            "ai_config": built["ai_config"],
+            "estimate": built["estimate"],
+        },
+        character=context_payload["character"],
+        clean_text="",
+        character_id=context_payload["character_id"],
+        current_content=context_payload["current_content"],
+    )

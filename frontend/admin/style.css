@@ -89,12 +89,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif
 #fab-save {
   position: fixed;
   right: 28px;
-  bottom: 72px;
-  z-index: 1000;
+  bottom: 120px;
+  z-index: 2147483647;
   display: none;
   flex-direction: column;
   align-items: center;
   gap: 6px;
+  padding: 8px 10px;
+  border-radius: 16px;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background .15s ease, box-shadow .15s ease;
+}
+#fab-save * { pointer-events: auto; }
+#fab-save:hover {
+  background: rgba(124, 58, 237, 0.12);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
 }
 #fab-save button {
   width: 56px;
@@ -108,9 +118,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif
   box-shadow: 0 4px 20px rgba(192,132,252,.45);
   transition: transform .15s, box-shadow .15s;
 }
-#fab-save button:hover { transform: scale(1.1); box-shadow: 0 6px 28px rgba(192,132,252,.6); }
+#fab-save:hover button,
+#fab-save button:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(192,132,252,.6); }
 #fab-save button:active { transform: scale(0.96); }
-#fab-save .fab-label { font-size: 11px; color: #c084fc; white-space: nowrap; }
+#fab-save .fab-label { font-size: 11px; color: #c084fc; white-space: nowrap; transition: color .15s ease; }
+#fab-save:hover .fab-label { color: #e9d5ff; }
 
 /* ---- Toast ---- */
 #toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1e1e2c; border: 1px solid #3a3a4a; color: #e8e8f0; padding: 10px 20px; border-radius: 24px; font-size: 13px; opacity: 0; transition: opacity .3s; pointer-events: none; z-index: 9999; white-space: nowrap; }
@@ -314,6 +326,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif
 .plan-dist-item { background: #13131c; border: 1px solid #2a2a3a; border-radius: 10px; padding: 10px 16px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .plan-dist-item .pd-value { font-size: 20px; font-weight: 800; }
 .plan-dist-item .pd-label { font-size: 11px; color: #888; }
+.media-missing-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.media-missing-header h3 { margin: 0; }
+.media-missing-status { margin-bottom: 10px; font-size: 12px; font-weight: 600; }
+.media-missing-status.ok { color: #4ade80; }
+.media-missing-status.warn { color: #fbbf24; }
+.media-missing-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.media-missing-list li { color: #d5d8e3; font-size: 12px; line-height: 1.6; word-break: break-all; }
+.media-missing-empty { color: #888; font-size: 12px; }
+.media-missing-hint { margin-top: 8px; color: #666; font-size: 11px; }
 
 /* ---- 搜索筛选栏 ---- */
 .search-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }

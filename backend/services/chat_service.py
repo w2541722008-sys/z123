@@ -29,10 +29,12 @@ class AIChatError(Exception):
 from fastapi import HTTPException
 
 from config import AI_CHAT_MAX_OUTPUT_TOKENS, logger, utc_now_iso
+from database import get_conn
 from model_adapter import get_ai_config, request_chat_completion
 from prompt_assembler import build_layered_chat_messages
-from services.plan_service import ensure_plan_access, plan_display_name
+from services.plan_service import GUEST_PLAN, ensure_plan_access, get_plan_policy, plan_display_name
 from services.character_state import apply_state_delta, get_character_state
+from services.usage_guard import enforce_daily_budget, estimate_messages_tokens, get_daily_usage, estimate_text_tokens, log_ai_request
 from services.memory_service import (
     get_recent_messages,
     get_summary_for_prompt,
@@ -212,6 +214,30 @@ def ensure_opening_message(
 
 
 
+def _normalize_non_empty_message(user_message: str) -> str:
+    clean_text = user_message.strip()
+    if not clean_text:
+        raise HTTPException(status_code=400, detail="消息不能为空")
+    return clean_text
+
+
+
+def _load_recent_messages_and_summary(
+    conn: Any,
+    *,
+    user_id: int,
+    character_id: str,
+    clean_text: str,
+    persist_user_message: bool,
+) -> tuple[list[dict[str, str]], str]:
+    recent_messages = get_recent_messages(conn, user_id, character_id)
+    if not persist_user_message and clean_text:
+        recent_messages.append({"role": "user", "content": clean_text})
+    memory_summary = get_summary_for_prompt(conn, user_id, character_id)
+    return recent_messages, memory_summary
+
+
+
 def prepare_chat_context(
     conn: Any,
     user_id: int,
@@ -229,19 +255,19 @@ def prepare_chat_context(
         (character, clean_text, recent_messages, memory_summary)
     """
     character = get_character_or_404(conn, character_id, viewer_plan=viewer_plan)
-    clean_text = user_message.strip()
-    if not clean_text:
-        raise HTTPException(status_code=400, detail="消息不能为空")
+    clean_text = _normalize_non_empty_message(user_message)
     ensure_opening_message(conn, user_id, character_id, commit=False)
 
     if persist_user_message:
         store_user_message(conn, user_id, character_id, clean_text, commit=False)
 
-    # 读取最近消息和摘要
-    recent_messages = get_recent_messages(conn, user_id, character_id)
-    if not persist_user_message and clean_text:
-        recent_messages.append({"role": "user", "content": clean_text})
-    memory_summary = get_summary_for_prompt(conn, user_id, character_id)
+    recent_messages, memory_summary = _load_recent_messages_and_summary(
+        conn,
+        user_id=user_id,
+        character_id=character_id,
+        clean_text=clean_text,
+        persist_user_message=persist_user_message,
+    )
 
     if commit:
         conn.commit()
@@ -415,18 +441,694 @@ def format_sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def format_done_event(payload: dict[str, Any]) -> str:
+    return format_sse("done", payload)
+
+
+def format_error_event(message: str) -> str:
+    return format_sse("error", {"message": message})
+
+
+# ============================================================
+# Prompt / Budget / Stream Prepare Builders
+# ============================================================
+def _prepare_ai_budget(
+    conn: Any,
+    *,
+    stream_messages: list[dict[str, str]],
+    model_profile: str,
+    token_limit: int,
+    token_limit_detail: str,
+    user_id: int | None = None,
+    guest_ip: str = "",
+) -> dict[str, Any]:
+    ai_config = get_ai_config(os.environ, profile=model_profile)
+    estimate = estimate_messages_tokens(stream_messages)
+    planned_tokens = estimate["tokens"] + AI_CHAT_MAX_OUTPUT_TOKENS
+    enforce_daily_budget(
+        conn,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        planned_tokens=planned_tokens,
+        token_limit=token_limit,
+        token_limit_detail=token_limit_detail,
+    )
+    return {"ai_config": ai_config, "estimate": estimate}
+
+
+def _build_prompt_context_payload(
+    *,
+    current_content: str,
+    character: dict[str, Any],
+    memory_summary: str,
+    prompt_messages: list[dict[str, Any]],
+    related_assets: list[Any],
+) -> dict[str, Any]:
+    return {
+        "current_content": current_content,
+        "character": character,
+        "memory_summary": memory_summary,
+        "prompt_messages": prompt_messages,
+        "related_assets": related_assets,
+    }
+
+
+def _build_guest_fallback_messages(character: dict[str, Any], user_message: str) -> list[dict[str, str]]:
+    system_parts = []
+
+    name = character.get("name", "AI角色")
+    subtitle = character.get("subtitle", "")
+    base_identity = f"你是{name}"
+    if subtitle:
+        base_identity += f"，{subtitle}"
+    system_parts.append(base_identity)
+
+    description = character.get("description", "")
+    if description:
+        system_parts.append(f"\n【角色背景】\n{description}")
+
+    personality = character.get("personality", "")
+    if personality:
+        system_parts.append(f"\n【性格特点】\n{personality}")
+
+    scenario = character.get("scenario", "")
+    if scenario:
+        system_parts.append(f"\n【世界观/场景】\n{scenario}")
+
+    world_info_before = character.get("world_info_before", "")
+    if world_info_before:
+        system_parts.append(f"\n【角色设定】\n{world_info_before}")
+
+    example_dialogue = character.get("example_dialogue", "")
+    if example_dialogue:
+        system_parts.append(f"\n【参考对话风格】\n{example_dialogue}")
+
+    world_info_after = character.get("world_info_after", "")
+    if world_info_after:
+        system_parts.append(f"\n【补充设定】\n{world_info_after}")
+
+    post_rules = character.get("post_history_rules", "")
+    if post_rules:
+        system_parts.append(f"\n【回复规则】\n{post_rules}")
+
+    system_parts.append("\n【重要指令】")
+    system_parts.append("1. 始终保持角色设定，用第一人称回复")
+    system_parts.append("2. 回复自然、有温度，符合角色性格")
+    system_parts.append('3. 在回复末尾添加状态更新标签，格式：[STATE_UPDATE]{"mood": "心情", "affection": 数值}[/STATE_UPDATE]')
+
+    system_content = "\n".join(system_parts)
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": user_message},
+    ]
+
+
+def _build_guest_stream_messages(
+    character: dict[str, Any],
+    message_text: str,
+    guest_history: list[Any],
+) -> tuple[str, list[dict[str, str]]]:
+    clean_text = _normalize_non_empty_message(message_text)
+    fake_history = [
+        _message_projection(item.role, item.content)
+        for item in guest_history
+    ]
+    try:
+        messages = build_layered_chat_messages(
+            character=character,
+            recent_messages=fake_history,
+            memory_summary="",
+            related_assets=[],
+            user_name="访客",
+            character_state=None,
+        )
+        messages.append({"role": "user", "content": clean_text})
+    except Exception:
+        messages = _build_guest_fallback_messages(character, clean_text)
+    return clean_text, messages
+
+
+def _build_guest_quota_payload(conn: Any, guest_ip: str) -> dict[str, Any]:
+    plan_policy = get_plan_policy(GUEST_PLAN)
+    token_limit = max(0, int(plan_policy["token_limit"] or 0))
+    usage = get_daily_usage(conn, guest_ip=guest_ip)
+    used_tokens = max(0, int(usage["total_tokens"] or 0))
+    remaining_tokens = max(0, token_limit - used_tokens)
+    remaining_percent = int(remaining_tokens * 100 / token_limit) if token_limit > 0 else 100
+
+    if remaining_tokens <= 0:
+        status_text = "额度已用完"
+    elif remaining_percent <= 35:
+        status_text = "额度不多"
+    else:
+        status_text = "额度充足"
+
+    return {
+        "guest": True,
+        "status_text": status_text,
+        "remaining_percent": max(0, min(100, remaining_percent)),
+        "used_tokens": used_tokens,
+        "remaining_tokens": remaining_tokens,
+        "token_limit": token_limit,
+    }
+
+
+def _build_stream_prepare_result(
+    *,
+    guest_ip: str,
+    stream_payload: dict[str, Any],
+    character: dict[str, Any] | None = None,
+    clean_text: str | None = None,
+    recent_messages: list[dict[str, Any]] | None = None,
+    memory_summary: str | None = None,
+    related_assets: list[Any] | None = None,
+    character_id: str | None = None,
+    current_content: str | None = None,
+) -> dict[str, Any]:
+    result = {
+        "guest_ip": guest_ip,
+        "stream_messages": stream_payload["stream_messages"],
+        "ai_config": stream_payload["ai_config"],
+        "estimate": stream_payload["estimate"],
+    }
+    if character is not None:
+        result["character"] = character
+    if clean_text is not None:
+        result["clean_text"] = clean_text
+    if recent_messages is not None:
+        result["recent_messages"] = recent_messages
+    if memory_summary is not None:
+        result["memory_summary"] = memory_summary
+    if related_assets is not None:
+        result["related_assets"] = related_assets
+    if character_id is not None:
+        result["character_id"] = character_id
+    if current_content is not None:
+        result["current_content"] = current_content
+    return result
+
+
+def _prepare_user_chat_request(
+    conn: Any,
+    *,
+    user: Any,
+    payload: Any,
+    guest_ip: str,
+) -> dict[str, Any]:
+    character, clean_text, recent_messages, memory_summary = prepare_chat_context(
+        conn,
+        user.id,
+        payload.character_id,
+        payload.message,
+        persist_user_message=False,
+        viewer_plan=user.effective_plan,
+        commit=False,
+    )
+    related_assets = get_linked_assets(conn, payload.character_id)
+    stream_payload = _build_user_stream_messages_and_budget(
+        conn,
+        user=user,
+        character_id=payload.character_id,
+        character=character,
+        prompt_messages=recent_messages,
+        memory_summary=memory_summary,
+        related_assets=related_assets,
+    )
+    return _build_stream_prepare_result(
+        guest_ip=guest_ip,
+        stream_payload=stream_payload,
+        character=character,
+        clean_text=clean_text,
+        recent_messages=recent_messages,
+        memory_summary=memory_summary,
+        related_assets=related_assets,
+    )
+
+
+def _build_chat_send_response(
+    *,
+    reply: str,
+    history_count: int,
+    character_state: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "reply": reply,
+        "history_count": history_count,
+        "summary_enabled": True,
+        "character_state": character_state,
+    }
+
+
+def _log_successful_chat_request(
+    conn: Any,
+    *,
+    user_id: int | None,
+    guest_ip: str,
+    character_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    reply_text: str,
+) -> None:
+    actual_output_tokens = estimate_text_tokens(reply_text)
+    log_ai_request(
+        conn,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint=endpoint,
+        request_chars=estimate["chars"],
+        estimated_input_tokens=estimate["tokens"],
+        estimated_output_tokens=actual_output_tokens,
+        total_estimated_tokens=estimate["tokens"] + actual_output_tokens,
+        used_fallback=False,
+        status="success",
+        commit=False,
+    )
+
+
+def _log_failed_chat_request(
+    *,
+    user_id: int | None,
+    guest_ip: str,
+    character_id: str,
+    endpoint: str,
+    estimate: dict[str, int],
+    error_detail: str,
+    estimated_output_tokens: int = 0,
+) -> None:
+    log_conn = get_conn()
+    try:
+        safe_output_tokens = max(0, estimated_output_tokens)
+        log_ai_request(
+            log_conn,
+            user_id=user_id,
+            guest_ip=guest_ip,
+            character_id=character_id,
+            endpoint=endpoint,
+            request_chars=estimate["chars"],
+            estimated_input_tokens=estimate["tokens"],
+            estimated_output_tokens=safe_output_tokens,
+            total_estimated_tokens=estimate["tokens"] + safe_output_tokens,
+            used_fallback=False,
+            status="error",
+            error_detail=error_detail,
+        )
+    except Exception:
+        pass
+    finally:
+        log_conn.close()
+
+
+def _resolve_public_character_state(
+    conn: Any,
+    *,
+    user_id: int,
+    character_id: str,
+    delta: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if delta:
+        raw_state = apply_state_delta(conn, user_id, character_id, delta, commit=False)
+    else:
+        raw_state = get_character_state(conn, user_id, character_id)
+    if not raw_state:
+        return {}
+    return {
+        k: v
+        for k, v in raw_state.items()
+        if not str(k).startswith("_")
+    }
+
+
+def _prepare_user_ai_budget(
+    conn: Any,
+    *,
+    user: Any,
+    stream_messages: list[dict[str, str]],
+) -> dict[str, Any]:
+    plan_policy = get_plan_policy(user.effective_plan)
+    return _prepare_ai_budget(
+        conn,
+        stream_messages=stream_messages,
+        model_profile=plan_policy["model_profile"],
+        token_limit=plan_policy["token_limit"],
+        token_limit_detail="你今天的 AI 使用额度已达上限，请明天再来",
+        user_id=user.id,
+    )
+
+
+def _build_user_stream_messages_and_budget(
+    conn: Any,
+    *,
+    user: Any,
+    character_id: str,
+    character: dict[str, Any],
+    prompt_messages: list[dict[str, Any]],
+    memory_summary: str,
+    related_assets: list[Any],
+) -> dict[str, Any]:
+    character_state = get_character_state(conn, user.id, character_id)
+    stream_messages = build_layered_chat_messages(
+        character,
+        prompt_messages,
+        memory_summary,
+        related_assets=related_assets,
+        user_name=user.nickname,
+        character_state=character_state,
+    )
+    budget = _prepare_user_ai_budget(conn, user=user, stream_messages=stream_messages)
+    return {
+        "stream_messages": stream_messages,
+        "ai_config": budget["ai_config"],
+        "estimate": budget["estimate"],
+    }
+
+
+def _prepare_prompt_context_result(
+    *,
+    current_content: str,
+    context_tuple: tuple[Any, str, list[dict[str, str]] | None, list[Any]],
+    fallback_prompt_messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    character, memory_summary, prompt_messages, related_assets = context_tuple
+    return _build_prompt_context_payload(
+        current_content=current_content,
+        character=character,
+        memory_summary=memory_summary,
+        prompt_messages=prompt_messages if prompt_messages is not None else (fallback_prompt_messages or []),
+        related_assets=related_assets,
+    )
+
+
+def _prepare_regenerate_prompt_context(
+    conn: Any,
+    *,
+    user: Any,
+    character_id: str,
+    recent_messages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    context_tuple = prepare_regenerate_context(
+        conn,
+        user.id,
+        character_id,
+        recent_messages,
+        viewer_plan=user.effective_plan,
+    )
+    return _prepare_prompt_context_result(
+        current_content="",
+        context_tuple=context_tuple,
+        fallback_prompt_messages=recent_messages,
+    )
+
+
+def _prepare_continue_prompt_context(
+    conn: Any,
+    *,
+    user: Any,
+    character_id: str,
+    message_id: str,
+    current_content: str,
+    recent_messages: list[dict[str, Any]],
+) -> dict[str, Any]:
+    context_tuple = prepare_continue_context(
+        conn,
+        user.id,
+        character_id,
+        message_id,
+        current_content,
+        recent_messages,
+        viewer_plan=user.effective_plan,
+    )
+    return _prepare_prompt_context_result(
+        current_content=current_content,
+        context_tuple=context_tuple,
+    )
+
+
+def _prepare_retry_prompt_context(
+    conn: Any,
+    *,
+    user: Any,
+    operation: str,
+    prompt_args: dict[str, Any],
+) -> dict[str, Any]:
+    if operation == "continue":
+        return _prepare_continue_prompt_context(
+            conn,
+            user=user,
+            character_id=prompt_args["character_id"],
+            message_id=prompt_args["message_id"],
+            current_content=prompt_args["current_content"],
+            recent_messages=prompt_args["recent_messages"],
+        )
+    return _prepare_regenerate_prompt_context(
+        conn,
+        user=user,
+        character_id=prompt_args["character_id"],
+        recent_messages=prompt_args["recent_messages"],
+    )
+
+
+def _build_retry_fallback_recent(
+    message_row: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [_message_projection("assistant", message_row.get("content"))]
+
+
+def _load_retry_target_message(
+    conn: Any,
+    *,
+    user_id: int,
+    message_id: str,
+    operation: str,
+) -> tuple[dict[str, Any], str]:
+    return get_message_for_regenerate_or_continue(
+        conn,
+        user_id,
+        message_id,
+        operation=operation,
+    )
+
+
+def _prepare_retry_message_context(
+    conn: Any,
+    *,
+    user: Any,
+    message_id: str,
+    guest_ip: str,
+    operation: str,
+) -> dict[str, Any]:
+    message_row, character_id = _load_retry_target_message(
+        conn,
+        user_id=user.id,
+        message_id=message_id,
+        operation=operation,
+    )
+    recent_messages = _build_recent_messages_before_target(
+        conn,
+        user.id,
+        character_id,
+        message_id,
+        _build_retry_fallback_recent(message_row),
+    )
+    return {
+        "guest_ip": guest_ip,
+        "message_row": message_row,
+        "character_id": character_id,
+        "recent_messages": recent_messages,
+    }
+
+
+def _build_retry_prompt_args(
+    message_context: dict[str, Any],
+    *,
+    message_id: str,
+) -> dict[str, Any]:
+    return {
+        "character_id": message_context["character_id"],
+        "message_id": message_id,
+        "current_content": message_context["message_row"].get("content") or "",
+        "recent_messages": message_context["recent_messages"],
+    }
+
+
+def _build_retry_stream_payload(
+    conn: Any,
+    *,
+    user: Any,
+    prompt_args: dict[str, Any],
+    prompt_context: dict[str, Any],
+) -> dict[str, Any]:
+    return _build_user_stream_messages_and_budget(
+        conn,
+        user=user,
+        character_id=prompt_args["character_id"],
+        character=prompt_context["character"],
+        prompt_messages=prompt_context["prompt_messages"],
+        memory_summary=prompt_context["memory_summary"],
+        related_assets=prompt_context["related_assets"],
+    )
+
+
+def _build_retry_stream_prepare_result(
+    conn: Any,
+    *,
+    user: Any,
+    message_context: dict[str, Any],
+    message_id: str,
+    operation: str,
+) -> dict[str, Any]:
+    prompt_args = _build_retry_prompt_args(message_context, message_id=message_id)
+    prompt_context = _prepare_retry_prompt_context(
+        conn,
+        user=user,
+        operation=operation,
+        prompt_args=prompt_args,
+    )
+    stream_payload = _build_retry_stream_payload(
+        conn,
+        user=user,
+        prompt_args=prompt_args,
+        prompt_context=prompt_context,
+    )
+    return _build_stream_prepare_result(
+        guest_ip=message_context["guest_ip"],
+        stream_payload=stream_payload,
+        character_id=prompt_args["character_id"],
+        current_content=prompt_context["current_content"],
+    )
+
+
+def _prepare_regenerate_or_continue_request(
+    conn: Any,
+    *,
+    user: Any,
+    message_id: str,
+    guest_ip: str,
+    operation: str,
+) -> dict[str, Any]:
+    message_context = _prepare_retry_message_context(
+        conn,
+        user=user,
+        message_id=message_id,
+        guest_ip=guest_ip,
+        operation=operation,
+    )
+    return _build_retry_stream_prepare_result(
+        conn,
+        user=user,
+        message_context=message_context,
+        message_id=message_id,
+        operation=operation,
+    )
+
+
 # ============================================================
 # Regenerate / Continue 功能 - 核心业务逻辑
 # ============================================================
+
+
+def _message_projection(role: Any, content: Any) -> dict[str, Any]:
+    return {
+        "role": role,
+        "content": content,
+    }
+
+
+def _message_with_id_projection(message_id: Any, role: Any, content: Any) -> dict[str, Any]:
+    return {
+        "id": str(message_id),
+        "role": role,
+        "content": content,
+    }
+
+
+def _fallback_recent_messages(
+    fallback_recent: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [fallback_recent[0]] if fallback_recent else []
+
+
+def _find_target_message_index(
+    chronological: list[dict[str, Any]],
+    target_message_id: str,
+) -> int | None:
+    for i, msg in enumerate(chronological):
+        if msg["id"] == str(target_message_id):
+            return i
+    return None
+
+
+def _messages_before_target(
+    chronological: list[dict[str, Any]],
+    target_message_id: str,
+    fallback_recent: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    target_idx = _find_target_message_index(chronological, target_message_id)
+    return chronological[:target_idx] if target_idx is not None else fallback_recent
+
+
+def _trim_recent_messages_tail(
+    recent_messages: list[dict[str, Any]],
+    fallback_recent: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    recent_messages = list(recent_messages)
+    while recent_messages and recent_messages[-1].get("role") == "assistant":
+        recent_messages.pop()
+    if not recent_messages:
+        return _fallback_recent_messages(fallback_recent)
+    return recent_messages
+
+
+def _project_message_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        _message_with_id_projection(row["id"], row["role"], row["content"])
+        for row in rows
+    ]
+
+
+def _resolve_recent_messages_before_target(
+    chronological: list[dict[str, Any]],
+    *,
+    target_message_id: str,
+    fallback_recent: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    recent_messages = _messages_before_target(
+        chronological,
+        target_message_id,
+        fallback_recent,
+    )
+    return _trim_recent_messages_tail(recent_messages, fallback_recent)
+
+
+def _build_recent_messages_before_target(
+    conn: Any,
+    user_id: int,
+    character_id: str,
+    target_message_id: str,
+    fallback_recent: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    all_rows = conn.execute(
+        """SELECT id, role, content, created_at FROM chat_messages
+           WHERE user_id = %s AND character_id = %s
+           ORDER BY created_at ASC, id ASC""",
+        (user_id, character_id),
+    ).fetchall()
+    chronological = _project_message_rows(all_rows)
+    return _resolve_recent_messages_before_target(
+        chronological,
+        target_message_id=target_message_id,
+        fallback_recent=fallback_recent,
+    )
+
 
 def get_message_for_regenerate_or_continue(
     conn: Any,
     user_id: int,
     message_id: int,
     operation: str = "regenerate",
-) -> tuple[dict[str, Any], list[dict[str, str]], str]:
+) -> tuple[dict[str, Any], str]:
     """
-    获取要 regenerate/continue 的消息及其上下文。
+    获取要 regenerate/continue 的目标 assistant 消息及角色信息。
     
     参数：
         conn: 数据库连接
@@ -435,9 +1137,8 @@ def get_message_for_regenerate_or_continue(
         operation: 操作类型 'regenerate' 或 'continue'
     
     返回：
-        (message_row, recent_messages, character_id)
+        (message_row, character_id)
         message_row: 目标 AI 消息的数据库行
-        recent_messages: 该消息之前的所有历史消息（用于构建上下文）
         character_id: 角色 ID
     
     异常：
@@ -445,35 +1146,18 @@ def get_message_for_regenerate_or_continue(
         HTTPException 400: 消息不是 assistant 类型
     """
     from fastapi import HTTPException
-    
-    # 1. 查询目标消息
+    _ = operation
+
     row = conn.execute(
         """SELECT * FROM chat_messages 
            WHERE id = %s AND user_id = %s AND role = 'assistant'""",
         (message_id, user_id),
     ).fetchone()
-    
+
     if not row:
         raise HTTPException(status_code=404, detail="消息不存在或无权操作")
-    
-    character_id = row["character_id"]
-    
-    # 2. 获取该消息之前的所有历史消息（不包括目标消息本身）
-    #    这样可以保证 regenerate 时上下文完全一致
-    history_rows = conn.execute(
-        """SELECT role, content, created_at 
-           FROM chat_messages 
-           WHERE user_id = %s AND character_id = %s AND id < %s
-           ORDER BY id ASC""",
-        (user_id, character_id, message_id),
-    ).fetchall()
-    
-    recent_messages = [
-        {"role": r["role"], "content": r["content"]}
-        for r in history_rows
-    ]
-    
-    return dict(row), recent_messages, character_id
+
+    return dict(row), row["character_id"]
 
 
 def save_regenerated_version(
@@ -554,8 +1238,36 @@ def save_regenerated_version(
     if commit:
         conn.commit()
 
-    if commit:
-        conn.commit()
+
+
+
+def _prepare_character_prompt_context(
+    conn: Any,
+    *,
+    user_id: int,
+    character_id: str,
+    viewer_plan: str | None = None,
+) -> tuple[Any, str, list[Any]]:
+    character = get_character_or_404(conn, character_id, viewer_plan=viewer_plan)
+    memory_summary = get_summary_for_prompt(conn, user_id, character_id)
+    related_assets = get_linked_assets(conn, character_id)
+    return character, memory_summary, related_assets
+
+
+def _build_continue_prompt_messages(
+    recent_messages: list[dict[str, str]],
+    current_content: str,
+) -> list[dict[str, str]]:
+    continue_messages = list(recent_messages)
+    continue_messages.append({
+        "role": "assistant",
+        "content": current_content,
+    })
+    continue_messages.append({
+        "role": "user",
+        "content": "【请继续】请接着上面的话继续说下去，保持角色设定和语气，不要重复已说过的内容。直接继续输出即可。",
+    })
+    return continue_messages
 
 
 def prepare_regenerate_context(
@@ -571,14 +1283,12 @@ def prepare_regenerate_context(
     返回：
         (character, memory_summary, recent_messages_with_memory, related_assets)
     """
-    character = get_character_or_404(conn, character_id, viewer_plan=viewer_plan)
-    
-    # 读取记忆摘要
-    memory_summary = get_summary_for_prompt(conn, user_id, character_id)
-    
-    # 获取关联资产
-    related_assets = get_linked_assets(conn, character_id)
-    
+    character, memory_summary, related_assets = _prepare_character_prompt_context(
+        conn,
+        user_id=user_id,
+        character_id=character_id,
+        viewer_plan=viewer_plan,
+    )
     return character, memory_summary, recent_messages, related_assets
 
 
@@ -598,21 +1308,12 @@ def prepare_continue_context(
     - 需要把当前 AI 回复作为上下文的一部分
     - 在末尾追加一个 system/user 提示让 AI 继续生成
     """
-    character = get_character_or_404(conn, character_id, viewer_plan=viewer_plan)
-    memory_summary = get_summary_for_prompt(conn, user_id, character_id)
-    related_assets = get_linked_assets(conn, character_id)
-    
-    # 构建用于 continue 的消息列表：
-    # 历史消息 + 当前的 assistant 回复 + 继续指令
-    continue_messages = list(recent_messages)
-    continue_messages.append({
-        "role": "assistant",
-        "content": current_content,
-    })
-    # 添加继续生成指令（以 user 角色注入，避免多条 system）
-    continue_messages.append({
-        "role": "user",
-        "content": "【请继续】请接着上面的话继续说下去，保持角色设定和语气，不要重复已说过的内容。直接继续输出即可。",
-    })
-    
+    _ = message_id
+    character, memory_summary, related_assets = _prepare_character_prompt_context(
+        conn,
+        user_id=user_id,
+        character_id=character_id,
+        viewer_plan=viewer_plan,
+    )
+    continue_messages = _build_continue_prompt_messages(recent_messages, current_content)
     return character, memory_summary, continue_messages, related_assets

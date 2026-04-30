@@ -7,12 +7,6 @@ utils/json_utils 模块单元测试
   - to_json_string: 任意数据 → JSON 字符串
 """
 
-import sys
-import os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
-sys.path.insert(0, os.path.dirname(__file__))
-
 from utils.json_utils import (
     parse_json_list,
     parse_json_object,
@@ -61,11 +55,11 @@ class TestParseJsonList:
         assert parse_json_list('{"a":1}') == []
         assert parse_json_list('"just a string"') == []
 
-    def custom_fallback_used(self):
+    def test_custom_fallback_used_for_object(self):
         """自定义 fallback 值被使用（值相等即可，不要求同一引用）。"""
         fallback = ["custom_default"]
         result = parse_json_list(None, fallback=fallback)
-        assert result == fallback  # 值相等
+        assert result == fallback
         assert result == ["custom_default"]
         assert parse_json_list("bad", fallback=fallback) == fallback
 
@@ -116,11 +110,11 @@ class TestParseJsonObject:
     def test_whitespace_input_returns_fallback(self):
         assert parse_json_object("   ") == {}
 
-    def custom_fallback_used(self):
+    def test_custom_fallback_used_for_object(self):
         """自定义 fallback 值被使用（值相等即可，不要求同一引用）。"""
         fallback = {"custom": True}
         result = parse_json_object(None, fallback=fallback)
-        assert result == fallback  # 值相等
+        assert result == fallback
         assert result["custom"] is True
 
 
@@ -158,6 +152,7 @@ class TestToJsonString:
         """不可序列化的对象返回默认值。"""
         class Unserializable:
             pass
+
         result = to_json_string(Unserializable())
         assert result == "{}"
 

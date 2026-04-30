@@ -117,14 +117,31 @@ function renderPager(container, page, totalPages, total, onPageChange) {
   if (!container) return;
   const pages = [];
   for (let i = 1; i <= Math.min(totalPages, 7); i++) pages.push(i);
+  if (!container.dataset.pagerBound) {
+    container.addEventListener('click', (event) => {
+      const btn = event.target.closest('.pager-btn[data-page]');
+      if (!btn || btn.disabled) return;
+      event.preventDefault();
+      const nextPage = parseInt(btn.dataset.page, 10);
+      if (Number.isNaN(nextPage)) return;
+      onPageChange(nextPage);
+    });
+    container.dataset.pagerBound = '1';
+  }
+
+  const makeBtn = (label, targetPage, disabled, active = false) => {
+    const safeTarget = Math.min(totalPages, Math.max(1, targetPage));
+    return `<button class="pager-btn ${active ? 'active' : ''}" data-page="${safeTarget}" ${disabled ? 'disabled' : ''}>${label}</button>`;
+  };
+
   container.innerHTML = `
     <div class="pager-info">第 ${page} / ${totalPages} 页，共 ${total} 条</div>
     <div class="pager-controls">
-      <button class="pager-btn" onclick="this.closest('.pager-controls').querySelectorAll('.pager-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active');(${onPageChange})(1)" ${page === 1 ? 'disabled' : ''}>«</button>
-      <button class="pager-btn" onclick="this.closest('.pager-controls').querySelectorAll('.pager-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active');(${onPageChange})(${page - 1})" ${page === 1 ? 'disabled' : ''}>‹</button>
-      ${pages.map(p => `<button class="pager-btn ${p === page ? 'active' : ''}" onclick="this.closest('.pager-controls').querySelectorAll('.pager-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active');(${onPageChange})(${p})">${p}</button>`).join('')}
-      <button class="pager-btn" onclick="this.closest('.pager-controls').querySelectorAll('.pager-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active');(${onPageChange})(${page + 1})" ${page >= totalPages ? 'disabled' : ''}>›</button>
-      <button class="pager-btn" onclick="this.closest('.pager-controls').querySelectorAll('.pager-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active');(${onPageChange})(${totalPages})" ${page >= totalPages ? 'disabled' : ''}>»</button>
+      ${makeBtn('«', 1, page === 1)}
+      ${makeBtn('‹', page - 1, page === 1)}
+      ${pages.map(p => makeBtn(String(p), p, false, p === page)).join('')}
+      ${makeBtn('›', page + 1, page >= totalPages)}
+      ${makeBtn('»', totalPages, page >= totalPages)}
     </div>`;
 }
 

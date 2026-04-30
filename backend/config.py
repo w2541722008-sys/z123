@@ -147,19 +147,19 @@ TOKEN_EXPIRE_DAYS = _int_env("TOKEN_EXPIRE_DAYS", 30, minimum=1, maximum=365)
 # 登录：同一 IP 10 分钟最多 15 次；同一邮箱 10 分钟最多 10 次
 LOGIN_RATE_LIMIT_COUNT = _int_env("LOGIN_RATE_LIMIT_COUNT", 15, minimum=1, maximum=100)
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = _int_env("LOGIN_RATE_LIMIT_WINDOW_SECONDS", 600, minimum=10, maximum=3600)
-LOGIN_RATE_LIMIT_EMAIL_COUNT = 10
+LOGIN_RATE_LIMIT_EMAIL_COUNT = _int_env("LOGIN_RATE_LIMIT_EMAIL_COUNT", 10, minimum=1, maximum=100)
 
 # 注册：同一 IP 1 小时最多 6 次
-REGISTER_RATE_LIMIT_COUNT = 6
-REGISTER_RATE_LIMIT_WINDOW_SECONDS = 3600
+REGISTER_RATE_LIMIT_COUNT = _int_env("REGISTER_RATE_LIMIT_COUNT", 6, minimum=1, maximum=100)
+REGISTER_RATE_LIMIT_WINDOW_SECONDS = _int_env("REGISTER_RATE_LIMIT_WINDOW_SECONDS", 3600, minimum=10, maximum=86400)
 
 # 找回密码：同一 IP 半小时最多 5 次
-PASSWORD_RESET_RATE_LIMIT_COUNT = 5
-PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS = 1800
+PASSWORD_RESET_RATE_LIMIT_COUNT = _int_env("PASSWORD_RESET_RATE_LIMIT_COUNT", 5, minimum=1, maximum=100)
+PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS = _int_env("PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS", 1800, minimum=10, maximum=86400)
 
 # 验证/重置验证码：同一 IP 10 分钟最多 12 次
-VERIFY_CODE_RATE_LIMIT_COUNT = 12
-VERIFY_CODE_RATE_LIMIT_WINDOW_SECONDS = 600
+VERIFY_CODE_RATE_LIMIT_COUNT = _int_env("VERIFY_CODE_RATE_LIMIT_COUNT", 12, minimum=1, maximum=100)
+VERIFY_CODE_RATE_LIMIT_WINDOW_SECONDS = _int_env("VERIFY_CODE_RATE_LIMIT_WINDOW_SECONDS", 600, minimum=10, maximum=86400)
 
 # 已登录聊天：同一用户 60 秒最多 45 次请求
 CHAT_RATE_LIMIT_COUNT = _int_env("CHAT_RATE_LIMIT_COUNT", 45, minimum=1, maximum=200)
@@ -203,6 +203,13 @@ AI_REQUEST_LOG_RETENTION_DAYS = _int_env("AI_REQUEST_LOG_RETENTION_DAYS", 30, mi
 
 
 # ============================================================
+# AI 模型默认配置
+# ============================================================
+DEFAULT_AI_BASE_URL = "https://realmrouter.cn/v1"
+DEFAULT_AI_MODEL = "glm-5.1"
+
+
+# ============================================================
 # 工具函数
 # ============================================================
 def utc_now_iso() -> str:
@@ -227,9 +234,7 @@ def validate_production_config() -> list[str]:
     missing = []
     environment = os.environ.get("ENV", "development").lower()
     
-    # 检查数据库配置
-    if not DATABASE_URL:
-        missing.append("DATABASE_URL - 数据库连接字符串未设置")
+    # 注意：DATABASE_URL 已在模块顶部检查，缺失时直接 raise RuntimeError，此处不再重复检查
     
     # 检查 DEBUG 模式（生产环境必须关闭）
     if environment == "production" and DEBUG:

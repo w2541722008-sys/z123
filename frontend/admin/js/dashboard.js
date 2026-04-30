@@ -10,21 +10,38 @@ async function loadDashboard() {
   if (!box) return;
   box.innerHTML = '<div class="no-results">加载中…</div>';
   try {
-    const [stats, trend] = await Promise.all([
+    const [stats, trend, mediaMissing] = await Promise.all([
       AdminAPI.apiFetch(`${AdminAPI.API}/dashboard/stats`),
       AdminAPI.apiFetch(`${AdminAPI.API}/dashboard/trend?days=7`),
+      AdminAPI.apiFetch(`${AdminAPI.API}/media-missing`).catch(() => ({
+        ok: false,
+        missing_count: 0,
+        items: [],
+        truncated: false,
+      })),
     ]);
-    renderDashboard(stats, trend);
+    renderDashboard(stats, trend, mediaMissing);
   } catch (e) {
     box.innerHTML = `<div class="no-results" style="color:#f87171">加载失败：${escHtml(e.message)}</div>`;
   }
 }
 
-function renderDashboard(stats, trend) {
+function renderDashboard(stats, trend, mediaMissing = {}) {
   const box = document.getElementById('dashboard-content');
   if (!box) return;
   const dist = stats.plan_distribution || {};
   const maxUsers = Math.max(...(trend.trend || []).map(t => t.new_users), 1);
+  const missingCount = Number(mediaMissing.missing_count || 0);
+  const missingItems = Array.isArray(mediaMissing.items) ? mediaMissing.items : [];
+  const mediaHealthy = Boolean(mediaMissing.ok) && missingCount === 0;
+  const mediaStatusClass = mediaHealthy ? 'ok' : 'warn';
+  const mediaStatusText = mediaHealthy ? '媒体资源完整' : `发现 ${missingCount} 个缺失资源`;
+  const mediaListHtml = missingItems.length > 0
+    ? `<ul class="media-missing-list">${missingItems.map(item => `<li>${escHtml(item)}</li>`).join('')}</ul>`
+    : '<div class="media-missing-empty">暂无缺失样例</div>';
+  const truncatedHint = mediaMissing.truncated
+    ? '<div class="media-missing-hint">仅展示样例，请点击“刷新缺失清单”获取最新结果。</div>'
+    : '';
 
   box.innerHTML = `
     <div class="dashboard-grid">
@@ -87,5 +104,45 @@ function renderDashboard(stats, trend) {
           <div class="pd-label">均客单价(¥)</div>
         </div>
       </div>
+    </div>
+
+    <div class="dashboard-section media-missing-section">
+      <div class="media-missing-header">
+        <h3>🧩 媒体缺失告警</h3>
+        <button class="btn btn-ghost" data-action="load-media-missing" data-refresh="true">🔄 刷新缺失清单</button>
+      </div>
+      <div class="media-missing-status ${mediaStatusClass}">${mediaStatusText}</div>
+      <div id="media-missing-panel">${mediaListHtml}${truncatedHint}</div>
     </div>`;
+}
+
+async function loadMediaMissing(forceRefresh = true) {
+  const panel = document.getElementById('media-missing-panel');
+  const status = document.querySelector('.media-missing-status');
+  if (!panel || !status) return;
+
+  panel.innerHTML = '<div class="no-results">加载中…</div>';
+  try {
+    const query = forceRefresh ? '?refresh=true' : '';
+    const mediaMissing = await AdminAPI.apiFetch(`${AdminAPI.API}/media-missing${query}`);
+    const missingCount = Number(mediaMissing.missing_count || 0);
+    const missingItems = Array.isArray(mediaMissing.items) ? mediaMissing.items : [];
+    const mediaHealthy = Boolean(mediaMissing.ok) && missingCount === 0;
+    status.classList.remove('ok', 'warn');
+    status.classList.add(mediaHealthy ? 'ok' : 'warn');
+    status.textContent = mediaHealthy ? '媒体资源完整' : `发现 ${missingCount} 个缺失资源`;
+
+    const listHtml = missingItems.length > 0
+      ? `<ul class="media-missing-list">${missingItems.map(item => `<li>${escHtml(item)}</li>`).join('')}</ul>`
+      : '<div class="media-missing-empty">暂无缺失样例</div>';
+    const truncatedHint = mediaMissing.truncated
+      ? '<div class="media-missing-hint">仅展示样例，请继续排查数据库中的历史路径。</div>'
+      : '';
+    panel.innerHTML = `${listHtml}${truncatedHint}`;
+  } catch (e) {
+    status.classList.remove('ok');
+    status.classList.add('warn');
+    status.textContent = '媒体缺失清单加载失败';
+    panel.innerHTML = `<div class="no-results" style="color:#f87171">加载失败：${escHtml(e.message)}</div>`;
+  }
 }

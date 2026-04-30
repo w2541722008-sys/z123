@@ -386,8 +386,17 @@
      });
    }
 
-   function updateChatHeader(char) {
-     const avatarEl = document.getElementById('chat-avatar');
+   function appendHeaderSign(signEl, text = '') {
+    signEl.innerHTML = '';
+    const onlineDot = document.createElement('span');
+    onlineDot.className = 'online-dot';
+    signEl.appendChild(onlineDot);
+    signEl.appendChild(document.createTextNode(text));
+    return signEl;
+  }
+
+  function updateChatHeader(char) {
+    const avatarEl = document.getElementById('chat-avatar');
      // 优先用 avatarImg（/api/avatar/xxx），兼容旧 coverImg
      const SERVER_ORIGIN = typeof API_BASE !== 'undefined' ? API_BASE.replace(/\/api$/, '') : '';
      const rawImg = char.avatarImg || char.coverImg || null;
@@ -424,8 +433,9 @@
        rawNameEl.textContent = '';
        rawNameEl.classList.remove('show');
      }
-     document.getElementById('chat-sign').innerHTML = `<span class="online-dot"></span>${char.sign || char.subtitle || ''}`;
-   }
+     const signEl = document.getElementById('chat-sign');
+    appendHeaderSign(signEl, char.sign || char.subtitle || '');
+  }
 
   let _lastMsgTimestamp = 0;
 
@@ -448,120 +458,156 @@
      return `${d.getMonth() + 1}月${d.getDate()}日 ${timeStr}`;
    }
 
-   function appendDateDivider() {
-     const div = document.createElement('div');
-     div.className = 'date-divider';
-     div.textContent = formatDate(new Date());
-     document.getElementById('chat-messages').appendChild(div);
-   }
-
-   function appendLoadingHint(text) {
-     const row = document.createElement('div');
-     row.className = 'date-divider';
-     row.textContent = text;
-     document.getElementById('chat-messages').appendChild(row);
-   }
-
-   function appendMsg(role, text, createdAt = null, retryText = null, messageId = null) {
-    const normalizedRole = role === 'ai' ? 'assistant' : role;
-    const isError = normalizedRole === 'error';
-    const container = _batchContainer || document.getElementById('chat-messages');
-    const msgTime = createdAt ? new Date(createdAt).getTime() : Date.now();
-
-    if (shouldShowTime(msgTime)) {
-      const timeEl = document.createElement('div');
-      timeEl.className = 'msg-time';
-      timeEl.textContent = formatSmartTime(createdAt ? new Date(createdAt) : new Date());
-      container.appendChild(timeEl);
-    }
-
-    const row = document.createElement('div');
-    row.className = `msg-row ${(normalizedRole === 'assistant' || isError) ? 'ai' : normalizedRole}`;
-
-    const isAi = normalizedRole === 'assistant';
-
-    if (isAi && !isError) {
-      const avatarEl = createMsgAvatar('char', currentChar);
-      if (avatarEl) row.appendChild(avatarEl);
-    }
-
-    const bubble = document.createElement('div');
-     if (isError) {
-       bubble.className = 'msg-bubble error-bubble';
-       bubble.innerHTML = `⚠ ${escapeHtml(text)}`;
-       // 如果有重试文本，加重试按钮
-       if (retryText) {
-         const btn = document.createElement('div');
-         btn.className = 'retry-btn';
-         btn.textContent = '🔄 重新发送';
-         btn.addEventListener('click', () => {
-           row.remove();
-           // 把重试文本写回输入框并触发发送
-           const input = document.getElementById('chat-input');
-           input.value = retryText;
-           send();
-         });
-         bubble.appendChild(document.createElement('br'));
-         bubble.appendChild(btn);
-       }
-     } else {
-       bubble.className = `msg-bubble ${normalizedRole === 'assistant' ? 'ai' : normalizedRole}`;
-       renderTextWithLineBreaks(bubble, text, normalizedRole === 'assistant');
-       const doCopy = () => {
-         navigator.clipboard.writeText(text).then(() => showCopyToast());
-       };
-       bubble.addEventListener('dblclick', doCopy);
-       let pressTimer;
-       bubble.addEventListener('touchstart', () => { pressTimer = setTimeout(doCopy, 600); }, { passive: true });
-       bubble.addEventListener('touchend', () => clearTimeout(pressTimer), { passive: true });
-       bubble.addEventListener('touchmove', () => clearTimeout(pressTimer), { passive: true });
-
-       // 为 AI 消息添加 Regenerate / Continue 操作按钮
-       if (normalizedRole === 'assistant' && messageId) {
-         const actionBtns = document.createElement('div');
-         actionBtns.className = 'msg-action-btns';
-         actionBtns.innerHTML = `
-           <button class="msg-action-btn regenerate-btn" title="重新生成" data-message-id="${messageId}">↻</button>
-           <button class="msg-action-btn continue-btn" title="继续生成" data-message-id="${messageId}">▶</button>
-         `;
-         
-         actionBtns.querySelector('.regenerate-btn').addEventListener('click', (e) => {
-           e.stopPropagation();
-           regenerateMessage(messageId, row, bubble);
-         });
-         actionBtns.querySelector('.continue-btn').addEventListener('click', (e) => {
-           e.stopPropagation();
-           continueMessage(messageId, row, bubble);
-         });
-
-         const body = document.createElement('div');
-         body.className = 'msg-body';
-         body.appendChild(bubble);
-         body.appendChild(actionBtns);
-         row.appendChild(body);
-         row.dataset.messageId = messageId;
-       } else if (isAi) {
-         const body = document.createElement('div');
-         body.className = 'msg-body';
-         body.appendChild(bubble);
-         row.appendChild(body);
-       } else {
-         row.appendChild(bubble);
-       }
-     }
-
-   if (!isAi) {
-     const avatarEl = createMsgAvatar('user');
-     if (avatarEl) row.appendChild(avatarEl);
-   }
-
-   container.appendChild(row);
-    _lastMsgTimestamp = msgTime;
-   if (!_batchContainer) scrollToBottom();
-    return row;
+   function appendDividerNode(text, container = document.getElementById('chat-messages')) {
+    const node = document.createElement('div');
+    node.className = 'date-divider';
+    node.textContent = text;
+    container.appendChild(node);
+    return node;
   }
 
-  function createMsgAvatar(type, charData = null) {
+  function appendDateDivider() {
+    return appendDividerNode(formatDate(new Date()));
+  }
+
+  function appendLoadingHint(text) {
+    return appendDividerNode(text);
+  }
+
+   function fillErrorBubble(bubble, text, row, retryText = null) {
+   bubble.innerHTML = `⚠ ${escapeHtml(text)}`;
+   if (!retryText) return bubble;
+   const btn = createRetryButton(row, retryText);
+   bubble.appendChild(document.createElement('br'));
+   bubble.appendChild(btn);
+   return bubble;
+ }
+
+ function appendMsg(role, text, createdAt = null, retryText = null, messageId = null) {
+  const normalizedRole = role === 'ai' ? 'assistant' : role;
+  const isError = normalizedRole === 'error';
+  const container = _batchContainer || document.getElementById('chat-messages');
+  const msgTime = createdAt ? new Date(createdAt).getTime() : Date.now();
+
+  if (shouldShowTime(msgTime)) {
+    appendMessageTime(container, createdAt ? new Date(createdAt) : new Date());
+  }
+
+  const row = createMessageRow((normalizedRole === 'assistant' || isError) ? 'ai' : normalizedRole, messageId);
+  const isAi = normalizedRole === 'assistant';
+
+  if (isAi && !isError) {
+    appendRowAvatar(row, 'char', currentChar);
+  }
+
+  const bubble = createMessageBubble(isError ? 'error-bubble' : (normalizedRole === 'assistant' ? 'ai' : normalizedRole));
+   if (isError) {
+     fillErrorBubble(bubble, text, row, retryText);
+     appendPlainBubble(row, bubble);
+   } else {
+    renderMessageBubble(bubble, text, normalizedRole === 'assistant');
+    bindCopyHandlers(bubble, () => text);
+    appendBubbleContent(row, bubble, isAi, messageId);
+   }
+
+ if (!isAi) {
+   appendRowAvatar(row, 'user');
+ }
+
+ container.appendChild(row);
+  _lastMsgTimestamp = msgTime;
+ if (!_batchContainer) scrollToBottom();
+  return row;
+}
+
+ function createRetryButton(row, retryText) {
+   const btn = document.createElement('div');
+   btn.className = 'retry-btn';
+   btn.textContent = '🔄 重新发送';
+   btn.addEventListener('click', () => {
+     retryMessage(row, retryText);
+   });
+   return btn;
+ }
+
+ function retryMessage(row, retryText) {
+   row.remove();
+   const input = document.getElementById('chat-input');
+   input.value = retryText;
+   send();
+   return input;
+ }
+
+ function assignMessageId(target, messageId = null) {
+   if (target && messageId) target.dataset.messageId = messageId;
+   return target;
+ }
+
+ function createAssistantHistoryEntry(content, messageId = null, createdAt = new Date().toISOString()) {
+   return {
+     role: 'assistant',
+     content,
+     created_at: createdAt,
+     ...(messageId ? { message_id: messageId } : {}),
+   };
+ }
+
+ function createMessageRow(roleClass, messageId = null) {
+   const row = document.createElement('div');
+   row.className = `msg-row ${roleClass}`;
+   assignMessageId(row, messageId);
+   return row;
+ }
+
+ function appendRowAvatar(row, type, charData = null) {
+   const avatarEl = createMsgAvatar(type, charData);
+   if (avatarEl) row.appendChild(avatarEl);
+   return avatarEl;
+ }
+
+ function createMessageBubble(roleClass, text = '') {
+   const bubble = document.createElement('div');
+   bubble.className = `msg-bubble ${roleClass}`;
+   bubble.textContent = text;
+   return bubble;
+ }
+
+ function renderMessageBubble(bubbleEl, text, isAssistant = false) {
+   renderTextWithLineBreaks(bubbleEl, text, isAssistant);
+   return bubbleEl;
+ }
+
+ function appendPlainBubble(row, bubble) {
+   row.appendChild(bubble);
+   return bubble;
+ }
+
+ function appendAssistantBubble(row, bubble, actionBtns = null) {
+  appendMessageBody(row, bubble, actionBtns);
+  return bubble;
+}
+
+function createAssistantActionButtons(row = null, bubble = null, messageId = null, hiddenActions = false) {
+  const actionBtns = createMessageActionButtons(hiddenActions);
+  if (messageId) bindMessageActionButtons(actionBtns, row, bubble, messageId);
+  return actionBtns;
+}
+
+function mountAssistantBubble(row, bubble, messageId = null) {
+  const actionBtns = messageId ? createAssistantActionButtons(row, bubble, messageId) : null;
+  appendAssistantBubble(row, bubble, actionBtns);
+  return actionBtns;
+}
+
+function appendBubbleContent(row, bubble, isAi, messageId) {
+  if (isAi) {
+    mountAssistantBubble(row, bubble, messageId);
+    return;
+  }
+  appendPlainBubble(row, bubble);
+}
+
+ function createMsgAvatar(type, charData = null) {
     const el = document.createElement('div');
     el.className = 'msg-avatar';
     const SERVER_ORIGIN = typeof API_BASE !== 'undefined' ? API_BASE.replace(/\/api$/, '') : '';
@@ -604,100 +650,422 @@
     return null;
   }
 
-   function renderTextWithLineBreaks(el, text, isAssistant = false) {
-     el.innerHTML = '';
-     // assistant 消息才做状态栏剥离
-     let displayText = text;
-     if (isAssistant) {
-       const { cleanText, statusRaw } = CharStatusPanel.stripStatusBlock(text);
-       displayText = cleanText;
-       // 有状态栏时更新面板（流式过程中可能多次调用，每次都更新）
-       if (statusRaw !== null) {
-         CharStatusPanel.render(statusRaw);
-       }
-     }
-     const cleaned = String(displayText).replace(/\n{2,}/g, '\n').trim();
-     const lines = cleaned.split('\n');
-     lines.forEach((line, i) => {
-       el.appendChild(document.createTextNode(line));
-       if (i < lines.length - 1) el.appendChild(document.createElement('br'));
-     });
-   }
+   function normalizeRenderedText(text) {
+    return String(text).replace(/\n{2,}/g, '\n').trim();
+  }
 
-   function showCopyToast() {
-     const toast = document.getElementById('copy-toast');
-     if (!toast) return;
-     toast.classList.add('show');
-     setTimeout(() => toast.classList.remove('show'), 1800);
-   }
+  function appendTextLines(el, lines) {
+    lines.forEach((line, i) => {
+      el.appendChild(document.createTextNode(line));
+      if (i < lines.length - 1) el.appendChild(document.createElement('br'));
+    });
+    return el;
+  }
 
-   function showTyping() {
-    const box = document.getElementById('chat-messages');
-    const row = document.createElement('div');
-    row.className = 'msg-row ai';
-    row.id = 'typing-row';
-    const avatarEl = createMsgAvatar('char', currentChar);
-    if (avatarEl) row.appendChild(avatarEl);
-    const bubble = document.createElement('div');
-    bubble.className = 'msg-bubble typing';
+  function resolveDisplayText(text, isAssistant = false) {
+    if (!isAssistant) return text;
+    const { cleanText, statusRaw } = CharStatusPanel.stripStatusBlock(text);
+    if (statusRaw !== null) {
+      CharStatusPanel.render(statusRaw);
+    }
+    return cleanText;
+  }
+
+  function renderTextWithLineBreaks(el, text, isAssistant = false) {
+    el.innerHTML = '';
+    const displayText = resolveDisplayText(text, isAssistant);
+    const cleaned = normalizeRenderedText(displayText);
+    const lines = cleaned.split('\n');
+    appendTextLines(el, lines);
+  }
+
+   function flashElementClass(el, className, delay = 1800) {
+    if (!el) return null;
+    el.classList.add(className);
+    setTimeout(() => el.classList.remove(className), delay);
+    return el;
+  }
+
+  function showCopyToast() {
+    const toast = document.getElementById('copy-toast');
+    flashElementClass(toast, 'show');
+  }
+
+   function fillTypingBubble(bubble) {
     bubble.innerHTML = `
       <span class="typing-dot"></span>
       <span class="typing-dot"></span>
       <span class="typing-dot"></span>
     `;
+    return bubble;
+  }
+
+  function showTyping() {
+    const box = document.getElementById('chat-messages');
+    const row = createMessageRow('ai');
+    row.id = 'typing-row';
+    appendRowAvatar(row, 'char', currentChar);
+    const bubble = fillTypingBubble(createMessageBubble('typing'));
     row.appendChild(bubble);
     box.appendChild(row);
     scrollToBottom();
   }
 
-   function removeTyping() {
-     const el = document.getElementById('typing-row');
-     if (el) el.remove();
-   }
+   function createStreamState() {
+    return {
+      bubbleEl: null,
+      actionBtnsEl: null,
+      streamRowEl: null,
+      aiText: '',
+    };
+  }
 
-   function createStreamRow() {
-    const box = document.getElementById('chat-messages');
-    const msgTime = Date.now();
+  function handleStreamChunk(streamState, chunk) {
+    if (!chunk) return;
+    renderStreamReply(streamState, streamState.aiText + chunk);
+  }
 
-    if (shouldShowTime(msgTime)) {
-      const timeEl = document.createElement('div');
-      timeEl.className = 'msg-time';
-      timeEl.textContent = formatSmartTime(new Date());
-      box.appendChild(timeEl);
+  function finalizeStreamReply(streamState, replyText) {
+    ensureStreamReplyRow(streamState, replyText || '');
+    renderStreamReply(streamState, replyText || streamState.aiText);
+  }
+
+  function appendLocalConversation(userText, assistantText, messageId = null) {
+    const createdAt = new Date().toISOString();
+    history.push({ role: 'user', content: userText, created_at: createdAt });
+    history.push(createAssistantHistoryEntry(assistantText, messageId, createdAt));
+  }
+
+  function hideStreamActionButtons(streamState) {
+    if (streamState.actionBtnsEl) streamState.actionBtnsEl.style.display = 'none';
+  }
+
+  function bindPersistedStreamActions(streamState, messageId) {
+    if (!messageId) {
+      hideStreamActionButtons(streamState);
+      return;
+    }
+    assignMessageId(streamState.streamRowEl, messageId);
+    bindMessageActionButtons(streamState.actionBtnsEl, streamState.streamRowEl, streamState.bubbleEl, messageId);
+  }
+
+  function handleStreamError(streamState, payload, fallbackMessage = '网络波动，请稍后再试') {
+    cleanupStreamState(streamState);
+    UI.toast(payload?.message || fallbackMessage, 'warn', 3000);
+  }
+
+  function setButtonLoading(buttonEl, disabled, loading = false) {
+    if (!buttonEl) return;
+    buttonEl.disabled = disabled;
+    buttonEl.classList.toggle('loading', loading);
+  }
+
+  function setActionButtonsVisible(actionBtnsEl, visible) {
+    if (!actionBtnsEl) return;
+    actionBtnsEl.style.display = visible ? '' : 'none';
+  }
+
+  function getMessageActionButtons(rowEl) {
+    return {
+      regenerate: rowEl?.querySelector('.regenerate-btn') || null,
+      continue: rowEl?.querySelector('.continue-btn') || null,
+      actions: rowEl?.querySelector('.msg-action-btns') || null,
+    };
+  }
+
+  function beginMessageAction(rowEl, { loading = null, showTypingBubble = false, hideActions = false } = {}) {
+    const buttons = getMessageActionButtons(rowEl);
+    setSending(true);
+    if (showTypingBubble) showTyping();
+    abortStream();
+    _streamController = new AbortController();
+
+    if (loading === 'regenerate') {
+      setButtonLoading(buttons.regenerate, true, true);
+      setButtonLoading(buttons.continue, true);
+    } else if (loading === 'continue') {
+      setButtonLoading(buttons.regenerate, true);
+      setButtonLoading(buttons.continue, true, true);
     }
 
-    const row = document.createElement('div');
-    row.className = 'msg-row ai';
+    if (hideActions) {
+      setActionButtonsVisible(buttons.actions, false);
+    }
 
-    const avatarEl = createMsgAvatar('char', currentChar);
-    if (avatarEl) row.appendChild(avatarEl);
+    return buttons;
+  }
 
-    const bubble = document.createElement('div');
-    bubble.className = 'msg-bubble ai';
-    bubble.textContent = '';
+  function completeMessageAction(buttons = {}, { loading = null, restoreActions = false } = {}) {
+    if (loading === 'regenerate') {
+      setButtonLoading(buttons.regenerate, false, false);
+      setButtonLoading(buttons.continue, false);
+    } else if (loading === 'continue') {
+      setButtonLoading(buttons.regenerate, false);
+      setButtonLoading(buttons.continue, false, false);
+    }
 
-    // 预创建操作按钮容器（初始隐藏，onDone 时显示并绑定事件）
+    if (restoreActions) {
+      setActionButtonsVisible(buttons.actions, true);
+    }
+
+    removeTyping();
+    setSending(false);
+    return buttons;
+  }
+
+  function resolveContinuationResult(originalText, appendedText, payload, messageId) {
+    const finalAppended = payload?.appended_text || appendedText;
+    const nextMessageId = payload?.message_id || messageId;
+    return {
+      finalAppended,
+      nextMessageId,
+      fullText: `${originalText || ''}${finalAppended}`,
+    };
+  }
+
+  function cleanupContinuationFailure(newRowEl, originalButtons, message) {
+    removeTyping();
+    removeRowIfPresent(newRowEl);
+    UI.toast(message, 'warn', 3000);
+    setActionButtonsVisible(originalButtons?.actions, true);
+  }
+
+  function syncCharacterState(payload) {
+    if (payload?.character_state) {
+      renderStateBar(payload.character_state);
+    }
+  }
+
+  function removeRowIfPresent(rowEl) {
+    if (rowEl?.parentNode) rowEl.remove();
+  }
+
+  function removeElementById(elementId) {
+    const el = document.getElementById(elementId);
+    removeRowIfPresent(el);
+    return el;
+  }
+
+  function cleanupStreamState(state) {
+    removeTyping();
+    removeRowIfPresent(state?.streamRowEl);
+    return resetStreamState(state);
+  }
+
+  function createAiMessageElements(hiddenActions = false) {
+    const row = createMessageRow('ai');
+    appendRowAvatar(row, 'char', currentChar);
+    const bubble = createMessageBubble('ai');
+    const actionBtns = createAssistantActionButtons(row, bubble, null, hiddenActions);
+    appendAssistantBubble(row, bubble, actionBtns);
+    return { row, bubble, actionBtns };
+  }
+
+  function insertMessageRow(container, row, nextSibling = null) {
+    if (nextSibling) {
+      container.insertBefore(row, nextSibling);
+      return row;
+    }
+    container.appendChild(row);
+    return row;
+  }
+
+  function placeAiMessageRow(container, row, nextSibling = null, shouldScroll = false) {
+    insertMessageRow(container, row, nextSibling);
+    if (shouldScroll) scrollToBottom();
+    return row;
+  }
+
+  function appendMessageTimeIfNeeded(container, timestamp, date = new Date()) {
+    if (shouldShowTime(timestamp)) {
+      appendMessageTime(container, date);
+    }
+    return container;
+  }
+
+  function configureAiMessageRow(row, bubble, messageId = null, getText = null) {
+    assignMessageId(row, messageId);
+    if (getText) bindCopyHandlers(bubble, getText);
+    return row;
+  }
+
+  function initializeAiMessageRow(container, timestamp, {
+    nextSibling = null,
+    hiddenActions = false,
+    shouldScroll = false,
+    messageId = null,
+    getText = null,
+  } = {}) {
+    appendMessageTimeIfNeeded(container, timestamp, new Date());
+    const aiMessageRow = createAiMessageElements(hiddenActions);
+    configureAiMessageRow(aiMessageRow.row, aiMessageRow.bubble, messageId, getText);
+    placeAiMessageRow(container, aiMessageRow.row, nextSibling, shouldScroll);
+    return aiMessageRow;
+  }
+
+  function createContinuationMessageRow(sourceRowEl, messageId, getText) {
+    const box = document.getElementById('chat-messages');
+    const contMsgTime = Date.now();
+
+    const { row, bubble, actionBtns } = initializeAiMessageRow(box, contMsgTime, {
+      nextSibling: sourceRowEl.nextSibling,
+      messageId,
+      getText,
+    });
+
+    _lastMsgTimestamp = contMsgTime;
+
+    return { row, bubble, actionBtns };
+  }
+
+  function finalizeAssistantMessageUpdate(messageId, content, payload, fallbackMessageId = messageId) {
+    updateAssistantHistoryMessage(messageId, content, payload?.message_id || fallbackMessageId);
+    syncCharacterState(payload);
+  }
+
+  function removeTyping() {
+    removeElementById('typing-row');
+  }
+
+   function createStreamRow() {
+   const box = document.getElementById('chat-messages');
+   const msgTime = Date.now();
+
+   const streamRow = initializeAiMessageRow(box, msgTime, {
+     hiddenActions: true,
+     shouldScroll: true,
+   });
+   _lastMsgTimestamp = msgTime;
+   
+   return streamRow;
+ }
+
+  function assignStreamState(state, streamRow, initialText = '') {
+    state.bubbleEl = streamRow.bubble;
+    state.actionBtnsEl = streamRow.actionBtns;
+    state.streamRowEl = streamRow.row;
+    state.aiText = initialText;
+    return state;
+  }
+
+  function attachStreamRow(state, streamRow, initialText = '') {
+    assignStreamState(state, streamRow, initialText);
+    if (initialText) {
+      renderMessageBubble(state.bubbleEl, state.aiText, true);
+    }
+    return state;
+  }
+
+  function ensureStreamState(state, initialText = '') {
+    if (state.bubbleEl) return state;
+    removeTyping();
+    return attachStreamRow(state, createStreamRow(), initialText);
+  }
+
+  function resetStreamState(state) {
+    state.bubbleEl = null;
+    state.actionBtnsEl = null;
+    state.streamRowEl = null;
+    state.aiText = '';
+    return state;
+  }
+
+
+  function ensureStreamReplyRow(state, initialText = '') {
+    return ensureStreamState(state, initialText);
+  }
+
+  function renderStreamReply(state, nextText) {
+    ensureStreamState(state);
+    state.aiText = nextText;
+    renderMessageBubble(state.bubbleEl, state.aiText, true);
+    scrollToBottom();
+  }
+
+  function discardStreamReply(state) {
+    cleanupStreamState(state);
+  }
+
+  function updateAssistantHistoryMessage(messageId, content, nextMessageId = messageId) {
+    let msgIdx = -1;
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].message_id === messageId || (history[i].role === 'assistant' && !history[i].message_id)) {
+        msgIdx = i;
+        break;
+      }
+    }
+    if (msgIdx !== -1) {
+      history[msgIdx] = {
+        ...history[msgIdx],
+        content,
+        created_at: new Date().toISOString(),
+        message_id: nextMessageId || messageId,
+      };
+    }
+  }
+
+  function bindMessageActionButtons(actionBtnsEl, rowEl, bubbleEl, messageId) {
+    if (!actionBtnsEl) return;
+    if (!messageId) {
+      actionBtnsEl.style.display = 'none';
+      return;
+    }
+    actionBtnsEl.style.opacity = '';
+    rowEl.dataset.messageId = messageId;
+    actionBtnsEl.querySelector('.regenerate-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      regenerateMessage(messageId, rowEl, bubbleEl);
+    });
+    actionBtnsEl.querySelector('.continue-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      continueMessage(messageId, rowEl, bubbleEl);
+    });
+  }
+
+  function copyMessageText(getText) {
+    return navigator.clipboard.writeText(getText()).then(() => {
+      showCopyToast();
+    });
+  }
+
+  function bindCopyHandlers(bubbleEl, getText) {
+    const doCopy = () => copyMessageText(getText);
+    bubbleEl.addEventListener('dblclick', doCopy);
+    let pressTimer;
+    bubbleEl.addEventListener('touchstart', () => { pressTimer = setTimeout(doCopy, 600); }, { passive: true });
+    bubbleEl.addEventListener('touchend', () => clearTimeout(pressTimer), { passive: true });
+    bubbleEl.addEventListener('touchmove', () => clearTimeout(pressTimer), { passive: true });
+  }
+
+  function createMessageActionButtons(hidden = false) {
     const actionBtns = document.createElement('div');
     actionBtns.className = 'msg-action-btns';
     actionBtns.innerHTML = `
       <button class="msg-action-btn regenerate-btn" title="重新生成">↻</button>
       <button class="msg-action-btn continue-btn" title="继续生成">▶</button>
     `;
-    actionBtns.style.opacity = '0';
-
-    const body = document.createElement('div');
-    body.className = 'msg-body';
-    body.appendChild(bubble);
-    body.appendChild(actionBtns);
-    row.appendChild(body);
-    box.appendChild(row);
-    _lastMsgTimestamp = msgTime;
-    scrollToBottom();
-    
-    return { row, bubble, actionBtns };
+    if (hidden) actionBtns.style.opacity = '0';
+    return actionBtns;
   }
 
-   function renderHistory(messages) {
+  function appendMessageBody(rowEl, bubbleEl, actionBtnsEl = null) {
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    body.appendChild(bubbleEl);
+    if (actionBtnsEl) body.appendChild(actionBtnsEl);
+    rowEl.appendChild(body);
+    return body;
+  }
+
+  function appendMessageTime(container, date) {
+    const timeEl = document.createElement('div');
+    timeEl.className = 'msg-time';
+    timeEl.textContent = formatSmartTime(date);
+    container.appendChild(timeEl);
+    return timeEl;
+  }
+
+  function renderHistory(messages) {
      const box = document.getElementById('chat-messages');
      box.innerHTML = '';
      _lastMsgTimestamp = 0;
@@ -750,7 +1118,56 @@
      await enterChat(currentChar);
    }
 
-   async function send() {
+   function buildGuestStreamHandlers(streamState, userText) {
+    return {
+      onChunk(chunk) {
+        handleStreamChunk(streamState, chunk);
+      },
+      onDone(payload) {
+        finalizeStreamReply(streamState, payload?.reply);
+        appendLocalConversation(userText, streamState.aiText);
+        hideStreamActionButtons(streamState);
+      },
+      onError(payload) {
+        handleStreamError(streamState, payload);
+      },
+    };
+  }
+
+  function buildLoggedInStreamHandlers(streamState, userText) {
+    return {
+      onChunk(chunk) {
+        handleStreamChunk(streamState, chunk);
+      },
+      onDone(payload) {
+        finalizeStreamReply(streamState, payload?.reply);
+
+        const msgId = payload?.message_id || null;
+        appendLocalConversation(userText, streamState.aiText, msgId);
+        syncCharacterState(payload);
+        bindPersistedStreamActions(streamState, msgId);
+      },
+      onError(payload) {
+        handleStreamError(streamState, payload);
+      },
+    };
+  }
+
+  async function handleSendFailure(err, userText) {
+    if (!Auth.isLoggedIn()) {
+      await refreshGuestQuota();
+      if ((err.message || '').includes('额度已用完')) {
+        UI.toast('今日游客体验额度已用完，登录后可继续聊天', 'warn', 3200);
+        setTimeout(() => Auth.openLogin(), 800);
+      } else if ((err.message || '').includes('发送太快')) {
+        UI.toast('发送太快了，请稍后再试', 'warn', 2500);
+      }
+    }
+    removeTyping();
+    appendMsg('error', `发送失败：${err.message}`, null, userText);
+  }
+
+  async function send() {
      if (isSending) return;
      if (!currentChar) return;
 
@@ -768,156 +1185,34 @@
     // 移动端发送后不立即 focus（避免键盘弹起遮盖内容），桌面端保持 focus
      if (window.innerWidth > 500) input.focus();
 
-     let bubbleEl = null;
-     let actionBtnsEl = null;
-     let streamRowEl = null;
-     let aiText = '';
+    const streamState = createStreamState();
 
      try {
-       if (!Auth.isLoggedIn()) {
-         // 游客模式：把本地 history 中最近 8 条传给后端
-         const guestHistory = history.slice(-8).map(m => ({ role: m.role, content: m.content }));
-         await API.guestStreamMessage(
+      if (!Auth.isLoggedIn()) {
+        const guestHistory = history.slice(-8).map(m => ({ role: m.role, content: m.content }));
+        await API.guestStreamMessage(
           {
             character_id: currentChar.id,
             message: text,
             guest_history: guestHistory,
           },
+          buildGuestStreamHandlers(streamState, text),
+          _streamController.signal
+        );
+        await refreshGuestQuota();
+      } else {
+        await API.streamMessage(
           {
-            onChunk(chunk) {
-               if (!chunk) return;
-               if (!bubbleEl) {
-                 removeTyping();
-                 const sr = createStreamRow();
-                 bubbleEl = sr.bubble;
-                 actionBtnsEl = sr.actionBtns;
-                 streamRowEl = sr.row;
-               }
-               aiText += chunk;
-               renderTextWithLineBreaks(bubbleEl, aiText, true);
-               scrollToBottom();
-             },
-             onDone(payload) {
-               if (!bubbleEl) {
-                 removeTyping();
-                 const sr = createStreamRow();
-                 bubbleEl = sr.bubble;
-                 actionBtnsEl = sr.actionBtns;
-                 streamRowEl = sr.row;
-                 aiText = payload?.reply || '';
-               }
-               aiText = payload?.reply || aiText;
-               renderTextWithLineBreaks(bubbleEl, aiText, true);
-               // 游客：存本地 history（不存服务端）
-               history.push({ role: 'user', content: text, created_at: new Date().toISOString() });
-               history.push({ role: 'assistant', content: aiText, created_at: new Date().toISOString() });
-               // 游客模式：隐藏按钮（因为没有 message_id）
-               if (actionBtnsEl) actionBtnsEl.style.display = 'none';
-             },
-             // AI 调用失败时，后端不发 chunk/done，只发 error 事件
-             onError(payload) {
-               removeTyping();
-               // 删除整个 AI 消息行（如果已创建的话）
-               if (streamRowEl && streamRowEl.parentNode) {
-                 streamRowEl.remove();
-               }
-               bubbleEl = null;
-               actionBtnsEl = null;
-               streamRowEl = null;
-               UI.toast(payload?.message || '网络波动，请稍后再试', 'warn', 3000);
-             },
-           },
-           _streamController.signal
-         );
-         await refreshGuestQuota();
-       } else {
-         // 已登录：走正式流
-         await API.streamMessage(
-           {
-             character_id: currentChar.id,
-             message: text,
-           },
-           {
-             onChunk(chunk) {
-               if (!chunk) return;
-               if (!bubbleEl) {
-                 removeTyping();
-                 const sr = createStreamRow();
-                 bubbleEl = sr.bubble;
-                 actionBtnsEl = sr.actionBtns;
-                 streamRowEl = sr.row;
-               }
-               aiText += chunk;
-               renderTextWithLineBreaks(bubbleEl, aiText, true);
-               scrollToBottom();
-             },
-             onDone(payload) {
-              if (!bubbleEl) {
-                removeTyping();
-                const sr = createStreamRow();
-                bubbleEl = sr.bubble;
-                actionBtnsEl = sr.actionBtns;
-                streamRowEl = sr.row;
-                aiText = payload?.reply || '';
-              }
-              aiText = payload?.reply || aiText;
-               renderTextWithLineBreaks(bubbleEl, aiText, true);
-              
-              const msgId = payload?.message_id || null;
-              if (msgId) streamRowEl.dataset.messageId = msgId;
-              
-              history.push({ role: 'user', content: text, created_at: new Date().toISOString() });
-               history.push({ role: 'assistant', content: aiText, created_at: new Date().toISOString(), message_id: msgId });
-               // 如果 AI 输出里包含状态增量，后端已经更新 DB 并在 done 事件里返回最新状态
-               if (payload?.character_state) {
-                 renderStateBar(payload.character_state);
-               }
-               // 绑定 Regenerate / Continue 按钮事件
-               if (actionBtnsEl && msgId) {
-                 actionBtnsEl.style.opacity = '';
-                 streamRowEl.dataset.messageId = msgId;
-                 actionBtnsEl.querySelector('.regenerate-btn').addEventListener('click', (e) => {
-                   e.stopPropagation();
-                   regenerateMessage(msgId, streamRowEl, bubbleEl);
-                 });
-                 actionBtnsEl.querySelector('.continue-btn').addEventListener('click', (e) => {
-                   e.stopPropagation();
-                   continueMessage(msgId, streamRowEl, bubbleEl);
-                 });
-               } else if (actionBtnsEl) {
-                 // 没有 message_id 时隐藏按钮
-                 actionBtnsEl.style.display = 'none';
-               }
-             },
-             // AI 调用失败时，后端不发 chunk/done，只发 error 事件
-             onError(payload) {
-               removeTyping();
-               // 删除整个 AI 消息行（如果已创建的话）
-               if (streamRowEl && streamRowEl.parentNode) {
-                 streamRowEl.remove();
-               }
-               bubbleEl = null;
-               actionBtnsEl = null;
-               streamRowEl = null;
-               UI.toast(payload?.message || '网络波动，请稍后再试', 'warn', 3000);
-             },
-           },
-           _streamController.signal
-         );
-       }
-     } catch (err) {
-       if (!Auth.isLoggedIn()) {
-         await refreshGuestQuota();
-         if ((err.message || '').includes('额度已用完')) {
-           UI.toast('今日游客体验额度已用完，登录后可继续聊天', 'warn', 3200);
-           setTimeout(() => Auth.openLogin(), 800);
-         } else if ((err.message || '').includes('发送太快')) {
-           UI.toast('发送太快了，请稍后再试', 'warn', 2500);
-         }
-       }
-       removeTyping();
-       appendMsg('error', `发送失败：${err.message}`, null, text);
-     } finally {
+            character_id: currentChar.id,
+            message: text,
+          },
+          buildLoggedInStreamHandlers(streamState, text),
+          _streamController.signal
+        );
+      }
+    } catch (err) {
+      await handleSendFailure(err, text);
+    } finally {
        removeTyping();
        setSending(false);
      }
@@ -949,207 +1244,99 @@
    /* ── Regenerate / Continue 功能 ─────────────────────────── */
    
    async function regenerateMessage(messageId, rowEl, bubbleEl) {
-    if (isSending || !Auth.isLoggedIn()) return;
+   if (isSending || !Auth.isLoggedIn()) return;
 
-    setSending(true);
-    abortStream();
-    _streamController = new AbortController();
+   const buttons = beginMessageAction(rowEl, { loading: 'regenerate' });
+   let aiText = '';
 
-    const regenBtn = rowEl.querySelector('.regenerate-btn');
-    const contBtn = rowEl.querySelector('.continue-btn');
-    if (regenBtn) { regenBtn.disabled = true; regenBtn.classList.add('loading'); }
-    if (contBtn) contBtn.disabled = true;
-
-    let aiText = '';
-
-    try {
-      await API.regenerateMessage(
-        { message_id: messageId },
-        {
-          onChunk(chunk) {
-            if (!chunk) return;
-            aiText += chunk;
-            renderTextWithLineBreaks(bubbleEl, aiText, true);
-            scrollToBottom();
-          },
-          onDone(payload) {
-           aiText = payload?.reply || aiText;
-           renderTextWithLineBreaks(bubbleEl, aiText, true);
-
-           let msgIdx = -1;
-           for (let i = history.length - 1; i >= 0; i--) {
-             if (history[i].message_id === messageId || (history[i].role === 'assistant' && !history[i].message_id)) {
-               msgIdx = i;
-               break;
-             }
-           }
-           if (msgIdx !== -1) {
-             history[msgIdx] = {
-               ...history[msgIdx],
-               content: aiText,
-               created_at: new Date().toISOString(),
-               message_id: payload?.message_id || messageId,
-             };
-           }
-
-           if (payload?.character_state) {
-             renderStateBar(payload.character_state);
-           }
+   try {
+     await API.regenerateMessage(
+       { message_id: messageId },
+       {
+         onChunk(chunk) {
+           if (!chunk) return;
+           aiText += chunk;
+           renderMessageBubble(bubbleEl, aiText, true);
+           scrollToBottom();
          },
-          onError(payload) {
-            UI.toast(payload?.message || '重新生成失败', 'warn', 3000);
-          },
+         onDone(payload) {
+          aiText = payload?.reply || aiText;
+          renderMessageBubble(bubbleEl, aiText, true);
+          finalizeAssistantMessageUpdate(messageId, aiText, payload);
         },
-        _streamController.signal
-      );
-     } catch (err) {
-       UI.toast(`重新生成失败：${err.message}`, 'error');
-     } finally {
-       if (regenBtn) { regenBtn.disabled = false; regenBtn.classList.remove('loading'); }
-       if (contBtn) contBtn.disabled = false;
-       setSending(false);
-     }
-   }
-
-   async function continueMessage(messageId, rowEl, bubbleEl) {
-    if (isSending || !Auth.isLoggedIn()) return;
-
-    setSending(true);
-    showTyping();
-    abortStream();
-    _streamController = new AbortController();
-
-    let appendedText = '';
-    let newBubbleEl = null;
-    let newRowEl = null;
-    let newActionBtnsEl = null;
-
-    const originalBtns = rowEl.querySelector('.msg-action-btns');
-    if (originalBtns) originalBtns.style.display = 'none';
-
-    try {
-      await API.continueMessage(
-        { message_id: messageId },
-        {
-          onChunk(chunk) {
-            if (!chunk) return;
-            removeTyping();
-            appendedText += chunk;
-
-            if (!newBubbleEl) {
-              const box = document.getElementById('chat-messages');
-              const contMsgTime = Date.now();
-
-              if (shouldShowTime(contMsgTime)) {
-                const timeEl = document.createElement('div');
-                timeEl.className = 'msg-time';
-                timeEl.textContent = formatSmartTime(new Date());
-                box.appendChild(timeEl);
-              }
-
-              newRowEl = document.createElement('div');
-              newRowEl.className = 'msg-row ai';
-              newRowEl.dataset.messageId = messageId;
-
-              const contAvatarEl = createMsgAvatar('char', currentChar);
-              if (contAvatarEl) newRowEl.appendChild(contAvatarEl);
-
-              newBubbleEl = document.createElement('div');
-              newBubbleEl.className = 'msg-bubble ai';
-
-              newActionBtnsEl = document.createElement('div');
-              newActionBtnsEl.className = 'msg-action-btns';
-              newActionBtnsEl.innerHTML = `
-                <button class="msg-action-btn regenerate-btn" title="重新生成">↻</button>
-                <button class="msg-action-btn continue-btn" title="继续生成">▶</button>
-              `;
-
-              const doCopy = () => { navigator.clipboard.writeText(appendedText).then(() => showCopyToast()); };
-              newBubbleEl.addEventListener('dblclick', doCopy);
-              let pressTimer;
-              newBubbleEl.addEventListener('touchstart', () => { pressTimer = setTimeout(doCopy, 600); }, { passive: true });
-              newBubbleEl.addEventListener('touchend', () => clearTimeout(pressTimer), { passive: true });
-              newBubbleEl.addEventListener('touchmove', () => clearTimeout(pressTimer), { passive: true });
-
-              const contBody = document.createElement('div');
-              contBody.className = 'msg-body';
-              contBody.appendChild(newBubbleEl);
-              contBody.appendChild(newActionBtnsEl);
-              newRowEl.appendChild(contBody);
-
-              const sibling = rowEl.nextSibling;
-              if (sibling) {
-                box.insertBefore(newRowEl, sibling);
-              } else {
-                box.appendChild(newRowEl);
-              }
-              _lastMsgTimestamp = contMsgTime;
-            }
-
-            renderTextWithLineBreaks(newBubbleEl, appendedText, true);
-            scrollToBottom();
-          },
-          onDone(payload) {
-            const finalAppended = payload?.appended_text || appendedText;
-            if (newBubbleEl) renderTextWithLineBreaks(newBubbleEl, finalAppended, true);
-
-            const fullText = (bubbleEl.textContent || '') + finalAppended;
-
-            let msgIdx = -1;
-            for (let i = history.length - 1; i >= 0; i--) {
-              if (history[i].message_id === messageId || (history[i].role === 'assistant' && !history[i].message_id)) {
-                msgIdx = i;
-                break;
-              }
-            }
-            if (msgIdx !== -1) {
-              history[msgIdx] = {
-                ...history[msgIdx],
-                content: fullText,
-                created_at: new Date().toISOString(),
-                message_id: payload?.message_id || messageId,
-              };
-            }
-
-            if (payload?.character_state) {
-              renderStateBar(payload.character_state);
-            }
-
-            if (newActionBtnsEl && messageId) {
-              newActionBtnsEl.style.opacity = '';
-              newActionBtnsEl.querySelector('.regenerate-btn').addEventListener('click', (e) => {
-                e.stopPropagation();
-                regenerateMessage(messageId, newRowEl, newBubbleEl);
-              });
-              newActionBtnsEl.querySelector('.continue-btn').addEventListener('click', (e) => {
-                e.stopPropagation();
-                continueMessage(messageId, newRowEl, newBubbleEl);
-              });
-            } else if (newActionBtnsEl) {
-              newActionBtnsEl.style.display = 'none';
-            }
-
-            if (originalBtns) originalBtns.style.display = 'none';
-          },
-          onError(payload) {
-            removeTyping();
-            if (newRowEl && newRowEl.parentNode) newRowEl.remove();
-            UI.toast(payload?.message || '继续生成失败', 'warn', 3000);
-            if (originalBtns) originalBtns.style.display = '';
-          },
-        },
-        _streamController.signal
-      );
+         onError(payload) {
+           UI.toast(payload?.message || '重新生成失败', 'warn', 3000);
+         },
+       },
+       _streamController.signal
+     );
     } catch (err) {
-      removeTyping();
-      if (newRowEl && newRowEl.parentNode) newRowEl.remove();
-      UI.toast(`继续生成失败：${err.message}`, 'error');
-      if (originalBtns) originalBtns.style.display = '';
+      UI.toast(`重新生成失败：${err.message}`, 'error');
     } finally {
-      removeTyping();
-      setSending(false);
+      completeMessageAction(buttons, { loading: 'regenerate' });
     }
   }
+
+   async function continueMessage(messageId, rowEl, bubbleEl) {
+  if (isSending || !Auth.isLoggedIn()) return;
+
+  const buttons = beginMessageAction(rowEl, {
+    loading: 'continue',
+    showTypingBubble: true,
+    hideActions: true,
+  });
+  let appendedText = '';
+  let newBubbleEl = null;
+  let newRowEl = null;
+  let newActionBtnsEl = null;
+
+  try {
+    await API.continueMessage(
+      { message_id: messageId },
+      {
+        onChunk(chunk) {
+          if (!chunk) return;
+          removeTyping();
+          appendedText += chunk;
+
+          if (!newBubbleEl) {
+            const continuationRow = createContinuationMessageRow(rowEl, messageId, () => appendedText);
+            newRowEl = continuationRow.row;
+            newBubbleEl = continuationRow.bubble;
+            newActionBtnsEl = continuationRow.actionBtns;
+          }
+
+          renderMessageBubble(newBubbleEl, appendedText, true);
+          scrollToBottom();
+        },
+        onDone(payload) {
+          const { finalAppended, nextMessageId, fullText } = resolveContinuationResult(
+            bubbleEl.textContent,
+            appendedText,
+            payload,
+            messageId
+          );
+          if (newBubbleEl) renderMessageBubble(newBubbleEl, finalAppended, true);
+
+          finalizeAssistantMessageUpdate(messageId, fullText, payload, nextMessageId);
+          bindMessageActionButtons(newActionBtnsEl, newRowEl, newBubbleEl, nextMessageId);
+          setActionButtonsVisible(buttons.actions, false);
+        },
+        onError(payload) {
+          cleanupContinuationFailure(newRowEl, buttons, payload?.message || '继续生成失败');
+        },
+      },
+      _streamController.signal
+    );
+  } catch (err) {
+    removeTyping();
+    removeRowIfPresent(newRowEl);
+    UI.toast(`继续生成失败：${err.message}`, 'error');
+    setActionButtonsVisible(buttons.actions, true);
+  } finally {
+    completeMessageAction(buttons, { loading: 'continue' });
+  }
+}
 
    return {
      enterChat,

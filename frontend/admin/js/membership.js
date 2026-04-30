@@ -103,9 +103,9 @@ function renderMembershipUsers() {
             <td style="font-size:12px;color:#555;">${u.created_at ? formatDate(u.created_at) : '—'}</td>
             <td style="font-size:12px;color:#555;">${u.plan_expires_at ? formatDate(u.plan_expires_at) : '—'}</td>
             <td class="col-actions">
-              <button class="action-btn detail" onclick="openUserDetail('${u.id}')">详情</button>
-              <button class="action-btn edit" onclick="openUserEdit('${u.id}')">编辑</button>
-              <button class="action-btn delete" onclick="confirmDeleteUser('${u.id}', '${escHtml(u.email || '')}')">删除</button>
+              <button class="action-btn detail" data-action="open-user-detail" data-user-id="${escHtml(String(u.id))}">详情</button>
+              <button class="action-btn edit" data-action="open-user-edit" data-user-id="${escHtml(String(u.id))}">编辑</button>
+              <button class="action-btn delete" data-action="confirm-delete-user" data-user-id="${escHtml(String(u.id))}" data-user-email="${escHtml(String(u.email || ''))}">删除</button>
             </td>
           </tr>
         `).join('')}
@@ -168,7 +168,7 @@ function renderMembershipOrders() {
             <td><span class="badge ${statusCls[o.status] || 'badge-free'}">${statusLabel[o.status] || o.status || '未知'}</span></td>
             <td style="font-size:12px;color:#555;">${o.created_at ? formatDate(o.created_at) : '—'}</td>
             <td class="col-actions">
-              <button class="action-btn detail" onclick="openOrderDetail(${o.id})">详情</button>
+              <button class="action-btn detail" data-action="open-order-detail" data-order-id="${escHtml(String(o.id))}">详情</button>
             </td>
           </tr>
         `).join('')}

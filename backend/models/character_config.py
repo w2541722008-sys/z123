@@ -26,25 +26,7 @@ from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
-
-# ============================================================================
-# Enums - 枚举类型定义
-# ============================================================================
-
-class StoryPhase(str, Enum):
-    """关系阶段枚举"""
-    STRANGER = "stranger"      # 陌生人
-    ACQUAINTANCE = "acquaintance"  # 熟人
-    FRIEND = "friend"          # 朋友
-    LOVER = "lover"            # 恋人
-
-
-class Mood(str, Enum):
-    """心情状态枚举"""
-    HAPPY = "happy"            # 开心
-    NEUTRAL = "neutral"        # 一般
-    COLD = "cold"              # 冷淡
-    ANGRY = "angry"            # 生气
+from constants import Mood, StoryPhase
 
 
 class MemoryPosition(str, Enum):

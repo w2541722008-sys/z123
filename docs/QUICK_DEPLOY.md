@@ -1,81 +1,42 @@
-# 快速部署指南
+# 快速部署（当前项目）
 
-## 方法一：使用部署脚本（推荐）
+本项目的标准部署方式是直接执行根目录脚本：
 
-### 1. 打包项目
 ```bash
-./deploy.sh
+cd /Users/jjj/aifriend
+bash deploy.sh
 ```
 
-这会创建一个 `aifriend_deploy_YYYYMMDD_HHMMSS.tar.gz` 文件，只包含必要的文件，不包含：
-- `.env` 环境变量文件
-- `backend/data/` 数据库文件
-- `__pycache__` 和 `.pyc` 缓存文件
-- `.DS_Store` 系统文件
+## deploy.sh 实际流程
 
-### 2. 上传到服务器
-```bash
-scp aifriend_deploy_*.tar.gz user@your-server:/path/to/deploy/
-```
+1. 校验 SSH 连通性（目标：`root@45.76.182.245`）
+2. 运行本地门禁：
+   - `python3 -m pytest ../tests/ -q`
+   - `node ../tests/test_frontend_utils.js`
+   - `node ../tests/check_admin_actions.js --strict --allow-list=../tests/admin_action_allowlist.json`
+3. 远端创建备份：`/opt/backup_时间戳`
+4. 使用 rsync 同步到 `/opt/aifriend`
+5. 远端执行 `restart.sh`，并做健康检查 `http://localhost:8000/api/health`
 
-### 3. 在服务器上部署
-```bash
-# 解压
-tar -xzf aifriend_deploy_*.tar.gz
-cd aifriend_deploy_*
+## 失败处理
 
-# 配置环境变量
-cp backend/.env.example backend/.env
-nano backend/.env  # 编辑配置
+- 若测试失败，脚本会询问是否继续部署。
+- 若重启脚本失败，会自动 fallback 到手动拉起 uvicorn。
 
-# 安装依赖
-cd backend
-pip install -r requirements.txt
+## 推荐操作
 
-# 启动应用
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
+- 部署前先确认工作区变更可追踪（已提交或已备份）。
+- 部署后检查：
+  - 线上健康检查：`https://lunawhisp.com/api/health`
+  - 服务日志：`tail -f /var/log/aifriend.log`
+- 可选执行服务器巡检脚本：
+  - `ssh root@45.76.182.245 "cd /opt/aifriend && bash verify_server.sh"`
 
-## 方法二：使用 Git（更推荐）
+## 脚本说明
 
-### 1. 提交代码到 Git 仓库
-```bash
-git add .
-git commit -m "准备部署到生产环境"
-git push origin main
-```
+- `deploy.sh`：主部署脚本（唯一推荐入口）
+- `restart.sh`：服务重启脚本，支持 `backend|frontend|all`
+- `verify_server.sh`：服务器状态与健康检查脚本
+- `deploy_to_server.sh`：兼容入口，内部转发到 `deploy.sh`
 
-### 2. 在服务器上克隆
-```bash
-git clone https://github.com/your-username/aifriend.git
-cd aifriend
-```
-
-### 3. 配置和启动
-```bash
-# 配置环境变量
-cp backend/.env.example backend/.env
-nano backend/.env
-
-# 安装依赖
-cd backend
-pip install -r requirements.txt
-
-# 启动应用
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-## 重要提醒
-
-1. **环境变量**: 务必在服务器上创建 `backend/.env` 并填入正确的配置（参考 `backend/.env.example`）
-2. **数据库**: 确保 `DATABASE_URL` 指向正确的 Supabase PostgreSQL 数据库
-3. **建表**: 首次部署需要在 Supabase SQL Editor 中执行 `docs/supabase_schema.sql`
-4. **备份**: 部署前先备份本地数据（使用 `bash backend/backup_supabase.sh`）
-5. **测试**: 部署后测试所有功能是否正常
-
-## 相关文档
-
-- [完整部署指南](./DEPLOYMENT_GUIDE_VPS.md)
-- [部署检查清单](./DEPLOYMENT_CHECKLIST.md)
-- [数据库备份指南](./DATABASE_BACKUP_GUIDE.md)
-- [Supabase 建表 SQL](./supabase_schema.sql)
+更多细节见：`DEPLOYMENT_GUIDE_VPS.md` 与 `DEPLOYMENT_CHECKLIST.md`。

@@ -18,84 +18,114 @@ psycopg2 的原生连接对象不支持 .execute()，需要先 cursor() 再 exec
     conn.commit()
     conn.close()                 # 实际是归还连接池
 """
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from psycopg2.pool import SimpleConnectionPool
+import logging
 from contextlib import contextmanager
 from typing import Optional
-import logging
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger(__name__)
 
-# 数据库连接池（存储原始 psycopg2 连接）
-_connection_pool: Optional[SimpleConnectionPool] = None
+_connection_pool: Optional[ThreadedConnectionPool] = None
 
 
-# ============================================================
-# ConnWrapper：让 psycopg2 连接支持 SQLite 风格的 .execute()
-# ============================================================
 class ConnWrapper:
+    """psycopg2 连接的 SQLite 风格包装器。
+
+    将 psycopg2 原生连接包装为 SQLite 风格的 .execute() 接口，
+    自动使用 RealDictCursor 返回字典风格的结果行。
+
+    连接从 ThreadedConnectionPool 获取，close() 实际是归还连接池。
+    支持上下文管理器协议（with 语句），自动 commit/rollback/close。
+
+    使用方式：
+        conn = get_conn()            # 返回 ConnWrapper
+        row = conn.execute("SELECT * FROM users WHERE id = %s", (1,)).fetchone()
+        conn.commit()
+        conn.close()                 # 实际是归还连接池
     """
-    包装 psycopg2 连接，提供 SQLite 兼容接口。
 
-    核心特性：
-        - .execute(sql, params) 返回游标，可以继续 .fetchone() / .fetchall()
-        - .commit() / .rollback() 直接透传给底层连接
-        - .close() 把连接归还连接池（而非真正关闭）
-        - 所有查询自动使用 RealDictCursor，结果支持 row["column_name"] 访问
-    """
+    def __init__(self, raw_conn, pool: ThreadedConnectionPool):
+        """初始化连接包装器。
 
-    def __init__(self, raw_conn, pool: SimpleConnectionPool):
-        self._conn = raw_conn          # psycopg2 原始连接
-        self._pool = pool              # 连接池引用（用于归还）
+        Args:
+            raw_conn: psycopg2 原始连接对象
+            pool: ThreadedConnectionPool 实例，用于归还连接
+        """
+        self._conn = raw_conn
+        self._pool = pool
+        self._returned = False
 
-    # ---- 核心接口 ----
+    def _ensure_open(self):
+        """检查连接是否仍然可用，已归还则抛出异常。"""
+        if self._returned or self._conn is None:
+            raise RuntimeError("数据库连接已归还，不能继续使用")
 
     def execute(self, sql: str, params=None):
+        """执行 SQL 语句，返回 RealDictCursor。
+
+        Args:
+            sql: SQL 语句，使用 %s 作为参数占位符
+            params: 参数元组，可选
+
+        Returns:
+            RealDictCursor，可调用 .fetchone() / .fetchall() 获取结果
         """
-        执行 SQL，返回游标（RealDictCursor）。
-        兼容 conn.execute(sql).fetchone() 的 SQLite 写法。
-        """
+        self._ensure_open()
         cur = self._conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(sql, params or ())
         return cur
 
     def commit(self):
         """提交当前事务。"""
+        self._ensure_open()
         self._conn.commit()
 
     def rollback(self):
         """回滚当前事务。"""
+        self._ensure_open()
         self._conn.rollback()
 
     def close(self):
-        """
-        将连接归还连接池。
-        注意：调用 close() 之后不应再使用此连接对象。
-        """
+        """归还连接到连接池（非真正关闭）。多次调用安全。"""
+        if self._returned or self._conn is None:
+            return
         try:
             self._pool.putconn(self._conn)
-        except Exception:
-            pass
-
-    # ---- 透传属性（兼容少量直接用 cursor() 的地方）----
+        finally:
+            self._returned = True
+            self._conn = None
 
     def cursor(self, **kwargs):
-        """直接获取游标（用于 with conn.cursor() as cur: 写法）。"""
+        """创建游标，默认使用 RealDictCursor。
+
+        Args:
+            **kwargs: 传递给 psycopg2 connection.cursor() 的参数
+
+        Returns:
+            psycopg2 游标对象
+        """
+        self._ensure_open()
         if "cursor_factory" not in kwargs:
             kwargs["cursor_factory"] = RealDictCursor
         return self._conn.cursor(**kwargs)
 
-    # ---- 连接状态透传 ----
-
     @property
     def closed(self):
+        """连接是否已关闭/归还。"""
+        if self._returned or self._conn is None:
+            return True
         return self._conn.closed
 
     def __enter__(self):
+        """进入上下文管理器。"""
+        self._ensure_open()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """退出上下文管理器：异常时 rollback，正常时 commit，然后归还连接。"""
         if exc_type:
             self.rollback()
         else:
@@ -104,15 +134,10 @@ class ConnWrapper:
         return False
 
 
-# ============================================================
-# 连接池管理
-# ============================================================
-
 def init_db_pool(database_url: str, min_conn: int = 1, max_conn: int = 10):
-    """初始化数据库连接池。应在应用启动时调用一次。"""
     global _connection_pool
     try:
-        _connection_pool = SimpleConnectionPool(
+        _connection_pool = ThreadedConnectionPool(
             min_conn,
             max_conn,
             database_url,
@@ -124,7 +149,6 @@ def init_db_pool(database_url: str, min_conn: int = 1, max_conn: int = 10):
 
 
 def close_db_pool():
-    """关闭数据库连接池。应在应用关闭时调用。"""
     global _connection_pool
     if _connection_pool:
         _connection_pool.closeall()
@@ -133,23 +157,6 @@ def close_db_pool():
 
 
 def get_conn() -> ConnWrapper:
-    """
-    从连接池取出一条连接，包装为 ConnWrapper 后返回。
-
-    使用完毕后必须调用 conn.close() 归还，或使用 with 语句自动归还。
-
-    示例：
-        conn = get_conn()
-        try:
-            row = conn.execute("SELECT 1").fetchone()
-            conn.commit()
-        finally:
-            conn.close()
-
-        # 或者：
-        with get_conn() as conn:
-            conn.execute("INSERT ...")
-    """
     if _connection_pool is None:
         raise RuntimeError("数据库连接池未初始化，请先调用 init_db_pool()")
     raw = _connection_pool.getconn()
@@ -158,15 +165,6 @@ def get_conn() -> ConnWrapper:
 
 @contextmanager
 def get_db():
-    """
-    获取数据库连接的上下文管理器版本。
-    自动提交/回滚/归还连接。
-
-    示例：
-        with get_db() as conn:
-            conn.execute("INSERT ...")
-        # 离开 with 块后自动 commit 并归还
-    """
     conn = get_conn()
     try:
         yield conn
@@ -179,23 +177,7 @@ def get_db():
         conn.close()
 
 
-def return_conn(conn):
-    """
-    手动归还连接（向后兼容的辅助函数）。
-    推荐改用 conn.close() 或 with 语句。
-    """
-    if isinstance(conn, ConnWrapper):
-        conn.close()
-    elif _connection_pool:
-        _connection_pool.putconn(conn)
 
 
-def execute_query(query: str, params: tuple = None, fetch_one: bool = False, fetch_all: bool = False):
-    """执行查询的便捷辅助函数（适合一次性查询）。"""
-    with get_db() as conn:
-        cur = conn.execute(query, params or ())
-        if fetch_one:
-            return cur.fetchone()
-        elif fetch_all:
-            return cur.fetchall()
-        return cur.rowcount
+
+

@@ -7,12 +7,6 @@ model_adapter 模块单元测试
   - _get_optional_params: 环境变量可选参数解析
 """
 
-import sys
-import os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
-sys.path.insert(0, os.path.dirname(__file__))
-
 from model_adapter import (
     DEFAULT_AI_BASE_URL,
     DEFAULT_AI_MODEL,
@@ -61,7 +55,7 @@ class TestGetAiConfig:
         }
         cfg = get_ai_config(env, profile="svip")
         assert cfg["api_key"] == "key_svip"
-        assert cfg["base_url"] == "https://svip.example.com/v1"  # rstrip("/")
+        assert cfg["base_url"] == "https://svip.example.com/v1"
         assert cfg["model"] == "svip-model"
 
     def test_falls_back_to_generic_when_profile_specific_missing(self):
@@ -100,7 +94,7 @@ class TestGetAiConfig:
         cfg = get_ai_config(env, profile="unknown_profile")
         assert cfg["api_key"] == "from_basic"
 
-    def None_or_empty_profile_treated_as_basic(self):
+    def test_none_or_empty_profile_treated_as_basic(self):
         """空/None profile 视为 basic。"""
         cfg1 = get_ai_config({}, profile=None)
         cfg2 = get_ai_config({}, profile="")

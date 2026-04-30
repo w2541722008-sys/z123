@@ -19,6 +19,7 @@ from config import (
 )
 from database import get_conn
 from models import BillingCreateOrderPayload
+from services.billing_order_service import close_expired_pending_orders
 from services.plan_service import SVIP_PLAN, VIP_PLAN, plan_display_name
 
 router = APIRouter()
@@ -96,40 +97,8 @@ def _fetch_order_by_no(conn, *, order_no: str, user_id: int | None = None):
     ).fetchone()
 
 
-def _close_expired_pending_orders(
-    conn,
-    user_id: int | None = None,
-    *,
-    commit: bool = True,
-) -> int:
-    """把超时未支付的 pending 订单自动关闭，避免长期堆积脏数据。"""
-    now = utc_now_iso()
-    if user_id is None:
-        cursor = conn.execute(
-            """
-            UPDATE membership_orders
-            SET status = %s, closed_at = %s
-            WHERE status = %s
-              AND expires_at IS NOT NULL
-              AND expires_at <= %s
-            """,
-            (ORDER_STATUS_CLOSED, now, ORDER_STATUS_PENDING, now),
-        )
-    else:
-        cursor = conn.execute(
-            """
-            UPDATE membership_orders
-            SET status = %s, closed_at = %s
-            WHERE user_id = %s
-              AND status = %s
-              AND expires_at IS NOT NULL
-              AND expires_at <= %s
-            """,
-            (ORDER_STATUS_CLOSED, now, user_id, ORDER_STATUS_PENDING, now),
-        )
-    if commit:
-        conn.commit()
-    return cursor.rowcount
+def _close_expired_pending_orders(conn, user_id: int | None = None, *, commit: bool = True) -> int:
+    return close_expired_pending_orders(conn, user_id=user_id, commit=commit)
 
 
 def _cancel_pending_order(

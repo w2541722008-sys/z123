@@ -1,39 +1,48 @@
-"""
-角色路由 - 处理角色列表、详情、状态、配置
-
-端点：
-    GET  /api/characters                    - 角色列表
-    GET  /api/character/profile             - 获取用户对某角色的配置
-    POST /api/character/profile             - 更新用户对某角色的配置
-    GET  /api/character/greetings           - 获取角色开场白列表
-    GET  /api/character/state               - 获取角色关系状态
-    POST /api/character/state/reset         - 重置角色关系状态
-    POST /api/chat/clear                    - 清空聊天记录
-"""
-
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from auth import CurrentUser, get_current_user, get_optional_user
-from config import utc_now_iso
 from database import get_conn
 from models import CharacterProfileUpdatePayload, ClearChatPayload
+from services.character_session_service import (
+    clear_chat_history_with_greeting,
+    reset_character_chat_state,
+)
 from services.character_state import get_character_state
 from services.chat_service import ensure_opening_message, get_character_or_404
 from utils.json_utils import parse_json_list, parse_json_object
-from services.cache_service import cache_get, cache_set, cache_delete
+from services.cache_service import cache_get, cache_set
 from services.plan_service import (
     GUEST_PLAN,
     can_access_required_plan,
-    ensure_plan_access,
     normalize_required_plan,
     plan_display_name,
 )
+from config import utc_now_iso
 
 router = APIRouter()
+
+
+def _get_user_character_overrides_map(conn: Any, user_id: int | None) -> dict[str, tuple[str, str]]:
+    """批量读取用户对角色的私有备注和签名，避免列表接口产生 N+1 查询。"""
+    if not user_id:
+        return {}
+
+    rows = conn.execute(
+        """
+        SELECT character_id, remark, custom_signature
+        FROM user_character_profiles
+        WHERE user_id = %s
+        """,
+        (user_id,),
+    ).fetchall()
+    return {
+        row["character_id"]: (row["remark"] or "", row["custom_signature"] or "")
+        for row in rows
+    }
 
 
 def _get_user_character_overrides(
@@ -62,10 +71,14 @@ def _serialize_character_for_client(
     conn: Any,
     row: Any,
     user_id: int | None = None,
+    overrides_map: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     """把角色数据库行转换成前端直接可用的结构。"""
     char_id = row["id"]
-    remark, custom_signature = _get_user_character_overrides(conn, user_id, char_id)
+    if overrides_map is not None:
+        remark, custom_signature = overrides_map.get(char_id, ("", ""))
+    else:
+        remark, custom_signature = _get_user_character_overrides(conn, user_id, char_id)
 
     avatar_value = (row["avatar_url"] or "").strip()
     cover_value = (row["cover_url"] or "").strip() or avatar_value
@@ -114,13 +127,10 @@ def list_characters(user: CurrentUser | None = Depends(get_optional_user)) -> li
     conn = get_conn()
     try:
         viewer_plan = _get_viewer_plan(user)
-        
-        # 尝试从缓存获取角色列表
         cache_key = "character_list_all"
         cached_rows = cache_get(cache_key)
-        
+
         if cached_rows is None:
-            # 缓存未命中，查询数据库
             rows = conn.execute(
                 """
                 SELECT id, name, abbr, subtitle, avatar_url, cover_url, description, opening_message, tags,
@@ -130,16 +140,22 @@ def list_characters(user: CurrentUser | None = Depends(get_optional_user)) -> li
                 ORDER BY home_priority ASC, sort_order ASC
                 """
             ).fetchall()
-            # 转换为字典列表以便缓存
             cached_rows = [dict(row) for row in rows]
-            cache_set(cache_key, cached_rows, ttl=300)  # 缓存5分钟
-        
-        # 过滤用户可访问的角色
+            cache_set(cache_key, cached_rows, ttl=300)
+
         visible_rows = [
-            row for row in cached_rows
-            if can_access_required_plan(viewer_plan, row.get("required_plan", "guest"))
+            row for row in cached_rows if can_access_required_plan(viewer_plan, row.get("required_plan", "guest"))
         ]
-        return [_serialize_character_for_client(conn, row, user.id if user else None) for row in visible_rows]
+        overrides_map = _get_user_character_overrides_map(conn, user.id if user else None)
+        return [
+            _serialize_character_for_client(
+                conn,
+                row,
+                user.id if user else None,
+                overrides_map=overrides_map,
+            )
+            for row in visible_rows
+        ]
     finally:
         conn.close()
 
@@ -153,7 +169,6 @@ def get_character_profile(
     conn = get_conn()
     try:
         char_row = _get_accessible_character(conn, character_id, user.effective_plan)
-
         character = _serialize_character_for_client(conn, char_row, user.id)
         return {
             "character": character,
@@ -196,8 +211,6 @@ def update_character_profile(
             """,
             (payload.character_id,),
         ).fetchone()
-        if not char_row:
-            raise HTTPException(status_code=404, detail="角色不存在")
 
         return {
             "ok": True,
@@ -214,7 +227,7 @@ def get_character_greetings(
 ) -> dict[str, Any]:
     """
     获取角色的开场白列表。
-    
+
     返回：
         - first_mes: 默认开场白
         - alternate_greetings: 备选开场白列表
@@ -230,12 +243,14 @@ def get_character_greetings(
         seen_contents: set[str] = set()
 
         if first_mes:
-            greetings.append({
-                "index": 0,
-                "label": "默认开场",
-                "preview": first_mes[:100],
-                "content": first_mes,
-            })
+            greetings.append(
+                {
+                    "index": 0,
+                    "label": "默认开场",
+                    "preview": first_mes[:100],
+                    "content": first_mes,
+                }
+            )
             seen_contents.add(first_mes)
 
         db_rows = conn.execute(
@@ -255,12 +270,14 @@ def get_character_greetings(
             if not content or content in seen_contents:
                 continue
             label = g["storyline_name"] or f"{g['story_phase']} / {g['mood'] or '默认'}"
-            greetings.append({
-                "index": g["id"],
-                "label": label,
-                "preview": content[:100],
-                "content": content,
-            })
+            greetings.append(
+                {
+                    "index": g["id"],
+                    "label": label,
+                    "preview": content[:100],
+                    "content": content,
+                }
+            )
             seen_contents.add(content)
 
         if not db_rows:
@@ -270,12 +287,14 @@ def get_character_greetings(
                     content = str(item).strip()
                     if not content or content in seen_contents:
                         continue
-                    greetings.append({
-                        "index": idx,
-                        "label": f"备选开场 {idx}",
-                        "preview": content[:100],
-                        "content": content,
-                    })
+                    greetings.append(
+                        {
+                            "index": idx,
+                            "label": f"备选开场 {idx}",
+                            "preview": content[:100],
+                            "content": content,
+                        }
+                    )
                     seen_contents.add(content)
 
         if not greetings:
@@ -303,7 +322,6 @@ def get_character_state_api(
     try:
         _get_accessible_character(conn, character_id, user.effective_plan)
         state = get_character_state(conn, user.id, character_id)
-        # 过滤内部字段
         clean_state = {k: v for k, v in state.items() if not k.startswith("_")}
         return {"state": clean_state}
     finally:
@@ -319,29 +337,13 @@ def reset_character_state(
     conn = get_conn()
     try:
         _get_accessible_character(conn, character_id, user.effective_plan)
-        # 删除聊天记录
-        conn.execute(
-            "DELETE FROM chat_messages WHERE user_id = %s AND character_id = %s",
-            (user.id, character_id),
+        result = reset_character_chat_state(
+            conn,
+            user_id=user.id,
+            character_id=character_id,
+            clear_state=True,
         )
-        # 删除摘要
-        conn.execute(
-            "DELETE FROM chat_summaries WHERE user_id = %s AND character_id = %s",
-            (user.id, character_id),
-        )
-        # 删除状态
-        conn.execute(
-            "DELETE FROM character_states WHERE user_id = %s AND character_id = %s",
-            (user.id, character_id),
-        )
-        conn.commit()
-
-        # 重新插入开场白
-        ensure_opening_message(conn, user.id, character_id)
-        
-        # 获取默认状态
-        state = get_character_state(conn, user.id, character_id)
-        return {"message": "关系状态已重置", "state": {k: v for k, v in state.items() if not k.startswith("_")}}
+        return {"message": "关系状态已重置", "state": result["state"]}
     finally:
         conn.close()
 
@@ -353,7 +355,7 @@ def clear_chat_history(
 ) -> dict[str, Any]:
     """
     清空聊天记录并重新选择开场白。
-    
+
     greeting_index:
         - -1/0: 使用默认开场白
         - 1,2,...: 使用 alternate_greetings 中的对应开场白
@@ -361,67 +363,12 @@ def clear_chat_history(
     conn = get_conn()
     try:
         _get_accessible_character(conn, payload.character_id, user.effective_plan)
-        # 删除聊天记录
-        conn.execute(
-            "DELETE FROM chat_messages WHERE user_id = %s AND character_id = %s",
-            (user.id, payload.character_id),
+        greeting = clear_chat_history_with_greeting(
+            conn,
+            user_id=user.id,
+            character_id=payload.character_id,
+            greeting_index=payload.greeting_index,
         )
-        # 删除摘要
-        conn.execute(
-            "DELETE FROM chat_summaries WHERE user_id = %s AND character_id = %s",
-            (user.id, payload.character_id),
-        )
-        conn.commit()
-
-        # 根据 greeting_index 选择开场白
-        char_row = conn.execute(
-            "SELECT opening_message, structured_asset_json FROM characters WHERE id = %s",
-            (payload.character_id,),
-        ).fetchone()
-
-        greeting = "你好，很高兴认识你。"
-        if char_row:
-            _gi = payload.greeting_index
-            _gi_int: int
-            if isinstance(_gi, int):
-                _gi_int = _gi
-            elif isinstance(_gi, str) and _gi.lstrip('-').isdigit():
-                _gi_int = int(_gi)
-            else:
-                _gi_int = -1
-
-            _is_non_default = (_gi_int > 0) if _gi_int >= 0 else (isinstance(_gi, str) and _gi not in ('', '0', '-1'))
-
-            if _is_non_default:
-                greeting_row = conn.execute(
-                    """
-                    SELECT content FROM character_greetings
-                    WHERE id = %s AND character_id = %s AND is_active = 1
-                    LIMIT 1
-                    """,
-                    (_gi, payload.character_id),
-                ).fetchone()
-                if greeting_row and (greeting_row["content"] or "").strip():
-                    greeting = greeting_row["content"].strip()
-
-            structured = parse_json_object(char_row["structured_asset_json"], fallback={})
-            alts = structured.get("alternate_greetings", [])
-            
-            if not _is_non_default:
-                greeting = char_row["opening_message"] or (alts[0] if alts else greeting)
-            elif greeting == "你好，很高兴认识你。" and isinstance(alts, list) and 1 <= _gi_int <= len(alts):
-                greeting = alts[_gi_int - 1]
-
-        # 插入新的开场白
-        conn.execute(
-            """
-            INSERT INTO chat_messages(user_id, character_id, role, content, created_at, is_summarized)
-            VALUES (%s, %s, 'assistant', %s, %s, 1)
-            """,
-            (user.id, payload.character_id, greeting, utc_now_iso()),
-        )
-        conn.commit()
-
         return {"ok": True, "greeting": greeting}
     finally:
         conn.close()

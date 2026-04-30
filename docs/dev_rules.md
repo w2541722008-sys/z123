@@ -1,6 +1,6 @@
 # aifriend 项目开发协作与回退规则
 
-适用项目：`/Users/jjj/aifriend`
+适用项目：aifriend（项目根目录）
 
 最后更新：2026-03-30
 
@@ -143,7 +143,7 @@
 
 以下文件或模块，默认按高风险处理：
 
-- `backend/routers/admin.py`
+- `backend/routers/admin/`（整个目录）
 - `backend/routers/billing.py`
 - `backend/services/chat_service.py`
 - `backend/auth.py`

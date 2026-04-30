@@ -35,7 +35,7 @@ from typing import Any
 
 # 本地模块导入
 from config import SUMMARY_MAX_TOKENS, SUMMARY_TRIGGER_COUNT, logger, utc_now_iso
-from database import get_conn
+from database import get_conn, get_db
 from model_adapter import get_ai_config, request_chat_completion
 from prompt_assembler import RECENT_MESSAGE_WINDOW, build_memory_summary_messages
 from utils.json_utils import parse_json_list, parse_json_object
@@ -70,6 +70,17 @@ _SUMMARY_SECTION_ALIASES: dict[str, str] = {
 
 _SUMMARY_JOB_LOCK = threading.Lock()
 _SUMMARY_RUNNING_KEYS: set[tuple[int, str]] = set()
+
+
+def _empty_structured_summary() -> dict[str, Any]:
+    return {
+        "profile": [],
+        "preferences": [],
+        "events": [],
+        "relationship": [],
+        "pending": [],
+        "raw_summary": "",
+    }
 
 
 def _claim_summary_job(user_id: int, character_id: str) -> bool:
@@ -340,14 +351,7 @@ def get_structured_summary(
     """
     row = get_summary_record(conn, user_id, character_id)
     if not row:
-        return {
-            "profile": [],
-            "preferences": [],
-            "events": [],
-            "relationship": [],
-            "pending": [],
-            "raw_summary": "",
-        }
+        return _empty_structured_summary()
 
     summary_text = (row["summary"] or "").strip()
     parsed = _parse_structured_summary_text(summary_text)
@@ -730,46 +734,37 @@ def run_memory_summary_background(
 # ============================================================
 def parse_state_update_tag(reply: str) -> tuple[str, dict[str, Any] | None]:
     """
-    从 AI 回复里提取 [STATE_UPDATE]...[/STATE_UPDATE] 标签内的状态增量。
+    从 AI 回复里提取状态增量标签，兼容方括号与 XML 两种历史格式。
 
-    标签格式：
+    当前规范格式：
         [STATE_UPDATE]
         {"affection_delta": 5, "mood_delta": 3}
         [/STATE_UPDATE]
-
-    Args:
-        reply: AI 原始回复文本
-
-    Returns:
-        tuple: (cleaned_reply, delta_dict)
-        - cleaned_reply: 去掉标签后的纯净回复文本
-        - delta_dict: 解析到的状态增量字典，未找到则为 None
-
-    示例：
-        >>> reply = "你好呀！[STATE_UPDATE]{\"affection_delta\": 5}[/STATE_UPDATE]"
-        >>> cleaned, delta = parse_state_update_tag(reply)
-        >>> print(cleaned)
-        你好呀！
-        >>> print(delta)
-        {'affection_delta': 5}
     """
-    pattern = re.compile(r'\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]', re.DOTALL | re.IGNORECASE)
-    match = pattern.search(reply)
-    if not match:
-        return reply, None
+    patterns = [
+        re.compile(r'\[STATE_UPDATE\](.*?)\[/STATE_UPDATE\]', re.DOTALL | re.IGNORECASE),
+        re.compile(r'<STATE_UPDATE>(.*?)</STATE_UPDATE>', re.DOTALL | re.IGNORECASE),
+    ]
 
-    raw_json = match.group(1).strip()
-    cleaned = pattern.sub("", reply).strip()
+    for pattern in patterns:
+        match = pattern.search(reply)
+        if not match:
+            continue
 
-    try:
-        delta = json.loads(raw_json)
-    except json.JSONDecodeError:
-        return cleaned, None
+        raw_json = match.group(1).strip()
+        cleaned = pattern.sub("", reply).strip()
 
-    if not isinstance(delta, dict):
-        return cleaned, None
+        try:
+            delta = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return cleaned, None
 
-    return cleaned, delta
+        if not isinstance(delta, dict):
+            return cleaned, None
+
+        return cleaned, delta
+
+    return reply, None
 
 
 # ============================================================
@@ -777,32 +772,17 @@ def parse_state_update_tag(reply: str) -> tuple[str, dict[str, Any] | None]:
 # ============================================================
 def sanitize_stream_chunk(chunk: str, state: dict[str, Any]) -> str:
     """
-    按增量片段过滤 <think> 内容，处理跨 chunk 截断。
+    按增量片段过滤思考内容和 [STATE_UPDATE] 标签，处理跨 chunk 截断。
 
-    为什么需要这个函数：
-        AI 模型（如 DeepSeek）会在回复中包含 <think>...</think> 标签
-        包裹思考过程。流式响应时，这些标签可能跨多个 chunk，
-        需要状态机来正确处理。
+    AI 模型可能在回复中包含：
+    1. 思考标签（如 DeepSeek 的思考过程）
+    2. [STATE_UPDATE]...[/STATE_UPDATE] 状态更新标签
+    流式响应时，这些标签可能跨多个 chunk，需要状态机正确处理。
 
     state 用于保存跨 chunk 的状态：
         - buffer: 未处理的残留文本（可能是标签的一部分）
-        - in_think: 是否处于 <think> 标签内
-
-    Args:
-        chunk: 当前收到的文本片段
-        state: 跨 chunk 的状态字典（会被修改）
-
-    Returns:
-        过滤后的文本片段
-
-    示例：
-        >>> state = {"buffer": "", "in_think": False}
-        >>> sanitize_stream_chunk("你好<think>", state)
-        '你好'
-        >>> sanitize_stream_chunk("思考过程", state)
-        ''
-        >>> sanitize_stream_chunk("</think>世界", state)
-        '世界'
+        - in_think: 是否处于思考标签内
+        - in_state_update: 是否处于 [STATE_UPDATE] 标签内
     """
     if not chunk:
         return ""
@@ -811,41 +791,235 @@ def sanitize_stream_chunk(chunk: str, state: dict[str, Any]) -> str:
     buf = state.get("buffer", "") + chunk
     state["buffer"] = ""
     in_think = state.get("in_think", False)
+    in_state_update = state.get("in_state_update", False)
     output = ""
-    partial_tag = "<think>"
+
+    # 标签定义
+    think_open = "\u003cthink\u003e"
+    think_close = "\u003c/think\u003e"
+    state_open = "[STATE_UPDATE]"
+    state_close = "[/STATE_UPDATE]"
 
     # 状态机处理 buffer
     while buf:
         if in_think:
-            # 在 <think> 标签内，寻找结束标签
-            end_idx = buf.find("</think>")
+            # 在思考标签内，寻找结束标签
+            end_idx = buf.find(think_close)
             if end_idx == -1:
-                # 结束标签不在当前 buffer，全部丢弃，保留到下次处理
                 state["buffer"] = buf
                 buf = ""
             else:
-                # 找到结束标签，跳过这段内容
                 in_think = False
-                buf = buf[end_idx + len("</think>"):]
+                buf = buf[end_idx + len(think_close):]
+
+        elif in_state_update:
+            # 在 [STATE_UPDATE] 标签内，寻找结束标签
+            end_idx = buf.find(state_close)
+            if end_idx == -1:
+                state["buffer"] = buf
+                buf = ""
+            else:
+                in_state_update = False
+                buf = buf[end_idx + len(state_close):]
+
         else:
-            # 不在 <think> 标签内，寻找开始标签
-            start_idx = buf.find("<think>")
-            if start_idx == -1:
-                # 没有开始标签，但要检查是否以标签的一部分结尾
+            # 不在任何标签内，寻找最近的开始标签
+            think_start = buf.find(think_open)
+            state_start = buf.find(state_open)
+
+            # 找到最先出现的标签
+            next_tag = None
+            next_pos = len(buf)
+
+            if think_start != -1 and think_start < next_pos:
+                next_tag = "think"
+                next_pos = think_start
+            if state_start != -1 and state_start < next_pos:
+                next_tag = "state_update"
+                next_pos = state_start
+
+            if next_tag is None:
+                # 没有开始标签，检查是否以标签的一部分结尾
                 safe_end = len(buf)
-                for i in range(1, len(partial_tag)):
-                    if buf.endswith(partial_tag[:i]):
-                        # 以 "<", "<t", "<th"... 结尾，可能是标签的一部分
-                        safe_end = len(buf) - i
-                        break
+                for tag in (think_open, state_open):
+                    for i in range(1, len(tag)):
+                        if buf.endswith(tag[:i]):
+                            safe_end = min(safe_end, len(buf) - i)
+                            break
                 output += buf[:safe_end]
                 state["buffer"] = buf[safe_end:]
                 buf = ""
             else:
-                # 找到开始标签，输出之前的内容，进入 think 状态
-                output += buf[:start_idx]
-                in_think = True
-                buf = buf[start_idx + len("<think>"):]
+                # 找到开始标签，输出之前的内容
+                output += buf[:next_pos]
+                if next_tag == "think":
+                    in_think = True
+                    buf = buf[next_pos + len(think_open):]
+                else:
+                    in_state_update = True
+                    buf = buf[next_pos + len(state_open):]
 
     state["in_think"] = in_think
+    state["in_state_update"] = in_state_update
     return output
+
+
+# ============================================================
+# 角色记忆与后置规则查询（从 prompt_assembler 迁移）
+# 说明：
+#   - 原来在 prompt_assembler 中包含 DB 查询，违反"SQL 只在 services 层"原则
+#   - 移至此处后，budget 相关参数由调用方传入，不依赖 prompt_assembler 内部常量
+# ============================================================
+
+def fetch_character_memories(
+    character_id: str,
+    context_text: str,
+    *,
+    max_triggered: int = 12,
+    max_per_entry: int = 500,
+    wi_max: int = 8000,
+) -> tuple[list[str], list[str]]:
+    """
+    从数据库查询角色的记忆条目，并根据上下文文本匹配关键词。
+
+    参数：
+        character_id: 角色 ID
+        context_text: 用于匹配的上下文文本
+        max_triggered: 最多触发条目数
+        max_per_entry: 单条最大字符数
+        wi_max: WI 总字符上限
+
+    返回：
+        (before_list, after_list) — 分别对应 position='before' 和 'after' 的匹配内容列表
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT keywords, trigger_logic, content, position, priority
+            FROM character_memories
+            WHERE character_id = %s AND is_active = 1
+            ORDER BY priority ASC, id ASC
+            """,
+            (character_id,),
+        ).fetchall()
+
+        if not rows or not context_text:
+            return [], []
+
+        ctx_lower = context_text.lower()
+        triggered = []
+
+        for row in rows:
+            keywords = [k.strip().lower() for k in row["keywords"].split(",") if k.strip()]
+            if not keywords:
+                continue
+
+            trigger_logic = row["trigger_logic"] or "any"
+
+            if trigger_logic == "all":
+                if all(kw in ctx_lower for kw in keywords):
+                    matched = keywords
+                else:
+                    matched = []
+            else:
+                matched = [kw for kw in keywords if kw in ctx_lower]
+
+            if matched:
+                triggered.append({
+                    "content": row["content"],
+                    "position": row["position"] or "before",
+                    "priority": row["priority"] or 100,
+                })
+
+        triggered.sort(key=lambda e: e["priority"])
+        triggered = triggered[:max_triggered]
+
+        before_list = []
+        after_list = []
+        wi_used = 0
+
+        for entry in triggered:
+            content = entry["content"].strip()
+            if not content:
+                continue
+
+            if len(content) > max_per_entry:
+                content = content[:max_per_entry].rstrip() + "\n…（内容已截断）"
+
+            if wi_used + len(content) > wi_max:
+                break
+
+            wi_used += len(content)
+
+            if entry["position"] == "after":
+                after_list.append(content)
+            else:
+                before_list.append(content)
+
+        return before_list, after_list
+
+
+def fetch_character_post_rules(
+    character_id: str,
+    *,
+    storyline_id: int | None = None,
+    story_phase: str | None = None,
+    max_chars: int = 16000,
+) -> list[str]:
+    """
+    从数据库查询角色的后置规则。
+
+    参数：
+        character_id: 角色 ID
+        storyline_id: 当前剧情线 ID（可选）
+        story_phase: 当前关系阶段（可选）
+        max_chars: 返回规则的总字符上限
+
+    返回：
+        匹配的后置规则内容列表（已按优先级排序）
+    """
+    with get_db() as conn:
+        conditions = ["character_id = %s", "is_active = 1"]
+        params: list[Any] = [character_id]
+
+        if storyline_id is not None:
+            conditions.append("(storyline_id IS NULL OR storyline_id = %s)")
+            params.append(storyline_id)
+
+        if story_phase:
+            conditions.append("(story_phase IS NULL OR story_phase = '' OR story_phase = %s)")
+            params.append(story_phase)
+
+        where_clause = " AND ".join(conditions)
+
+        rows = conn.execute(
+            f"""
+            SELECT content, priority
+            FROM character_post_rules
+            WHERE {where_clause}
+            ORDER BY priority ASC, id ASC
+            """,
+            tuple(params),
+        ).fetchall()
+
+        if not rows:
+            return []
+
+        rules = []
+        total_chars = 0
+
+        for row in rows:
+            content = row["content"].strip()
+            if not content:
+                continue
+
+            if total_chars + len(content) > max_chars:
+                remaining = max_chars - total_chars
+                if remaining > 100:
+                    rules.append(content[:remaining].rstrip() + "\n…（内容已截断）")
+                break
+
+            total_chars += len(content)
+            rules.append(content)
+
+        return rules

@@ -3,7 +3,7 @@
 
 这个模块封装了 Resend API 的调用，提供：
 - 发送密码重置验证码邮件
-- 简单的重试机制
+- 简单的重试机制（线性退避）
 - HTML 邮件模板
 
 使用方法：
@@ -24,7 +24,7 @@ import os
 import time
 from typing import Any
 
-import requests
+import httpx
 
 from config import logger
 
@@ -36,11 +36,19 @@ RESEND_API_URL = "https://api.resend.com/emails"
 DEFAULT_FROM_EMAIL = "onboarding@resend.dev"
 
 
+def _mask_email(email: str) -> str:
+    """将邮箱地址脱敏为 u***@example.com 格式，用于日志输出。"""
+    if "@" not in email:
+        return "***"
+    local, domain = email.split("@", 1)
+    return f"{local[0]}***@{domain}"
+
+
 def send_reset_code_email(to_email: str, code: str, max_retries: int = 3) -> bool:
     """
     发送密码重置验证码邮件。
     
-    使用 Resend API 发送 HTML 格式的验证码邮件，包含重试机制。
+    使用 Resend API 发送 HTML 格式的验证码邮件，包含重试机制（线性退避）。
     
     Args:
         to_email: 收件人邮箱地址
@@ -180,19 +188,17 @@ def send_reset_code_email(to_email: str, code: str, max_retries: int = 3) -> boo
         "Content-Type": "application/json",
     }
     
-    # 带重试机制的发送
+    masked_email = _mask_email(to_email)
+
+    # 带重试机制的发送（线性退避）
     for attempt in range(max_retries):
         try:
-            response = requests.post(
-                RESEND_API_URL,
-                json=payload,
-                headers=headers,
-                timeout=30,
-            )
+            with httpx.Client(timeout=30) as client:
+                response = client.post(RESEND_API_URL, json=payload, headers=headers)
             
             if response.status_code == 200:
                 result = response.json()
-                logger.info(f"密码重置邮件已发送: {to_email}, message_id: {result.get('id')}")
+                logger.info(f"密码重置邮件已发送: {masked_email}, message_id: {result.get('id')}")
                 return True
             else:
                 error_msg = response.text
@@ -205,19 +211,19 @@ def send_reset_code_email(to_email: str, code: str, max_retries: int = 3) -> boo
                 
                 # 其他错误，等待后重试
                 if attempt < max_retries - 1:
-                    time.sleep(1 * (attempt + 1))  # 指数退避
+                    time.sleep(1 * (attempt + 1))  # 线性退避
                     
-        except requests.exceptions.Timeout:
+        except httpx.TimeoutException:
             logger.warning(f"Resend API 请求超时 (尝试 {attempt + 1}/{max_retries})")
             if attempt < max_retries - 1:
                 time.sleep(1 * (attempt + 1))
                 
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             logger.warning(f"Resend API 请求异常 (尝试 {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
                 time.sleep(1 * (attempt + 1))
     
-    logger.error(f"邮件发送失败，已重试 {max_retries} 次: {to_email}")
+    logger.error(f"邮件发送失败，已重试 {max_retries} 次: {masked_email}")
     return False
 
 

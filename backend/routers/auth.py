@@ -91,6 +91,30 @@ def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def _get_latest_valid_reset_code(conn: Any, normalized_email: str, now_iso: str) -> dict[str, Any] | None:
+    return conn.execute(
+        """
+        SELECT id, code, expires_at, used
+        FROM password_reset_codes
+        WHERE email = %s AND used = 0 AND expires_at > %s
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        (normalized_email, now_iso),
+    ).fetchone()
+
+
+def _verify_reset_code_or_raise(
+    reset_code: dict[str, Any] | None,
+    input_code: str,
+    *,
+    invalid_detail: str,
+) -> None:
+    if not reset_code:
+        raise HTTPException(status_code=400, detail=invalid_detail)
+    if not hmac.compare_digest(str(reset_code["code"]), str(input_code)):
+        raise HTTPException(status_code=400, detail=invalid_detail)
+
+
 @router.post("/auth/register")
 def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
     """
@@ -452,20 +476,9 @@ def verify_reset_code(payload: VerifyCodePayload, request: Request) -> dict[str,
     try:
         now = datetime.now(timezone.utc).isoformat()
 
-        # 查找该邮箱最新有效的验证码
-        reset_code = conn.execute(
-            """
-            SELECT id, code, expires_at, used
-            FROM password_reset_codes
-            WHERE email = %s AND used = 0 AND expires_at > %s
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            (normalized_email, now),
-        ).fetchone()
-
+        reset_code = _get_latest_valid_reset_code(conn, normalized_email, now)
         if not reset_code:
             raise HTTPException(status_code=400, detail="验证码已过期或无效")
-
         if not hmac.compare_digest(str(reset_code["code"]), str(payload.code)):
             raise HTTPException(status_code=400, detail="验证码错误")
 
@@ -515,18 +528,12 @@ def reset_password(payload: ResetPasswordPayload, request: Request) -> dict[str,
         now = datetime.now(timezone.utc).isoformat()
 
         # 步骤 1：查找并验证验证码
-        reset_code = conn.execute(
-            """
-            SELECT id, code, expires_at, used
-            FROM password_reset_codes
-            WHERE email = %s AND used = 0 AND expires_at > %s
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            (normalized_email, now),
-        ).fetchone()
-
-        if not reset_code or reset_code["code"] != payload.code:
-            raise HTTPException(status_code=400, detail="验证码无效或已过期")
+        reset_code = _get_latest_valid_reset_code(conn, normalized_email, now)
+        _verify_reset_code_or_raise(
+            reset_code,
+            payload.code,
+            invalid_detail="验证码无效或已过期",
+        )
 
         # 步骤 2：查找用户
         user = conn.execute(

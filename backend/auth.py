@@ -34,6 +34,7 @@ from __future__ import annotations
 # 标准库导入
 import hashlib
 import hmac
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -281,7 +282,7 @@ def delete_token(token: str, *, commit: bool = True) -> int:
 _SLIDING_EXTEND_THRESHOLD = timedelta(days=7)
 
 
-def _sliding_extend_token(conn, token_hash: str, expires_at_str: str | None, now: datetime) -> None:
+def _sliding_extend_token(token_hash: str, expires_at_str: str | None, now: datetime) -> None:
     """
     Token 滑动续期：当 token 剩余有效期不足阈值时，自动延长至 TOKEN_EXPIRE_DAYS。
 
@@ -310,8 +311,9 @@ def _sliding_extend_token(conn, token_hash: str, expires_at_str: str | None, now
             (new_expires, token_hash),
         )
         extend_conn.commit()
-    except Exception:
-        pass
+        logging.info(f"Token 已自动续期: token_hash={token_hash[:8]}...")
+    except Exception as e:
+        logging.warning(f"Token 自动续期失败: {e}", exc_info=True)
     finally:
         if extend_conn is not None:
             try:
@@ -383,7 +385,7 @@ def get_optional_user(authorization: str | None = Header(default=None)) -> Curre
     if not row:
         return None
 
-    _sliding_extend_token(conn, token_hash, row["expires_at"], datetime.now(timezone.utc))
+    _sliding_extend_token(token_hash, row["expires_at"], datetime.now(timezone.utc))
 
     nickname = row["nickname"] or row["email"].split("@")[0]
     plan_info = serialize_plan_info(row["plan_type"], row["plan_expires_at"])

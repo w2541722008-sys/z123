@@ -40,6 +40,7 @@ from typing import Any
 
 # 本地模块导入
 from config import utc_now_iso
+from constants import Mood, StoryPhase
 from utils.json_utils import parse_json_object
 
 # ============================================================
@@ -113,11 +114,11 @@ _PHASE_GAIN_MULTIPLIER: dict[str, float] = {
     "lover": 0.4,
 }
 
-# 有效阶段列表
-_VALID_STORY_PHASES = ("stranger", "acquaintance", "friend", "lover")
+# 有效阶段列表（从 StoryPhase 枚举派生）
+_VALID_STORY_PHASES = tuple(phase.value for phase in StoryPhase)
 
-# 有效心情列表
-_VALID_MOODS = ("neutral", "happy", "warm", "melting", "cold", "angry", "sad", "shy", "surprised")
+# 有效心情列表（从 Mood 枚举派生）
+_VALID_MOODS = tuple(mood.value for mood in Mood)
 
 # 单次好感度变化上限（防止极端情况）
 _AFFECTION_DELTA_MAX = 10
@@ -875,7 +876,4 @@ def _check_and_trigger_story_events(
     return triggered
 
 
-def _get_now_iso() -> str:
-    """获取当前时间的 ISO 格式字符串。"""
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+

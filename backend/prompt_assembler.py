@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from card_text_utils import expand_macros
+from constants import Mood, StoryPhase
 
 
 # ============================================================
@@ -118,11 +119,66 @@ class TokenBudget:
 # 默认预算实例（可在构造 messages 时传入自定义实例覆盖）
 _DEFAULT_BUDGET = TokenBudget(context_tokens=64000, output_reserve=2048, chars_per_token=1.6)
 
-# ── 向下兼容：保留旧的字符常量（部分代码可能直接引用），但值改为从默认预算派生 ──
-# 这样即使还有地方用旧常量，数值也与新预算系统一致，不会出现两套标准打架
+# ── 向下兼容：保留旧的字符常量 ──
+# 注意：这些常量是 _DEFAULT_BUDGET 的别名，新增代码应直接使用 _DEFAULT_BUDGET.xxx() 方法。
+# 它们被 _build_single_system_prompt (L296, L317-318)、_append_post_history_then_user (L603)
+# 和 fetch_character_post_rules 调用处作为 budget=None 的 fallback 值引用。
 _LAYER_MAX_CHARS        = _DEFAULT_BUDGET.single_layer_max_chars()
 _PRIMARY_SYSTEM_MAX_CHARS = _DEFAULT_BUDGET.primary_system_max_chars()
 _TOTAL_SYSTEM_MAX_CHARS = _DEFAULT_BUDGET.system_max_chars()
+
+# 状态更新指令（用于 prompt 中注入，指导 AI 输出状态更新标签）
+_STATE_UPDATE_INSTRUCTION = [
+    "",
+    "【状态更新指令（重要）】",
+    "每次回复结束时，如果发生了值得记录的互动，必须在回复最后附上状态标签。",
+    "只需报告【事件名称】，系统会自动计算实际分数（防止滥用）。",
+    "",
+    "上报格式：",
+    "[STATE_UPDATE]{\"event\":\"事件名\",\"mood\":\"心情\"}[/STATE_UPDATE]",
+    "",
+    "可用事件名（根据本轮对话内容选最贴切的一个）：",
+    "  正向事件：deep_conversation（深聊）/ light_chat（日常闲聊）/ compliment（夸奖）",
+    "             gift（送礼）/ help（帮助解决问题）/ shared_secret（分享秘密）",
+    "             comfort（安慰情绪）/ flirt（调情撒娇）/ date（约会活动）",
+    "             first_hug（第一次拥抱）/ kiss（亲吻）/ confession（表白）",
+    "  负向事件：argument（争吵）/ rude（无礼言行）/ ignore（漠视敷衍）",
+    "             lie（说谎）/ betray（背叛）/ insult（侮辱）",
+    "",
+    f"可用心情值：{' / '.join(m.value for m in Mood)}",
+    f"关系阶段仅在里程碑时填写（story_phase），平时省略：{'→'.join(p.value for p in StoryPhase)}",
+    "",
+    "示例：",
+    "  [STATE_UPDATE]{\"event\":\"deep_conversation\",\"mood\":\"warm\"}[/STATE_UPDATE]",
+    "  [STATE_UPDATE]{\"event\":\"argument\",\"mood\":\"cold\",\"story_phase\":\"stranger\"}[/STATE_UPDATE]",
+    "  若本轮无特殊互动，不需要输出标签。",
+]
+
+# 关系阶段和心情的中文标签（用于状态快照注入）
+_STORY_PHASE_LABELS: dict[str, str] = {
+    phase.value: {
+        "stranger": "陌生人",
+        "acquaintance": "普通朋友",
+        "friend": "好友",
+        "lover": "恋人",
+    }.get(phase.value, phase.value)
+    for phase in StoryPhase
+}
+
+_MOOD_LABELS: dict[str, str] = {
+    mood.value: {
+        "neutral": "平静",
+        "happy": "开心",
+        "warm": "温柔",
+        "melting": "心动",
+        "cold": "冷淡",
+        "angry": "生气",
+        "sad": "难过",
+        "shy": "害羞",
+        "surprised": "惊讶",
+    }.get(mood.value, mood.value)
+    for mood in Mood
+}
 
 
 # ============================================================
@@ -361,6 +417,161 @@ def _split_last_user_message(
     return list(recent_messages), None
 
 
+
+def _world_info_layer_pairs(runtime_bundle: dict[str, Any]) -> tuple[list[tuple[str, str]], str, str]:
+    wi_before = (runtime_bundle.get("world_info_before") or "").strip()
+    wi_after = (runtime_bundle.get("world_info_after") or "").strip()
+    layer_pairs: list[tuple[str, str]] = []
+    if wi_before:
+        layer_pairs.append(("【世界信息-前置】", wi_before))
+    return layer_pairs, wi_before, wi_after
+
+
+
+def _append_runtime_text_layers(
+    layer_pairs: list[tuple[str, str]],
+    sections: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    for title, content in sections:
+        if title and not content:
+            if title.strip():
+                layer_pairs.append(("", title))
+        elif content:
+            layer_pairs.append((title, content))
+    return layer_pairs
+
+
+
+def _append_runtime_tail(
+    messages: list[dict[str, str]],
+    *,
+    memory_summary: str,
+    history: list[dict[str, str]],
+    recent_message_window: int,
+    depth_prompt: dict | None,
+    post_history_rules: str,
+    last_user_msg: dict[str, str] | None,
+    budget: "TokenBudget | None" = None,
+) -> list[dict[str, str]]:
+    _append_memory_and_history(
+        messages,
+        memory_summary,
+        history,
+        recent_message_window,
+        depth_prompt=depth_prompt,
+        budget=budget,
+    )
+    _append_post_history_then_user(messages, post_history_rules, last_user_msg, budget=budget)
+    return messages
+
+
+
+def _append_world_info_after(layer_pairs: list[tuple[str, str]], wi_after: str) -> list[tuple[str, str]]:
+    if wi_after:
+        layer_pairs.append(("【世界信息-后置】", wi_after))
+    return layer_pairs
+
+
+
+def _mode_sections(runtime_bundle: dict[str, Any], character: Any, mode: str) -> list[tuple[str, str]]:
+    base_profile = runtime_bundle.get("base_profile") or _get_field(character, "description", "")
+    examples = runtime_bundle.get("examples") or ""
+    world_rules = runtime_bundle.get("world_rules") or ""
+    scenario = runtime_bundle.get("scenario") or ""
+    personality = runtime_bundle.get("personality") or ""
+    alternate_text = _alternate_samples_text(runtime_bundle.get("alternate_greetings") or [])
+    related_text = _related_assets_text(runtime_bundle)
+
+    if mode == "character":
+        sections = [
+            (related_text, ""),
+            ("【角色底稿】", base_profile),
+            ("【性格与表达风格】", personality),
+            ("【当前关系与场景】", scenario),
+            ("【世界规则/补充设定】", world_rules),
+            ("【示例对话风格参考】", examples),
+            ("【备用开场参考】", alternate_text),
+        ]
+    elif mode == "system":
+        sections = []
+        if related_text:
+            sections.append(("", related_text))
+        sections.extend([
+            ("【核心系统设定】", base_profile),
+            ("【世界规则/补充设定】", world_rules),
+            ("【当前剧情场景】", scenario),
+            ("【示例对话风格参考】", examples),
+        ])
+        if alternate_text:
+            sections.append(("", alternate_text))
+    elif mode == "scenario":
+        sections = []
+        if related_text:
+            sections.append(("", related_text))
+        sections.extend([
+            ("【剧情入口/背景】", base_profile),
+            ("【当前剧情场景】", scenario),
+            ("【世界规则/补充设定】", world_rules),
+            ("【示例对话风格参考】", examples),
+        ])
+        if alternate_text:
+            sections.append(("", alternate_text))
+    else:
+        sections = []
+        if related_text:
+            sections.append(("", related_text))
+        sections.extend([
+            ("【角色底稿】", base_profile),
+            ("【性格与表达风格】", personality),
+            ("【当前关系与剧情场景】", scenario),
+            ("【世界规则/补充设定】", world_rules),
+            ("【示例对话风格参考】", examples),
+        ])
+        if alternate_text:
+            sections.append(("", alternate_text))
+    return sections
+
+
+
+def _build_mode_messages(
+    runtime_bundle: dict[str, Any],
+    character: Any,
+    recent_messages: list[dict[str, str]],
+    memory_summary: str,
+    recent_message_window: int,
+    *,
+    mode: str,
+    budget: "TokenBudget | None" = None,
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    depth_prompt = runtime_bundle.get("depth_prompt")
+    history, last_user_msg = _split_last_user_message(recent_messages)
+
+    layer_pairs, _, wi_after = _world_info_layer_pairs(runtime_bundle)
+    layer_pairs = _append_runtime_text_layers(
+        layer_pairs,
+        _mode_sections(runtime_bundle, character, mode),
+    )
+    layer_pairs = _append_world_info_after(layer_pairs, wi_after)
+
+    primary = runtime_bundle.get("primary_system_prompt") or _get_field(character, "system_prompt", "")
+    system_text = _build_single_system_prompt(primary, layer_pairs, budget=budget)
+    if system_text:
+        messages.append({"role": "system", "content": system_text})
+
+    return _append_runtime_tail(
+        messages,
+        memory_summary=memory_summary,
+        history=history,
+        recent_message_window=recent_message_window,
+        depth_prompt=depth_prompt,
+        post_history_rules=runtime_bundle.get("post_history_rules") or "",
+        last_user_msg=last_user_msg,
+        budget=budget,
+    )
+
+
+
 def _append_memory_and_history(
     messages: list[dict[str, str]],
     memory_summary: str,
@@ -466,49 +677,15 @@ def _build_character_mode_messages(
     World Info 注入顺序（对应 SillyTavern 规范）：
       world_info_before → 主 prompt + 角色设定层 → world_info_after
     """
-    messages: list[dict[str, str]] = []
-    depth_prompt = runtime_bundle.get("depth_prompt")
-    history, last_user_msg = _split_last_user_message(recent_messages)
-
-    # World Info: before_char（世界观/背景，最高优先级，放在最前）
-    wi_before = (runtime_bundle.get("world_info_before") or "").strip()
-    # World Info: after_char（补充规则/随机事件，放在设定层最后）
-    wi_after = (runtime_bundle.get("world_info_after") or "").strip()
-
-    # 合并所有设定层为单条 system（兼容 MiniMax 等只允许一条 system 的 API）
-    layers = [
-        (_related_assets_text(runtime_bundle), ""),           # 关联资产（已是完整标题文本）
-        ("【角色底稿】", runtime_bundle.get("base_profile") or _get_field(character, "description", "")),
-        ("【性格与表达风格】", runtime_bundle.get("personality") or ""),
-        ("【当前关系与场景】", runtime_bundle.get("scenario") or ""),
-        ("【世界规则/补充设定】", runtime_bundle.get("world_rules") or ""),
-        ("【示例对话风格参考】", runtime_bundle.get("examples") or ""),
-        ("【备用开场参考】", _alternate_samples_text(runtime_bundle.get("alternate_greetings") or [])),
-    ]
-    # 构建 (title, content) 列表传给 _build_single_system_prompt
-    layer_pairs: list[tuple[str, str]] = []
-    # world_info_before 插最前
-    if wi_before:
-        layer_pairs.append(("【世界信息-前置】", wi_before))
-    for title, content in layers:
-        if title and not content:
-            # _related_assets_text 等已经是完整文本，直接当 content，title 为空
-            if title.strip():
-                layer_pairs.append(("", title))  # title 实际上就是完整内容
-        elif content:
-            layer_pairs.append((title, content))
-    # world_info_after 插最后
-    if wi_after:
-        layer_pairs.append(("【世界信息-后置】", wi_after))
-
-    primary = runtime_bundle.get("primary_system_prompt") or _get_field(character, "system_prompt", "")
-    system_text = _build_single_system_prompt(primary, layer_pairs, budget=budget)
-    if system_text:
-        messages.append({"role": "system", "content": system_text})
-
-    _append_memory_and_history(messages, memory_summary, history, recent_message_window, depth_prompt=depth_prompt, budget=budget)
-    _append_post_history_then_user(messages, runtime_bundle.get("post_history_rules") or "", last_user_msg, budget=budget)
-    return messages
+    return _build_mode_messages(
+        runtime_bundle,
+        character,
+        recent_messages,
+        memory_summary,
+        recent_message_window,
+        mode="character",
+        budget=budget,
+    )
 
 
 def _build_system_mode_messages(
@@ -523,41 +700,15 @@ def _build_system_mode_messages(
 
     World Info 注入：world_info_before 最前，world_info_after 最后。
     """
-    messages: list[dict[str, str]] = []
-    depth_prompt = runtime_bundle.get("depth_prompt")
-    history, last_user_msg = _split_last_user_message(recent_messages)
-
-    wi_before = (runtime_bundle.get("world_info_before") or "").strip()
-    wi_after = (runtime_bundle.get("world_info_after") or "").strip()
-
-    related_text = _related_assets_text(runtime_bundle)
-    layer_pairs: list[tuple[str, str]] = []
-    if wi_before:
-        layer_pairs.append(("【世界信息-前置】", wi_before))
-    if related_text:
-        layer_pairs.append(("", related_text))
-    for title, content in [
-        ("【核心系统设定】", runtime_bundle.get("base_profile") or _get_field(character, "description", "")),
-        ("【世界规则/补充设定】", runtime_bundle.get("world_rules") or ""),
-        ("【当前剧情场景】", runtime_bundle.get("scenario") or ""),
-        ("【示例对话风格参考】", runtime_bundle.get("examples") or ""),
-    ]:
-        if content:
-            layer_pairs.append((title, content))
-    alt_text = _alternate_samples_text(runtime_bundle.get("alternate_greetings") or [])
-    if alt_text:
-        layer_pairs.append(("", alt_text))
-    if wi_after:
-        layer_pairs.append(("【世界信息-后置】", wi_after))
-
-    primary = runtime_bundle.get("primary_system_prompt") or _get_field(character, "system_prompt", "")
-    system_text = _build_single_system_prompt(primary, layer_pairs, budget=budget)
-    if system_text:
-        messages.append({"role": "system", "content": system_text})
-
-    _append_memory_and_history(messages, memory_summary, history, recent_message_window, depth_prompt=depth_prompt, budget=budget)
-    _append_post_history_then_user(messages, runtime_bundle.get("post_history_rules") or "", last_user_msg, budget=budget)
-    return messages
+    return _build_mode_messages(
+        runtime_bundle,
+        character,
+        recent_messages,
+        memory_summary,
+        recent_message_window,
+        mode="system",
+        budget=budget,
+    )
 
 
 def _build_scenario_mode_messages(
@@ -572,41 +723,15 @@ def _build_scenario_mode_messages(
 
     World Info 注入：world_info_before 最前，world_info_after 最后。
     """
-    messages: list[dict[str, str]] = []
-    depth_prompt = runtime_bundle.get("depth_prompt")
-    history, last_user_msg = _split_last_user_message(recent_messages)
-
-    wi_before = (runtime_bundle.get("world_info_before") or "").strip()
-    wi_after = (runtime_bundle.get("world_info_after") or "").strip()
-
-    related_text = _related_assets_text(runtime_bundle)
-    layer_pairs: list[tuple[str, str]] = []
-    if wi_before:
-        layer_pairs.append(("【世界信息-前置】", wi_before))
-    if related_text:
-        layer_pairs.append(("", related_text))
-    for title, content in [
-        ("【剧情入口/背景】", runtime_bundle.get("base_profile") or _get_field(character, "description", "")),
-        ("【当前剧情场景】", runtime_bundle.get("scenario") or ""),
-        ("【世界规则/补充设定】", runtime_bundle.get("world_rules") or ""),
-        ("【示例对话风格参考】", runtime_bundle.get("examples") or ""),
-    ]:
-        if content:
-            layer_pairs.append((title, content))
-    alt_text = _alternate_samples_text(runtime_bundle.get("alternate_greetings") or [])
-    if alt_text:
-        layer_pairs.append(("", alt_text))
-    if wi_after:
-        layer_pairs.append(("【世界信息-后置】", wi_after))
-
-    primary = runtime_bundle.get("primary_system_prompt") or _get_field(character, "system_prompt", "")
-    system_text = _build_single_system_prompt(primary, layer_pairs, budget=budget)
-    if system_text:
-        messages.append({"role": "system", "content": system_text})
-
-    _append_memory_and_history(messages, memory_summary, history, recent_message_window, depth_prompt=depth_prompt, budget=budget)
-    _append_post_history_then_user(messages, runtime_bundle.get("post_history_rules") or "", last_user_msg, budget=budget)
-    return messages
+    return _build_mode_messages(
+        runtime_bundle,
+        character,
+        recent_messages,
+        memory_summary,
+        recent_message_window,
+        mode="scenario",
+        budget=budget,
+    )
 
 
 def _build_hybrid_mode_messages(
@@ -621,42 +746,31 @@ def _build_hybrid_mode_messages(
 
     World Info 注入：world_info_before 最前，world_info_after 最后。
     """
-    messages: list[dict[str, str]] = []
-    depth_prompt = runtime_bundle.get("depth_prompt")
-    history, last_user_msg = _split_last_user_message(recent_messages)
+    return _build_mode_messages(
+        runtime_bundle,
+        character,
+        recent_messages,
+        memory_summary,
+        recent_message_window,
+        mode="hybrid",
+        budget=budget,
+    )
 
-    wi_before = (runtime_bundle.get("world_info_before") or "").strip()
-    wi_after = (runtime_bundle.get("world_info_after") or "").strip()
 
-    related_text = _related_assets_text(runtime_bundle)
-    layer_pairs: list[tuple[str, str]] = []
-    if wi_before:
-        layer_pairs.append(("【世界信息-前置】", wi_before))
-    if related_text:
-        layer_pairs.append(("", related_text))
-    for title, content in [
-        ("【角色底稿】", runtime_bundle.get("base_profile") or _get_field(character, "description", "")),
-        ("【性格与表达风格】", runtime_bundle.get("personality") or ""),
-        ("【当前关系与剧情场景】", runtime_bundle.get("scenario") or ""),
-        ("【世界规则/补充设定】", runtime_bundle.get("world_rules") or ""),
-        ("【示例对话风格参考】", runtime_bundle.get("examples") or ""),
-    ]:
-        if content:
-            layer_pairs.append((title, content))
-    alt_text = _alternate_samples_text(runtime_bundle.get("alternate_greetings") or [])
-    if alt_text:
-        layer_pairs.append(("", alt_text))
-    if wi_after:
-        layer_pairs.append(("【世界信息-后置】", wi_after))
 
-    primary = runtime_bundle.get("primary_system_prompt") or _get_field(character, "system_prompt", "")
-    system_text = _build_single_system_prompt(primary, layer_pairs, budget=budget)
-    if system_text:
-        messages.append({"role": "system", "content": system_text})
+def _select_mode_builder(card_type: str, asset_type: str):
+    if card_type == "scenario":
+        return _build_scenario_mode_messages
+    if card_type == "world":
+        return _build_system_mode_messages
+    if asset_type == "character":
+        return _build_character_mode_messages
+    if asset_type == "scenario":
+        return _build_scenario_mode_messages
+    if asset_type in {"world", "system"}:
+        return _build_system_mode_messages
+    return _build_hybrid_mode_messages
 
-    _append_memory_and_history(messages, memory_summary, history, recent_message_window, depth_prompt=depth_prompt, budget=budget)
-    _append_post_history_then_user(messages, runtime_bundle.get("post_history_rules") or "", last_user_msg, budget=budget)
-    return messages
 
 
 def _expand_bundle_macros(bundle: dict[str, Any], char_name: str, user_name: str) -> dict[str, Any]:
@@ -771,186 +885,6 @@ def resolve_world_info(
     return before_list, after_list
 
 
-def get_character_memories_from_db(
-    character_id: str,
-    context_text: str,
-    budget: "TokenBudget | None" = None,
-) -> tuple[list[str], list[str]]:
-    """
-    从数据库查询角色的记忆条目，并根据上下文文本匹配关键词。
-    
-    参数：
-        character_id: 角色ID
-        context_text: 用于匹配的上下文文本（用户最新消息 + 最近对话）
-        budget: TokenBudget 实例，用于控制返回的条目数量和长度
-    
-    返回：
-        (before_list, after_list) - 分别对应 position='before' 和 'after' 的匹配内容列表
-    """
-    # 延迟导入，避免循环依赖
-    from database import get_conn
-    
-    conn = get_conn()
-    try:
-        # 获取所有启用的记忆条目
-        rows = conn.execute(
-            """
-            SELECT keywords, trigger_logic, content, position, priority
-            FROM character_memories
-            WHERE character_id = %s AND is_active = 1
-            ORDER BY priority ASC, id ASC
-            """,
-            (character_id,),
-        ).fetchall()
-        
-        if not rows or not context_text:
-            return [], []
-        
-        max_triggered = _wi_max_triggered(budget)
-        max_per_entry = _wi_max_chars_per_entry(budget)
-        wi_max = (budget or _DEFAULT_BUDGET).wi_max_chars()
-        
-        ctx_lower = context_text.lower()
-        triggered = []
-        
-        for row in rows:
-            keywords = [k.strip().lower() for k in row["keywords"].split(",") if k.strip()]
-            if not keywords:
-                continue
-            
-            trigger_logic = row["trigger_logic"] or "any"
-            matched = []
-            
-            if trigger_logic == "all":
-                # 所有关键词都必须匹配
-                if all(kw in ctx_lower for kw in keywords):
-                    matched = keywords
-            else:
-                # 任意关键词匹配
-                matched = [kw for kw in keywords if kw in ctx_lower]
-            
-            if matched:
-                triggered.append({
-                    "content": row["content"],
-                    "position": row["position"] or "before",
-                    "priority": row["priority"] or 100,
-                })
-        
-        # 按优先级排序并限制数量
-        triggered.sort(key=lambda e: e["priority"])
-        triggered = triggered[:max_triggered]
-        
-        before_list = []
-        after_list = []
-        wi_used = 0
-        
-        for entry in triggered:
-            content = entry["content"].strip()
-            if not content:
-                continue
-            
-            # 截断过长的内容
-            if len(content) > max_per_entry:
-                content = content[:max_per_entry].rstrip() + "\n…（内容已截断）"
-            
-            # 检查 WI 预算
-            if wi_used + len(content) > wi_max:
-                break
-            
-            wi_used += len(content)
-            
-            if entry["position"] == "after":
-                after_list.append(content)
-            else:
-                before_list.append(content)
-        
-        return before_list, after_list
-    finally:
-        conn.close()
-
-
-def get_character_post_rules_from_db(
-    character_id: str,
-    storyline_id: int | None = None,
-    story_phase: str | None = None,
-    budget: "TokenBudget | None" = None,
-) -> list[str]:
-    """
-    从数据库查询角色的后置规则。
-    
-    后置规则在 AI 回复后应用，用于控制输出格式、过滤内容等。
-    支持按剧情线和关系阶段过滤。
-    
-    参数：
-        character_id: 角色ID
-        storyline_id: 当前剧情线ID（可选，用于过滤）
-        story_phase: 当前关系阶段（可选，用于过滤）
-        budget: TokenBudget 实例，用于控制返回的规则长度
-    
-    返回：
-        匹配的后置规则内容列表（已按优先级排序）
-    """
-    # 延迟导入，避免循环依赖
-    from database import get_conn
-    
-    conn = get_conn()
-    try:
-        # 构建查询条件
-        conditions = ["character_id = %s", "is_active = 1"]
-        params: list[Any] = [character_id]
-
-        #  storyline_id 过滤：规则未指定 storyline_id（通用）或匹配当前 storyline_id
-        if storyline_id is not None:
-            conditions.append("(storyline_id IS NULL OR storyline_id = %s)")
-            params.append(storyline_id)
-
-        # story_phase 过滤：规则未指定 story_phase（通用，NULL或空字符串）或匹配当前 story_phase
-        if story_phase:
-            conditions.append("(story_phase IS NULL OR story_phase = '' OR story_phase = %s)")
-            params.append(story_phase)
-        
-        where_clause = " AND ".join(conditions)
-        
-        rows = conn.execute(
-            f"""
-            SELECT content, priority
-            FROM character_post_rules
-            WHERE {where_clause}
-            ORDER BY priority ASC, id ASC
-            """,
-            tuple(params),
-        ).fetchall()
-        
-        if not rows:
-            return []
-        
-        # 计算预算限制
-        max_chars = budget.reserve_max_chars() if budget is not None else _LAYER_MAX_CHARS
-        
-        rules = []
-        total_chars = 0
-        
-        for row in rows:
-            content = row["content"].strip()
-            if not content:
-                continue
-            
-            # 检查是否超出预算
-            if total_chars + len(content) > max_chars:
-                # 尝试截断最后一条
-                remaining = max_chars - total_chars
-                if remaining > 100:  # 至少保留100字符
-                    rules.append(content[:remaining].rstrip() + "\n…（内容已截断）")
-                break
-            
-            total_chars += len(content)
-            rules.append(content)
-        
-        return rules
-    finally:
-        conn.close()
-
-
 def build_layered_chat_messages(
     character: Any,
     recent_messages: list[dict[str, str]],
@@ -999,8 +933,15 @@ def build_layered_chat_messages(
     )
     
     # 1. 从数据库查询记忆条目（新的角色配置系统）
+    from services.memory_service import fetch_character_memories  # 延迟导入避免循环依赖
     char_id = _get_field(character, "id", "")
-    db_before, db_after = get_character_memories_from_db(char_id, ctx_text, budget=_budget)
+    _b = _budget or _DEFAULT_BUDGET
+    db_before, db_after = fetch_character_memories(
+        char_id, ctx_text,
+        max_triggered=_wi_max_triggered(_budget),
+        max_per_entry=_wi_max_chars_per_entry(_budget),
+        wi_max=_b.wi_max_chars(),
+    )
     
     # 2. 从角色卡解析的 conditional_entries（兼容旧的角色卡导入）
     conditional_entries = runtime_bundle.get("conditional_entries") or []
@@ -1068,11 +1009,12 @@ def build_layered_chat_messages(
     # ── 后置规则动态注入 ──────────────────────────────────────────────────
     # 从数据库查询后置规则，合并到 runtime_bundle 的 post_history_rules 中
     # 后置规则放在历史记录后，用于控制输出格式、过滤内容等
-    db_post_rules = get_character_post_rules_from_db(
+    from services.memory_service import fetch_character_post_rules  # 延迟导入避免循环依赖
+    db_post_rules = fetch_character_post_rules(
         char_id,
         storyline_id=character_state.get("storyline_id") if character_state else None,
         story_phase=character_state.get("story_phase") if character_state else None,
-        budget=_budget,
+        max_chars=_budget.reserve_max_chars() if _budget is not None else _LAYER_MAX_CHARS,
     )
     
     if db_post_rules:
@@ -1089,28 +1031,11 @@ def build_layered_chat_messages(
     # 将当前好感度/阶段/心情以紧凑文本注入到 world_info_after（放在设定末尾，
     # 让 AI 每轮都能看到"当前关系快照"，并据此决定是否输出 [STATE_UPDATE]）。
     if character_state:
-        _story_phase_labels = {
-            "stranger": "陌生人",
-            "acquaintance": "普通朋友",
-            "friend": "好友",
-            "lover": "恋人",
-        }
-        _mood_labels = {
-            "neutral": "平静",
-            "happy": "开心",
-            "warm": "温柔",
-            "melting": "心动",
-            "cold": "冷淡",
-            "angry": "生气",
-            "sad": "难过",
-            "shy": "害羞",
-            "surprised": "惊讶",
-        }
         affection = character_state.get("affection", 30)
         phase = character_state.get("story_phase", "stranger")
         mood = character_state.get("mood", "neutral")
-        phase_label = _story_phase_labels.get(phase, phase)
-        mood_label = _mood_labels.get(mood, mood)
+        phase_label = _STORY_PHASE_LABELS.get(phase, phase)
+        mood_label = _MOOD_LABELS.get(mood, mood)
         custom_vars = character_state.get("custom_vars") or {}
 
         state_lines = [
@@ -1123,31 +1048,7 @@ def build_layered_chat_messages(
             for k, v in list(custom_vars.items())[:5]:  # 最多显示5个自定义变量
                 state_lines.append(f"- {k}：{v}")
 
-        state_lines.extend([
-            "",
-            "【状态更新指令（重要）】",
-            "每次回复结束时，如果发生了值得记录的互动，必须在回复最后附上状态标签。",
-            "只需报告【事件名称】，系统会自动计算实际分数（防止滥用）。",
-            "",
-            "上报格式：",
-            "[STATE_UPDATE]{\"event\":\"事件名\",\"mood\":\"心情\"}[/STATE_UPDATE]",
-            "",
-            "可用事件名（根据本轮对话内容选最贴切的一个）：",
-            "  正向事件：deep_conversation（深聊）/ light_chat（日常闲聊）/ compliment（夸奖）",
-            "             gift（送礼）/ help（帮助解决问题）/ shared_secret（分享秘密）",
-            "             comfort（安慰情绪）/ flirt（调情撒娇）/ date（约会活动）",
-            "             first_hug（第一次拥抱）/ kiss（亲吻）/ confession（表白）",
-            "  负向事件：argument（争吵）/ rude（无礼言行）/ ignore（漠视敷衍）",
-            "             lie（说谎）/ betray（背叛）/ insult（侮辱）",
-            "",
-            "可用心情值：neutral / happy / warm / melting / cold / angry / sad / shy / surprised",
-            "关系阶段仅在里程碑时填写（story_phase），平时省略：stranger→acquaintance→friend→lover",
-            "",
-            "示例：",
-            "  [STATE_UPDATE]{\"event\":\"deep_conversation\",\"mood\":\"warm\"}[/STATE_UPDATE]",
-            "  [STATE_UPDATE]{\"event\":\"argument\",\"mood\":\"cold\",\"story_phase\":\"stranger\"}[/STATE_UPDATE]",
-            "  若本轮无特殊互动，不需要输出标签。",
-        ])
+        state_lines.extend(_STATE_UPDATE_INSTRUCTION)
 
         state_snapshot = "\n".join(state_lines)
         # 状态快照字数保护：上限为 WI 预算的 15%，但保证至少 1000 字符
@@ -1157,7 +1058,7 @@ def build_layered_chat_messages(
             # 优先截断自定义变量部分，保留核心状态信息
             truncated_lines = state_lines[:6]  # 保留标题和核心状态（好感度、阶段、心情）
             truncated_lines.append("…（自定义变量已省略）")
-            truncated_lines.extend(state_lines[state_lines.index("【状态更新指令（重要）】"):])  # 保留指令部分
+            truncated_lines.extend(_STATE_UPDATE_INSTRUCTION)  # 保留指令部分
             state_snapshot = "\n".join(truncated_lines)
         
         # 状态快照优先级最高：放在 world_info_after 的最前面
@@ -1168,27 +1069,15 @@ def build_layered_chat_messages(
         else:
             runtime_bundle["world_info_after"] = state_snapshot
 
-    # ── 产品层 card_type 路由（优先级高于 asset_type）─────────────────────
-    # card_type 是产品侧手动标注，语义比导卡自动解析的 asset_type 更可靠
-    _card_type_builders = {
-        "scenario": _build_scenario_mode_messages,  # 旁白+NPC+状态机
-        "world":    _build_system_mode_messages,    # 纯知识库，不扮演角色
-        # intimate: 不强制，走下方 asset_type 路由
-    }
-    if card_type in _card_type_builders:
-        builder = _card_type_builders[card_type]
-        return builder(runtime_bundle, character, recent_messages, memory_summary, recent_message_window, budget=_budget)
-
-    # ── 导卡层 asset_type 路由（intimate / 未标注 card_type 时走这里）──────
-    builders = {
-        "character": _build_character_mode_messages,
-        "system": _build_system_mode_messages,
-        "scenario": _build_scenario_mode_messages,
-        "world": _build_system_mode_messages,
-        "hybrid": _build_hybrid_mode_messages,
-    }
-    builder = builders.get(asset_type, _build_hybrid_mode_messages)
-    return builder(runtime_bundle, character, recent_messages, memory_summary, recent_message_window, budget=_budget)
+    builder = _select_mode_builder(card_type, asset_type)
+    return builder(
+        runtime_bundle,
+        character,
+        recent_messages,
+        memory_summary,
+        recent_message_window,
+        budget=_budget,
+    )
 
 
 def build_memory_summary_messages(

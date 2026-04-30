@@ -145,7 +145,7 @@ function renderMemories() {
       <div class="item-footer">
         <span class="item-meta">${m.comment || '无备注'}</span>
         <div class="item-actions">
-          <button class="item-btn edit" onclick="editMemory('${m.id}')">编辑</button>
+          <button class="item-btn edit" data-action="edit-memory" data-id="${escHtml(String(m.id))}">编辑</button>
         </div>
       </div>
     </div>
@@ -273,7 +273,7 @@ function renderGreetings() {
       <div class="item-footer">
         <span class="item-meta">使用 ${g.use_count || 0} 次</span>
         <div class="item-actions">
-          <button class="item-btn edit" onclick="editGreeting('${g.id}')">编辑</button>
+          <button class="item-btn edit" data-action="edit-greeting" data-id="${escHtml(String(g.id))}">编辑</button>
         </div>
       </div>
     </div>
@@ -283,7 +283,7 @@ function renderGreetings() {
 function filterGreetings(phase) {
   AdminState.currentGreetingFilter = phase;
   document.querySelectorAll('.phase-btn').forEach(b => {
-    b.classList.toggle('active', b.getAttribute('onclick').includes(`'${phase}'`));
+    b.classList.toggle('active', b.dataset.phase === phase);
   });
   renderGreetings();
 }
@@ -403,7 +403,7 @@ function renderStorylines() {
       <div class="item-footer">
         <span class="item-meta">解锁好感度: ${s.unlock_score} | 排序: ${s.sort_order}</span>
         <div class="item-actions">
-          <button class="item-btn edit" onclick="editStoryline('${s.id}')">编辑</button>
+          <button class="item-btn edit" data-action="edit-storyline" data-id="${escHtml(String(s.id))}">编辑</button>
         </div>
       </div>
     </div>
@@ -560,7 +560,7 @@ function renderCategories() {
       <div class="item-footer">
         <span class="item-meta">创建于 ${formatDate(c.created_at)}</span>
         <div class="item-actions">
-          <button class="item-btn edit" onclick="editCategory('${c.id}')">编辑</button>
+          <button class="item-btn edit" data-action="edit-category" data-id="${escHtml(String(c.id))}">编辑</button>
         </div>
       </div>
     </div>
@@ -679,7 +679,7 @@ function renderPostRules() {
       <div class="item-footer">
         <span class="item-meta">${r.storyline_id ? '绑定剧情线' : '通用规则'}</span>
         <div class="item-actions">
-          <button class="item-btn edit" onclick="editPostRule('${r.id}')">编辑</button>
+          <button class="item-btn edit" data-action="edit-postrule" data-id="${escHtml(String(r.id))}">编辑</button>
         </div>
       </div>
     </div>
@@ -853,7 +853,7 @@ function renderEvents() {
         <div class="item-footer">
           <span class="item-meta">${unlocks ? '事件触发后将解锁以上内容' : '这个事件目前没有配置解锁内容'}</span>
           <div class="item-actions">
-            <button class="item-btn edit" onclick="editEvent('${e.id}')">编辑</button>
+            <button class="item-btn edit" data-action="edit-event" data-id="${escHtml(String(e.id))}">编辑</button>
           </div>
         </div>
       </div>

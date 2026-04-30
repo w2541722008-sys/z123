@@ -177,7 +177,7 @@ function renderAffectionRuleEditor(value) {
           <span>启用该角色的好感度规则</span>
         </label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="btn btn-ghost" onclick="resetAffectionRulesEditor()">↺ 一键恢复默认</button>
+          <button type="button" class="btn btn-ghost" data-action="reset-affection-rules">↺ 一键恢复默认</button>
         </div>
       </div>
       <div class="affection-grid">
@@ -197,12 +197,12 @@ function renderAffectionRuleEditor(value) {
             <div class="affection-custom-row">
               <input type="text" data-affection-custom-key value="${escHtml(key)}" placeholder="事件名，例如：study_together" />
               <input type="number" data-affection-custom-score value="${score}" placeholder="分值" />
-              <button type="button" class="btn btn-ghost" onclick="removeAffectionCustomRow(this)">删除</button>
+              <button type="button" class="btn btn-ghost" data-action="remove-affection-custom-row">删除</button>
             </div>
           `).join('') : ''}
         </div>
         <div style="margin-top:10px;">
-          <button type="button" class="btn btn-ghost" onclick="addAffectionCustomRow()">+ 新增自定义事件</button>
+          <button type="button" class="btn btn-ghost" data-action="add-affection-custom-row">+ 新增自定义事件</button>
         </div>
       </div>
       <div class="affection-note">
@@ -225,7 +225,7 @@ function addAffectionCustomRow(key = '', score = '') {
   row.innerHTML = `
     <input type="text" data-affection-custom-key value="${escHtml(key)}" placeholder="事件名，例如：study_together" oninput="syncAffectionRulesEditor()" />
     <input type="number" data-affection-custom-score value="${score}" placeholder="分值" oninput="syncAffectionRulesEditor()" />
-    <button type="button" class="btn btn-ghost" onclick="removeAffectionCustomRow(this)">删除</button>
+    <button type="button" class="btn btn-ghost" data-action="remove-affection-custom-row">删除</button>
   `;
   list.appendChild(row);
   syncAffectionRulesEditor();
@@ -410,8 +410,8 @@ function renderEditPanel(c) {
   }
 
   html += `<div class="save-bar">
-    <button class="btn btn-success" onclick="saveChar()">💾 保存修改</button>
-    <button class="btn btn-danger" onclick="deleteCurrentCharacter()">🗑️ 删除角色</button>
+    <button class="btn btn-success" data-action="save-char">💾 保存修改</button>
+    <button class="btn btn-danger" data-action="delete-current-character">🗑️ 删除角色</button>
     <span id="save-status" class="save-status"></span>
   </div>
   </div>`;

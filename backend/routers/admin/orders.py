@@ -12,11 +12,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from auth import CurrentUser, get_admin_user, get_current_user
 from config import utc_now_iso
 from database import get_conn
+from services.plan_service import plan_display_name
 
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
-from ._shared import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
+from ._shared import (
+    _ADMIN_EDITABLE_FIELDS,
+    _build_where_clause,
+    _count_with_where,
+    _normalize_pagination,
+    _transaction,
+    _validate_pagination_params,
+    _write_audit_log,
+)
 
 @router.get("/admin/orders")
 def admin_list_membership_orders(
@@ -34,11 +43,7 @@ def admin_list_membership_orders(
         page: 页码（从 1 开始）
         limit: 每页条数（最多 100）
     """
-    # 验证分页参数
-    if page < 1:
-        raise HTTPException(status_code=400, detail="page参数必须大于等于1")
-    if limit < 1 or limit > 100:
-        raise HTTPException(status_code=400, detail="limit参数必须在1-100之间")
+    _validate_pagination_params(page, limit, max_limit=100)
     
     conn = get_conn()
     try:
@@ -53,18 +58,18 @@ def admin_list_membership_orders(
             conditions.append("o.status = %s")
             params.append(status)
 
-        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        where_clause = _build_where_clause(conditions)
 
         # 查询总数
-        count_row = conn.execute(
-            f"SELECT COUNT(*) AS total FROM membership_orders o LEFT JOIN users u ON u.id = o.user_id {where_clause}",
-            tuple(params),
-        ).fetchone()
-        total = count_row["total"]
+        total = _count_with_where(
+            conn,
+            "FROM membership_orders o LEFT JOIN users u ON u.id = o.user_id",
+            where_clause,
+            params,
+        )
 
         # 分页
-        offset = (max(1, page) - 1) * min(limit, 100)
-        safe_limit = min(limit, 100)
+        offset, safe_limit = _normalize_pagination(page, limit, max_limit=100)
 
         rows = conn.execute(
             f"""
@@ -202,6 +207,5 @@ def admin_get_order(order_id: int) -> dict[str, Any]:
         }
     finally:
         conn.close()
-
 
 

@@ -16,7 +16,7 @@ from services.db_monitor import get_stats, reset_stats
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
-from ._shared import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
+from ._shared import _ADMIN_EDITABLE_FIELDS, _normalize_pagination, _transaction, _write_audit_log
 
 @router.get("/admin/db-stats")
 def get_db_stats() -> dict[str, Any]:
@@ -175,37 +175,6 @@ def admin_dashboard_trend(days: int = 7) -> dict[str, Any]:
 # ============================================================
 # 操作日志
 # ============================================================
-def _write_audit_log(
-    conn: Any,
-    operator_id: str,
-    operator_email: str,
-    action: str,
-    target_type: str,
-    target_id: str | None = None,
-    detail: dict[str, Any] | None = None,
-) -> None:
-    """
-    内部函数：写入一条操作日志。
-
-    注意：此函数不自行 commit，调用方负责提交事务。
-    """
-    conn.execute(
-        """
-        INSERT INTO admin_audit_logs
-        (operator_id, operator_email, action, target_type, target_id, detail, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
-            operator_id,
-            operator_email,
-            action,
-            target_type,
-            target_id,
-            json.dumps(detail or {}, ensure_ascii=False),
-            utc_now_iso(),
-        ),
-    )
-
 
 @router.get("/admin/audit-logs")
 def admin_list_audit_logs(
@@ -243,8 +212,7 @@ def admin_list_audit_logs(
         ).fetchone()
         total = count_row["total"]
 
-        offset = (max(1, page) - 1) * min(limit, 200)
-        safe_limit = min(limit, 200)
+        offset, safe_limit = _normalize_pagination(page, limit, max_limit=200)
 
         rows = conn.execute(
             f"""
@@ -279,3 +247,17 @@ def admin_list_audit_logs(
     finally:
         conn.close()
 
+
+@router.get("/admin/media-missing")
+def admin_media_missing(refresh: bool = Query(False, description="是否强制刷新媒体健康缓存")) -> dict[str, Any]:
+    from main import _check_media_health
+
+    media_health = _check_media_health(force=refresh)
+    samples = list(media_health.get("samples") or [])
+    missing_count = int(media_health.get("missing_count") or 0)
+    return {
+        "ok": bool(media_health.get("ok")),
+        "missing_count": missing_count,
+        "items": samples,
+        "truncated": missing_count > len(samples),
+    }

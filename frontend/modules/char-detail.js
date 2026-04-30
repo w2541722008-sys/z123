@@ -12,10 +12,12 @@
        ? (rawCover.startsWith('/') ? SERVER_ORIGIN + rawCover : rawCover)
        : null;
      if (imgSrc) {
-       cover.style.backgroundImage = `url(${imgSrc})`;
-       cover.style.backgroundSize = 'cover';
-       cover.style.backgroundPosition = 'center top';
-     } else {
+      // 使用 textContent 安全设置 URL，避免 CSS 注入
+      const safeImgSrc = imgSrc.replace(/'/g, "\\'").replace(/"/g, '\\"');
+      cover.style.backgroundImage = `url('${safeImgSrc}')`;
+      cover.style.backgroundSize = 'cover';
+      cover.style.backgroundPosition = 'center top';
+    } else {
        cover.style.backgroundImage = '';
        cover.style.backgroundPosition = '';
      }
@@ -39,11 +41,21 @@
      const cardType = char.card_type || 'intimate';
      const typeMeta = TYPE_META[cardType] || TYPE_META.intimate;
 
-     // 标签行：类型徽章 + 角色原有标签
-     const typeBadgeHtml = `<span class="char-detail-tag detail-type-badge ${cardType}">${typeMeta.icon} ${typeMeta.label}</span>`;
-     document.getElementById('detail-tags').innerHTML =
-       typeBadgeHtml +
-       (char.tags || []).map(t => `<span class="char-detail-tag">${t}</span>`).join('');
+     // 标签行：类型徽章 + 角色原有标签（使用 textContent 安全渲染）
+    const tagsContainer = document.getElementById('detail-tags');
+    tagsContainer.innerHTML = '';
+    
+    const typeBadge = document.createElement('span');
+    typeBadge.className = `char-detail-tag detail-type-badge ${cardType}`;
+    typeBadge.textContent = `${typeMeta.icon} ${typeMeta.label}`;
+    tagsContainer.appendChild(typeBadge);
+    
+    (char.tags || []).forEach(t => {
+      const tag = document.createElement('span');
+      tag.className = 'char-detail-tag';
+      tag.textContent = t;
+      tagsContainer.appendChild(tag);
+    });
 
      // 「关于他」：用 subtitle（自动提取的简短介绍），而不是超长人设档案
      document.getElementById('detail-bio').textContent = char.subtitle || char.bio?.slice(0, 120) || '';

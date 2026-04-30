@@ -1,62 +1,52 @@
-# 管理后台使用指南
+# 管理后台指南
 
-## 📍 统一入口
+## 入口
 
-**唯一管理后台入口：** `/frontend/admin/index.html`
+- 服务端入口：`/admin.html`
+- 静态入口：`/frontend/admin/index.html`
 
-访问地址：`http://your-domain.com/frontend/admin/index.html`
+两者均指向同一后台页面资源，线上建议使用 `/admin.html`。
 
-## 🗂️ 文件结构
+## 前端模块结构
 
-```
-frontend/admin/
-├── index.html          # 主入口文件
-├── style.css           # 样式文件
-└── js/
-    ├── main.js         # 主逻辑
-    ├── api.js          # API 调用
-    ├── state.js        # 状态管理
-    ├── utils.js        # 工具函数
-    ├── dashboard.js    # 仪表盘
-    ├── audit-log.js    # 操作日志
-    ├── membership.js   # 会员管理
-    ├── char-editor.js  # 角色编辑器
-    ├── char-advanced.js # 角色高级设置
-    └── prompt-preview.js # 提示词预览
-```
+当前后台 JS 模块共 17 个（`frontend/admin/js/`）：
 
-## ✨ 功能特性
+- `utils.js`
+- `api.js`
+- `state.js`
+- `config.js`
+- `normalizers.js`
+- `main.js`
+- `bootstrap.js`
+- `actions.js`
+- `overview.js`
+- `char-list.js`
+- `char-crud.js`
+- `char-editor.js`
+- `char-advanced.js`
+- `membership.js`
+- `dashboard.js`
+- `audit-log.js`
+- `prompt-preview.js`
 
-### 1. 仪表盘
-- 实时统计数据
-- 用户增长趋势
-- 系统健康状态
+## 权限模型
 
-### 2. 用户管理
-- 用户列表（分页、搜索）
-- 批量操作（启用/禁用、删除）
-- 用户详情弹窗
-- 导出 CSV
+- 后台接口统一受管理员依赖保护：`Depends(get_admin_user)`
+- 非管理员访问后台 API 会返回 403
 
-### 3. 会员管理
-- 会员列表（搜索、筛选）
-- 批量设置会员档位
-- 订单详情查看
+## 关键功能区
 
-### 4. 角色管理
-- 角色编辑器
-- 高级设置
-- 提示词预览
+- 仪表盘：统计与趋势
+- 用户与会员：查询、编辑、批量档位
+- 角色管理：基础信息、开场白、记忆、剧情线、规则、事件
+- 审计日志：后台操作追踪
 
-### 5. 操作日志
-- 完整的操作记录
-- 日志筛选和搜索
+## 接口前缀
 
-## 📝 历史说明
+- 后台 API 统一挂载在 `/api/admin/*`
 
-- **2026-04-01**: 统一管理后台入口，废弃根目录的 `admin.html`
-- 旧版 `admin.html` 已备份为 `admin.html.backup`（功能较简单，不推荐使用）
+## 开发注意
 
-## 🚀 部署注意事项
-
-确保 Web 服务器配置正确映射 `/frontend/admin/` 目录下的所有静态资源。
+- 交互事件统一走 `data-action` + 委托分发
+- 新增 action 需通过 `tests/check_admin_actions.js --strict`
+- 页面脚本顺序在 `frontend/admin/index.html` 已定义，调整时需同步验证

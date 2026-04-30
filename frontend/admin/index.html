@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>角色卡管理后台</title>
-<link rel="stylesheet" href="/frontend/admin/style.css">
+<link rel="stylesheet" href="/api/frontend/admin/style.css?v=20260424g">
 </head>
 <body>
 <div class="topbar">
   <h1>🎭 角色卡管理后台</h1>
   <span class="subtitle">本地开发专用</span>
   <div class="topbar-right">
-    <button class="btn btn-ghost" onclick="loadCharList()">🔄 刷新列表</button>
+    <button class="btn btn-ghost" data-action="load-char-list">🔄 刷新列表</button>
   </div>
 </div>
 <div class="layout">
@@ -19,17 +19,17 @@
   <div class="sidebar">
     <div class="sidebar-header" style="display:flex;justify-content:space-between;align-items:center;">
       <span>角色列表</span>
-      <button class="btn btn-primary" style="padding:4px 12px;font-size:11px;" onclick="openCreateCharModal()">+ 新建角色</button>
+      <button class="btn btn-primary" style="padding:4px 12px;font-size:11px;" data-action="open-create-char-modal">+ 新建角色</button>
     </div>
     <div style="padding:8px 12px 12px;border-bottom:1px solid #2a2a3a;display:flex;flex-direction:column;gap:8px;">
-      <input type="search" id="char-filter-search" placeholder="搜索名称/ID…" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid #2a2a3a;background:#0f0f13;color:#e8e8f0;font-size:13px;" oninput="renderCharListSidebar()" />
+      <input type="search" id="char-filter-search" placeholder="搜索名称/ID…" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid #2a2a3a;background:#0f0f13;color:#e8e8f0;font-size:13px;" />
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <select id="char-filter-visible" style="flex:1;min-width:100px;padding:6px 8px;border-radius:8px;border:1px solid #2a2a3a;background:#0f0f13;color:#e8e8f0;font-size:12px;" onchange="renderCharListSidebar()">
+        <select id="char-filter-visible" style="flex:1;min-width:100px;padding:6px 8px;border-radius:8px;border:1px solid #2a2a3a;background:#0f0f13;color:#e8e8f0;font-size:12px;">
           <option value="all">全部可见性</option>
           <option value="visible">仅可见</option>
           <option value="hidden">仅隐藏</option>
         </select>
-        <select id="char-filter-type" style="flex:1;min-width:100px;padding:6px 8px;border-radius:8px;border:1px solid #2a2a3a;background:#0f0f13;color:#e8e8f0;font-size:12px;" onchange="renderCharListSidebar()">
+        <select id="char-filter-type" style="flex:1;min-width:100px;padding:6px 8px;border-radius:8px;border:1px solid #2a2a3a;background:#0f0f13;color:#e8e8f0;font-size:12px;">
           <option value="all">全部类型</option>
           <option value="intimate">对话陪伴</option>
           <option value="scenario">剧情沙盒</option>
@@ -47,12 +47,12 @@
   <div class="main">
     <!-- 标签页 -->
     <div class="tabs">
-      <button class="tab-btn active" data-tab="edit" onclick="switchTab('edit')">✏️ 编辑角色</button>
-      <button class="tab-btn" data-tab="advanced" onclick="switchTab('advanced')">⚙️ 高级配置</button>
-      <button class="tab-btn" data-tab="preview" onclick="switchTab('preview')">🧾 Prompt预览</button>
-      <button class="tab-btn" data-tab="membership" onclick="switchTab('membership')">👥 会员管理</button>
-      <button class="tab-btn" data-tab="dashboard" onclick="switchTab('dashboard')">📊 仪表盘</button>
-      <button class="tab-btn" data-tab="auditlog" onclick="switchTab('auditlog')">🧾 操作日志</button>
+      <button class="tab-btn active" data-tab="edit">✏️ 编辑角色</button>
+      <button class="tab-btn" data-tab="advanced">⚙️ 高级配置</button>
+      <button class="tab-btn" data-tab="preview">🧾 Prompt预览</button>
+      <button class="tab-btn" data-tab="membership">👥 会员管理</button>
+      <button class="tab-btn" data-tab="dashboard">📊 仪表盘</button>
+      <button class="tab-btn" data-tab="auditlog">🧾 操作日志</button>
     </div>
 
     <div id="char-overview" class="char-overview" style="display:none"></div>
@@ -75,13 +75,13 @@
         <div id="advanced-guide-card" class="guide-card"></div>
         <!-- 高级配置子标签页 -->
         <div class="sub-tabs">
-          <button class="sub-tab-btn active" onclick="switchAdvancedTab('memories')">🧠 记忆条目</button>
-          <button class="sub-tab-btn" onclick="switchAdvancedTab('categories')">🏷️ 记忆分类</button>
-          <button class="sub-tab-btn" onclick="switchAdvancedTab('greetings')">👋 开场白</button>
-          <button class="sub-tab-btn" onclick="switchAdvancedTab('storylines')">📖 剧情线</button>
-          <button class="sub-tab-btn" onclick="switchAdvancedTab('postrules')">📝 后置规则</button>
-          <button class="sub-tab-btn" onclick="switchAdvancedTab('events')">🎭 剧情事件</button>
-          <button class="sub-tab-btn" onclick="switchAdvancedTab('test')">🧪 关键词测试</button>
+          <button class="sub-tab-btn active" data-action="switch-advanced-tab" data-tab="memories">🧠 记忆条目</button>
+          <button class="sub-tab-btn" data-action="switch-advanced-tab" data-tab="categories">🏷️ 记忆分类</button>
+          <button class="sub-tab-btn" data-action="switch-advanced-tab" data-tab="greetings">👋 开场白</button>
+          <button class="sub-tab-btn" data-action="switch-advanced-tab" data-tab="storylines">📖 剧情线</button>
+          <button class="sub-tab-btn" data-action="switch-advanced-tab" data-tab="postrules">📝 后置规则</button>
+          <button class="sub-tab-btn" data-action="switch-advanced-tab" data-tab="events">🎭 剧情事件</button>
+          <button class="sub-tab-btn" data-action="switch-advanced-tab" data-tab="test">🧪 关键词测试</button>
         </div>
 
 
@@ -89,7 +89,7 @@
         <div id="advanced-memories" class="advanced-panel">
           <div class="panel-header">
             <h3>🧠 记忆条目管理（World Info）</h3>
-            <button class="btn btn-primary" onclick="openMemoryModal()">+ 新增条目</button>
+            <button class="btn btn-primary" data-action="open-memory-modal">+ 新增条目</button>
           </div>
           <div class="panel-desc">当用户消息命中关键词时，这段内容会被临时注入到AI的上下文里。适合放人物背景、关系线索、世界规则和行为禁忌。</div>
           <div id="memories-list" class="items-list"></div>
@@ -99,15 +99,15 @@
         <div id="advanced-greetings" class="advanced-panel" style="display:none">
           <div class="panel-header">
             <h3>👋 多阶段开场白</h3>
-            <button class="btn btn-primary" onclick="openGreetingModal()">+ 新增开场白</button>
+            <button class="btn btn-primary" data-action="open-greeting-modal">+ 新增开场白</button>
           </div>
           <div class="panel-desc">用户首次进入、或点击"清空聊天"重新开始时，系统会根据当前关系阶段和剧情线，自动挑选最合适的开场白。</div>
           <div class="phase-filter">
-            <button class="phase-btn active" onclick="filterGreetings('all')">全部</button>
-            <button class="phase-btn" onclick="filterGreetings('stranger')">😐 陌生人</button>
-            <button class="phase-btn" onclick="filterGreetings('acquaintance')">🙂 熟人</button>
-            <button class="phase-btn" onclick="filterGreetings('friend')">😊 朋友</button>
-            <button class="phase-btn" onclick="filterGreetings('lover')">❤️ 恋人</button>
+            <button class="phase-btn active" data-action="filter-greetings" data-phase="all">全部</button>
+            <button class="phase-btn" data-action="filter-greetings" data-phase="stranger">😐 陌生人</button>
+            <button class="phase-btn" data-action="filter-greetings" data-phase="acquaintance">🙂 熟人</button>
+            <button class="phase-btn" data-action="filter-greetings" data-phase="friend">😊 朋友</button>
+            <button class="phase-btn" data-action="filter-greetings" data-phase="lover">❤️ 恋人</button>
           </div>
           <div id="greetings-list" class="items-list"></div>
         </div>
@@ -116,7 +116,7 @@
         <div id="advanced-storylines" class="advanced-panel" style="display:none">
           <div class="panel-header">
             <h3>📖 剧情线管理</h3>
-            <button class="btn btn-primary" onclick="openStorylineModal()">+ 新增剧情线</button>
+            <button class="btn btn-primary" data-action="open-storyline-modal">+ 新增剧情线</button>
           </div>
           <div class="panel-desc">把角色的故事拆成几条分支路线（如校园线/职场线）。每条线可以绑定专属的开场白、后置规则和剧情事件。</div>
           <div id="storylines-list" class="items-list"></div>
@@ -126,7 +126,7 @@
         <div id="advanced-categories" class="advanced-panel" style="display:none">
           <div class="panel-header">
             <h3>🏷️ 记忆分类管理</h3>
-            <button class="btn btn-primary" onclick="openCategoryModal()">+ 新增分类</button>
+            <button class="btn btn-primary" data-action="open-category-modal">+ 新增分类</button>
           </div>
           <div class="panel-desc">给记忆条目打标签，方便你自己整理。它不直接影响聊天效果，但会让运营维护轻松很多。</div>
           <div id="categories-list" class="items-list"></div>
@@ -136,7 +136,7 @@
         <div id="advanced-postrules" class="advanced-panel" style="display:none">
           <div class="panel-header">
             <h3>📝 后置规则管理</h3>
-            <button class="btn btn-primary" onclick="openPostRuleModal()">+ 新增规则</button>
+            <button class="btn btn-primary" data-action="open-postrule-modal">+ 新增规则</button>
           </div>
           <div class="panel-desc">放在历史记录之后、AI回复之前，作为最后一道约束提醒。适合放语气要求、格式规范、行为边界——不要把角色设定全堆在这里。</div>
           <div id="postrules-list" class="items-list"></div>
@@ -146,7 +146,7 @@
         <div id="advanced-events" class="advanced-panel" style="display:none">
           <div class="panel-header">
             <h3>🎭 剧情事件管理</h3>
-            <button class="btn btn-primary" onclick="openEventModal()">+ 新增事件</button>
+            <button class="btn btn-primary" data-action="open-event-modal">+ 新增事件</button>
           </div>
           <div class="panel-desc">当用户好感度达到设定阈值时自动触发。建议同时配置"触发时的特殊对话"和"解锁的新内容"，剧情推进更自然。</div>
           <div id="events-list" class="items-list"></div>
@@ -160,7 +160,7 @@
           <div class="panel-desc">输入一句模拟的用户消息，即时测试会触发哪些记忆条目。最适合排查"明明写了设定为什么AI不知道"的问题。</div>
           <div class="test-input-area">
             <textarea id="test-input" rows="4" placeholder="输入测试文本，例如：今天天气真好，我想去公园散步..."></textarea>
-            <button class="btn btn-primary" onclick="testKeywords()">测试匹配</button>
+            <button class="btn btn-primary" data-action="test-keywords">测试匹配</button>
           </div>
           <div id="test-results" class="test-results"></div>
         </div>
@@ -176,8 +176,8 @@
             <div class="hint">这页是给你检查配置用的：AI 实际会收到什么设定、记忆和限制，都能在这里看到。</div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-ghost" onclick="loadPromptPreview()">🔄 刷新预览</button>
-            <button class="btn btn-primary" onclick="copyPromptPreview()">📋 复制</button>
+            <button class="btn btn-ghost" data-action="load-prompt-preview">🔄 刷新预览</button>
+            <button class="btn btn-primary" data-action="copy-prompt-preview">📋 复制</button>
           </div>
         </div>
         <div id="prompt-preview-content">
@@ -191,14 +191,14 @@
         <div class="panel-header" style="margin-bottom:6px;">
           <h3>👥 用户会员管理</h3>
           <div style="display:flex;gap:8px;">
-            <button class="btn btn-ghost" onclick="loadMembershipData()">🔄 刷新</button>
-            <button class="btn btn-ghost" onclick="exportUsersCSV()">📥 导出 CSV</button>
+            <button class="btn btn-ghost" data-action="load-membership-data">🔄 刷新</button>
+            <button class="btn btn-ghost" data-action="export-users-csv">📥 导出 CSV</button>
           </div>
         </div>
         <div class="desc" style="margin-bottom:14px;">支持搜索、筛选、编辑和删除用户。删除会清理该用户所有关联数据。</div>
         <div class="search-bar">
-          <input type="search" id="user-search" placeholder="搜索邮箱或昵称…" oninput="filterUsers()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:13px;" />
-          <select id="user-plan-filter" onchange="filterUsers()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 10px;font-size:13px;">
+          <input type="search" id="user-search" placeholder="搜索邮箱或昵称…" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:13px;" />
+          <select id="user-plan-filter" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 10px;font-size:13px;">
             <option value="">全部档位</option>
             <option value="free">Free</option>
             <option value="vip">VIP</option>
@@ -215,9 +215,9 @@
               <option value="svip">SVIP</option>
             </select>
             <input type="number" id="batch-days" value="30" min="1" max="3650" placeholder="天数" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:6px 10px;font-size:13px;width:80px;" />
-            <button class="btn btn-primary" onclick="batchUpdatePlan()">批量设置档位</button>
+            <button class="btn btn-primary" data-action="batch-update-plan">批量设置档位</button>
           </div>
-          <button class="btn btn-ghost" onclick="clearUserSelection()" style="margin-left:auto;">取消</button>
+          <button class="btn btn-ghost" data-action="clear-user-selection" style="margin-left:auto;">取消</button>
         </div>
         <div id="membership-users-table-wrap">
           <div class="no-results">加载中…</div>
@@ -229,14 +229,14 @@
         <div class="panel-header" style="margin-bottom:6px;">
           <h3>🧾 订单管理</h3>
           <div style="display:flex;gap:8px;">
-            <button class="btn btn-ghost" onclick="loadMembershipData()">🔄 刷新</button>
-            <button class="btn btn-ghost" onclick="exportOrdersCSV()">📥 导出 CSV</button>
+            <button class="btn btn-ghost" data-action="load-membership-data">🔄 刷新</button>
+            <button class="btn btn-ghost" data-action="export-orders-csv">📥 导出 CSV</button>
           </div>
         </div>
         <div class="desc" style="margin-bottom:14px;">支持搜索和状态筛选，点击订单号查看完整详情。</div>
         <div class="search-bar">
-          <input type="search" id="order-search" placeholder="搜索订单号或用户邮箱…" oninput="debouncedFilterOrders()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:13px;" />
-          <select id="order-status-filter" onchange="filterOrders()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 10px;font-size:13px;">
+          <input type="search" id="order-search" placeholder="搜索订单号或用户邮箱…" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 12px;font-size:13px;" />
+          <select id="order-status-filter" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 10px;font-size:13px;">
             <option value="">全部状态</option>
             <option value="pending">待支付</option>
             <option value="paid">已支付</option>
@@ -256,7 +256,7 @@
     <div id="tab-dashboard" style="display:none">
       <div class="panel-header" style="margin-bottom:6px;">
         <h3>📊 运营仪表盘</h3>
-        <button class="btn btn-ghost" onclick="loadDashboard()">🔄 刷新</button>
+        <button class="btn btn-ghost" data-action="load-dashboard">🔄 刷新</button>
       </div>
       <div id="dashboard-content">
         <div class="no-results">加载中…</div>
@@ -266,11 +266,11 @@
     <div id="tab-auditlog" style="display:none">
       <div class="panel-header" style="margin-bottom:6px;">
         <h3>🧾 操作日志</h3>
-        <button class="btn btn-ghost" onclick="loadAuditLogs()">🔄 刷新</button>
+        <button class="btn btn-ghost" data-action="load-audit-logs">🔄 刷新</button>
       </div>
       <div class="desc" style="margin-bottom:14px;">记录管理后台的关键操作，可按类型筛选。</div>
       <div class="search-bar">
-        <select id="audit-action-filter" onchange="loadAuditLogs()" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 10px;font-size:13px;">
+        <select id="audit-action-filter" style="background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#e8e8f0;padding:8px 10px;font-size:13px;">
           <option value="">全部操作</option>
           <option value="delete_user">删除用户</option>
           <option value="edit_user">编辑用户</option>
@@ -289,9 +289,9 @@
 </div>
 
 <!-- 悬浮保存按钮（选中角色后出现，固定右下角，随时可点） -->
-<div id="fab-save">
-  <button onclick="saveChar()" title="保存修改">💾</button>
-  <span class="fab-label" id="fab-label">保存</span>
+<div id="fab-save" data-action="save-char" onclick="saveChar(); return false;">
+  <button type="button" data-action="save-char" title="保存修改" onclick="saveChar(); return false;">💾</button>
+  <span class="fab-label" id="fab-label" data-action="save-char" onclick="saveChar(); return false;">保存</span>
 </div>
 
 <!-- 记忆条目编辑弹窗 -->
@@ -299,7 +299,7 @@
   <div class="modal-content">
     <div class="modal-header">
       <h3 id="memory-modal-title">新增记忆条目</h3>
-      <button class="modal-close" onclick="closeMemoryModal()">&times;</button>
+      <button class="modal-close" data-action="close-memory-modal">&times;</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="memory-id" />
@@ -345,9 +345,9 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeMemoryModal()">取消</button>
-      <button class="btn btn-danger" id="memory-delete-btn" style="display:none" onclick="deleteMemory()">删除</button>
-      <button class="btn btn-success" onclick="saveMemory()">保存</button>
+      <button class="btn btn-ghost" data-action="close-memory-modal">取消</button>
+      <button class="btn btn-danger" id="memory-delete-btn" style="display:none" data-action="delete-memory">删除</button>
+      <button class="btn btn-success" data-action="save-memory">保存</button>
     </div>
   </div>
 </div>
@@ -357,7 +357,7 @@
   <div class="modal-content">
     <div class="modal-header">
       <h3 id="greeting-modal-title">新增开场白</h3>
-      <button class="modal-close" onclick="closeGreetingModal()">&times;</button>
+      <button class="modal-close" data-action="close-greeting-modal">&times;</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="greeting-id" />
@@ -403,9 +403,9 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeGreetingModal()">取消</button>
-      <button class="btn btn-danger" id="greeting-delete-btn" style="display:none" onclick="deleteGreeting()">删除</button>
-      <button class="btn btn-success" onclick="saveGreeting()">保存</button>
+      <button class="btn btn-ghost" data-action="close-greeting-modal">取消</button>
+      <button class="btn btn-danger" id="greeting-delete-btn" style="display:none" data-action="delete-greeting">删除</button>
+      <button class="btn btn-success" data-action="save-greeting">保存</button>
     </div>
   </div>
 </div>
@@ -415,7 +415,7 @@
   <div class="modal-content">
     <div class="modal-header">
       <h3 id="storyline-modal-title">新增剧情线</h3>
-      <button class="modal-close" onclick="closeStorylineModal()">&times;</button>
+      <button class="modal-close" data-action="close-storyline-modal">&times;</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="storyline-id" />
@@ -445,9 +445,9 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeStorylineModal()">取消</button>
-      <button class="btn btn-danger" id="storyline-delete-btn" style="display:none" onclick="deleteStoryline()">删除</button>
-      <button class="btn btn-success" onclick="saveStoryline()">保存</button>
+      <button class="btn btn-ghost" data-action="close-storyline-modal">取消</button>
+      <button class="btn btn-danger" id="storyline-delete-btn" style="display:none" data-action="delete-storyline">删除</button>
+      <button class="btn btn-success" data-action="save-storyline">保存</button>
     </div>
   </div>
 </div>
@@ -457,7 +457,7 @@
   <div class="modal-content">
     <div class="modal-header">
       <h3 id="category-modal-title">新增记忆分类</h3>
-      <button class="modal-close" onclick="closeCategoryModal()">&times;</button>
+      <button class="modal-close" data-action="close-category-modal">&times;</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="category-id" />
@@ -481,9 +481,9 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeCategoryModal()">取消</button>
-      <button class="btn btn-danger" id="category-delete-btn" style="display:none" onclick="deleteCategory()">删除</button>
-      <button class="btn btn-success" onclick="saveCategory()">保存</button>
+      <button class="btn btn-ghost" data-action="close-category-modal">取消</button>
+      <button class="btn btn-danger" id="category-delete-btn" style="display:none" data-action="delete-category">删除</button>
+      <button class="btn btn-success" data-action="save-category">保存</button>
     </div>
   </div>
 </div>
@@ -493,7 +493,7 @@
   <div class="modal-content">
     <div class="modal-header">
       <h3 id="postrule-modal-title">新增后置规则</h3>
-      <button class="modal-close" onclick="closePostRuleModal()">&times;</button>
+      <button class="modal-close" data-action="close-postrule-modal">&times;</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="postrule-id" />
@@ -532,9 +532,9 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closePostRuleModal()">取消</button>
-      <button class="btn btn-danger" id="postrule-delete-btn" style="display:none" onclick="deletePostRule()">删除</button>
-      <button class="btn btn-success" onclick="savePostRule()">保存</button>
+      <button class="btn btn-ghost" data-action="close-postrule-modal">取消</button>
+      <button class="btn btn-danger" id="postrule-delete-btn" style="display:none" data-action="delete-postrule">删除</button>
+      <button class="btn btn-success" data-action="save-postrule">保存</button>
     </div>
   </div>
 </div>
@@ -544,7 +544,7 @@
   <div class="modal-content">
     <div class="modal-header">
       <h3 id="event-modal-title">新增剧情事件</h3>
-      <button class="modal-close" onclick="closeEventModal()">&times;</button>
+      <button class="modal-close" data-action="close-event-modal">&times;</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="event-id" />
@@ -597,9 +597,9 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeEventModal()">取消</button>
-      <button class="btn btn-danger" id="event-delete-btn" style="display:none" onclick="deleteEvent()">删除</button>
-      <button class="btn btn-success" onclick="saveEvent()">保存</button>
+      <button class="btn btn-ghost" data-action="close-event-modal">取消</button>
+      <button class="btn btn-danger" id="event-delete-btn" style="display:none" data-action="delete-event">删除</button>
+      <button class="btn btn-success" data-action="save-event">保存</button>
     </div>
   </div>
 </div>
@@ -609,7 +609,7 @@
   <div class="modal-content" style="max-width: 600px;">
     <div class="modal-header">
       <h3>➕ 新建角色</h3>
-      <button class="modal-close" onclick="closeCreateCharModal()">&times;</button>
+      <button class="modal-close" data-action="close-create-char-modal">&times;</button>
     </div>
     <div class="modal-body">
       <div class="form-row">
@@ -690,8 +690,8 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeCreateCharModal()">取消</button>
-      <button class="btn btn-success" onclick="createCharacter()">创建角色</button>
+      <button class="btn btn-ghost" data-action="close-create-char-modal">取消</button>
+      <button class="btn btn-success" data-action="create-character">创建角色</button>
     </div>
   </div>
 </div>
@@ -703,12 +703,12 @@
   <div class="modal-content" id="user-detail-modal-content">
     <div class="modal-header">
       <h3>👤 用户详情</h3>
-      <button class="modal-close" onclick="closeUserDetailModal()">&times;</button>
+      <button class="modal-close" data-action="close-user-detail-modal">&times;</button>
     </div>
     <div class="modal-body" id="user-detail-body">
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeUserDetailModal()">关闭</button>
+      <button class="btn btn-ghost" data-action="close-user-detail-modal">关闭</button>
       <button class="btn btn-danger" id="user-detail-delete-btn" onclick="confirmDeleteUser()">删除用户</button>
     </div>
   </div>
@@ -719,7 +719,7 @@
   <div class="modal-content">
     <div class="modal-header">
       <h3 id="user-edit-title">✏️ 编辑用户</h3>
-      <button class="modal-close" onclick="closeUserEditModal()">&times;</button>
+      <button class="modal-close" data-action="close-user-edit-modal">&times;</button>
     </div>
     <div class="modal-body">
       <input type="hidden" id="edit-user-id" />
@@ -747,8 +747,8 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeUserEditModal()">取消</button>
-      <button class="btn btn-success" onclick="saveUserEdit()">保存</button>
+      <button class="btn btn-ghost" data-action="close-user-edit-modal">取消</button>
+      <button class="btn btn-success" data-action="save-user-edit">保存</button>
     </div>
   </div>
 </div>
@@ -758,26 +758,34 @@
   <div class="modal-content">
     <div class="modal-header">
       <h3>🧾 订单详情</h3>
-      <button class="modal-close" onclick="closeOrderDetailModal()">&times;</button>
+      <button class="modal-close" data-action="close-order-detail-modal">&times;</button>
     </div>
     <div class="modal-body" id="order-detail-body">
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeOrderDetailModal()">关闭</button>
+      <button class="btn btn-ghost" data-action="close-order-detail-modal">关闭</button>
     </div>
   </div>
 </div>
 
-<!-- JS 模块加载（顺序重要！依赖关系：utils → api → state → 页面模块 → main） -->
-<script src="/frontend/admin/js/utils.js"></script>
-<script src="/frontend/admin/js/api.js"></script>
-<script src="/frontend/admin/js/state.js"></script>
-<script src="/frontend/admin/js/char-editor.js"></script>
-<script src="/frontend/admin/js/char-advanced.js"></script>
-<script src="/frontend/admin/js/prompt-preview.js"></script>
-<script src="/frontend/admin/js/membership.js"></script>
-<script src="/frontend/admin/js/dashboard.js"></script>
-<script src="/frontend/admin/js/audit-log.js"></script>
-<script src="/frontend/admin/js/main.js"></script>
+<!-- JS 模块加载（顺序重要！依赖关系：utils → constants → config → api → state → 页面模块（含 normalizers/overview/char-list/char-crud/bootstrap/actions）→ main） -->
+<script src="/api/frontend/admin/js/utils.js?v=20260424g"></script>
+<script src="/api/frontend/shared/constants.js?v=1"></script>
+<script src="/api/frontend/admin/js/config.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/api.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/state.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/char-editor.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/char-advanced.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/prompt-preview.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/membership.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/dashboard.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/audit-log.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/normalizers.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/overview.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/char-list.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/char-crud.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/bootstrap.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/actions.js?v=20260424g"></script>
+<script src="/api/frontend/admin/js/main.js?v=20260424g"></script>
 </body>
 </html>

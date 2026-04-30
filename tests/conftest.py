@@ -7,20 +7,26 @@
   - 每个测试文件独立可运行，不依赖执行顺序
 """
 
+import importlib
 import sys
 import os
+import warnings
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta, timezone
 
-# 确保后端模块在 import 路径中
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..", "backend")
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, os.path.abspath(BACKEND_DIR))
 
+warnings.filterwarnings(
+    "ignore",
+    message=r".*asyncio\.iscoroutinefunction.*inspect\.iscoroutinefunction\(\) instead",
+    category=DeprecationWarning,
+)
 
-# ============================================================
-# Mock 数据库连接（替代真实的 Supabase 连接）
-# ============================================================
+sys.modules.setdefault("conftest", sys.modules[__name__])
+
+
 class FakeConn:
     """模拟数据库连接，记录执行的 SQL 并返回预设结果。"""
 
@@ -75,9 +81,6 @@ def make_fake_conn(return_rows=None, rowcount=0):
     conn._rows = return_rows or []
     conn._rowcount_val = rowcount
 
-    _orig_fetchone = conn.fetchone
-    _orig_fetchall = conn.fetchall
-
     def fake_fetchone():
         if conn._rows:
             row_data = conn._rows.pop(0)
@@ -91,42 +94,53 @@ def make_fake_conn(return_rows=None, rowcount=0):
 
     conn.fetchone = fake_fetchone
     conn.fetchall = fake_fetchall
-
-    @property
-    def rowcount(self):
-        return conn._rowcount_val
-
-    # 绑定到实例
     type(conn).rowcount = property(lambda s: s._rowcount_val)
 
     return conn
 
 
-# ============================================================
-# 常用测试数据工厂
-# ============================================================
+def _load_main_app():
+    with patch("database.init_db_pool"), patch("database.close_db_pool"), patch("threading.Thread"):
+        if "main" in sys.modules:
+            main_module = importlib.reload(sys.modules["main"])
+        else:
+            import main as main_module
+        return main_module.app
+
+
+import pytest
+
+
+@pytest.fixture
+def app_module():
+    yield _load_main_app()
+
+
+@pytest.fixture
+def app_client(app_module):
+    from fastapi.testclient import TestClient
+
+    with TestClient(app_module) as client:
+        yield app_module, client
+
 
 NOW_UTC = datetime(2026, 4, 3, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def sample_token_hash():
-    """返回一个固定的 token hash 用于测试。"""
     import hashlib
     return hashlib.sha256(b"test_token_xyz_123").hexdigest()
 
 
 def sample_expires_soon():
-    """返回一个即将过期的时间字符串（剩余 3 天）。"""
     return (NOW_UTC + timedelta(days=3)).isoformat()
 
 
 def sample_expires_later():
-    """返回一个还有很久才过期的时间字符串（剩余 20 天）。"""
     return (NOW_UTC + timedelta(days=20)).isoformat()
 
 
 def sample_user_row(**overrides):
-    """返回一个标准的用户数据库行。"""
     defaults = {
         "id": 1,
         "email": "test@example.com",

@@ -5,6 +5,7 @@ __pycache__/
 
 # 虚拟环境
 .venv/
+.venv_local312/
 venv/
 
 # 环境变量（含 API Key，绝不提交）
@@ -59,3 +60,58 @@ logs/
 # 用户上传的头像（运行时生成）
 avatars/
 !avatars/.gitkeep
+
+# 部署产物
+*.tar.gz
+backups/
+
+# 服务器配置（含密码，绝不提交）
+.server_config
+
+# Nginx 配置（含服务器 IP）
+aifriend.conf
+
+# 审计报告（临时产物）
+AI_Friend_代码审计报告.docx
+
+# Skills 安装产物
+.agents/
+skills-lock.json
+
+# AI 编程工具配置目录（各工具打开项目时自动创建，无需提交）
+# 例外：Trae 项目规则文件需要同步
+!.trae/rules/
+
+.cursor/
+.windsurf/
+.continue/
+.augment/
+.roo/
+.goose/
+.cline/
+.qwen/
+.mcpjam/
+.codebuddy/
+.commandcode/
+.cortex/
+.crush/
+.factory/
+.iflow/
+.junie/
+.kilocode/
+.kiro/
+.kode/
+.mux/
+.neovate/
+.openhands/
+.pi/
+.pochi/
+.qoder/
+.vibe/
+.zencoder/
+.adal/
+.bob/
+
+# 测试缓存
+.pytest_cache/
+.coverage

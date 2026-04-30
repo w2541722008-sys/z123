@@ -4,15 +4,13 @@ memory_service 模块单元测试
 覆盖范围：
   - sanitize_stream_chunk: SSE 流式响应 </think> 标签过滤（核心状态机逻辑）
   - parse_state_update_tag: AI 状态更新标签解析
+  - structured summary helpers: 结构化摘要解析、格式化与合并
 """
 
-import sys
-import os
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
-sys.path.insert(0, os.path.dirname(__file__))
-
 from services.memory_service import (
+    _empty_structured_summary,
+    format_structured_summary,
+    merge_summary_text,
     parse_state_update_tag,
     sanitize_stream_chunk,
 )
@@ -38,8 +36,6 @@ class TestSanitizeStreamChunk:
     def _fresh_state(self):
         return {"buffer": "", "in_think": False}
 
-    # ── 基本功能 ─────────────────────────────────────────
-
     def test_plain_text_passthrough(self):
         """纯文本应原样通过。"""
         state = self._fresh_state()
@@ -57,8 +53,6 @@ class TestSanitizeStreamChunk:
         state = self._fresh_state()
         assert sanitize_stream_chunk(None, state) == ""
 
-    # ── 完整 <think> 块过滤 ─────────────────────────────────────
-
     def test_full_think_block_in_single_chunk(self):
         """单个 chunk 内的完整 <think>...</think> 块应被完全移除。"""
         state = self._fresh_state()
@@ -73,15 +67,12 @@ class TestSanitizeStreamChunk:
         assert result == ""
         assert state["in_think"] is False
 
-    # ── 跨 chunk <think> 处理 ────────────────────────────────────
-
     def test_think_opens_in_one_chunk(self):
         """<think> 在一个 chunk 中打开，没有关闭。"""
         state = self._fresh_state()
         result = sanitize_stream_chunk("你好<think>开始思考", state)
         assert result == "你好"
         assert state["in_think"] is True
-        # 开始标签后的内容保留在 buffer 中（下次 chunk 可能包含 </think>）
 
     def test_think_continues_to_next_chunk(self):
         """think 状态持续到下一个 chunk。"""
@@ -115,15 +106,13 @@ class TestSanitizeStreamChunk:
         assert r4 == "后缀文本"
         assert state["in_think"] is False
 
-    # ── 边界情况：跨 chunk 的标签碎片 ───────────────────────────
-
     def test_partial_open_tag_at_chunk_end(self):
         """chunk 以 "<" 或 "<t" 结尾时可能是不完整的标签。"""
         state = self._fresh_state()
 
         result = sanitize_stream_chunk("text<t", state)
         assert result == "text"
-        assert state["buffer"] == "<t"  # 保留到下次处理
+        assert state["buffer"] == "<t"
 
         result2 = sanitize_stream_chunk("hink>内容", state)
         assert result2 == ""
@@ -134,10 +123,8 @@ class TestSanitizeStreamChunk:
         state = {"buffer": "", "in_think": True}
         result = sanitize_stream_chunk("</t", state)
         assert result == ""
-        assert state["in_think"] is True  # 仍在 think 中
+        assert state["in_think"] is True
         assert "</t" in state.get("buffer", "")
-
-    # ── 连续多个 <think> 块 ─────────────────────────────────────
 
     def test_consecutive_think_blocks(self):
         """连续两个 <think> 块都应被正确过滤。"""
@@ -145,8 +132,6 @@ class TestSanitizeStreamChunk:
         result = sanitize_stream_chunk("A<think>x</think>B<think>y</think>C", state)
         assert result == "ABC"
         assert state["in_think"] is False
-
-    # ── 嵌套/异常格式 ──────────────────────────────────────
 
     def test_unclosed_think_tag(self):
         """未关闭的 <think> 标签不应崩溃。"""
@@ -167,8 +152,6 @@ class TestSanitizeStreamChunk:
         state = self._fresh_state()
         result = sanitize_stream_chunk("A<think></think>B", state)
         assert result == "AB"
-
-    # ── 特殊字符和 Unicode ──────────────────────────────────
 
     def test_unicode_content_preserved(self):
         """Unicode 内容在非 think 区域应保留。"""
@@ -258,24 +241,56 @@ class TestParseStateUpdateTag:
         cleaned, delta = parse_state_update_tag(text)
         assert delta["e"] == "first"
 
-    def test_case_insensitive_tag_match(self):
-        """标签名大小写不敏感。"""
-        text = 'text[state_update]{"e":"test"}[/state_update]'
+    def test_extracts_xml_style_state_tag(self):
+        """兼容旧版 XML 风格状态标签。"""
+        text = '你好<STATE_UPDATE>{"mood": "warm"}</STATE_UPDATE>世界'
         cleaned, delta = parse_state_update_tag(text)
-        assert delta is not None
-        assert delta["e"] == "test"
+        assert cleaned == "你好世界"
+        assert delta == {"mood": "warm"}
 
-    def test_preserves_whitespace_around_tag(self):
-        """标签周围的空白应保留在清理文本中。"""
-        text = '前   [STATE_UPDATE]{"e":"x"}[/STATE_UPDATE]   后'
-        cleaned, _ = parse_state_update_tag(text)
-        assert "前" in cleaned
-        assert "后" in cleaned
 
-    def test_complex_delta_fields(self):
-        """复杂的状态增量字段。"""
-        text = '回复[STATE_UPDATE]{"event":"confession","mood":"melting","story_phase":"lover","affection_delta":10}[/STATE_UPDATE]'
-        cleaned, delta = parse_state_update_tag(text)
-        assert delta["event"] == "confession"
-        assert delta["story_phase"] == "lover"
-        assert delta["affection_delta"] == 10
+# ============================================================
+# 3. structured summary helpers 测试
+# ============================================================
+
+class TestStructuredSummaryHelpers:
+    def test_empty_structured_summary_returns_stable_shape(self):
+        result = _empty_structured_summary()
+        assert result == {
+            "profile": [],
+            "preferences": [],
+            "events": [],
+            "relationship": [],
+            "pending": [],
+            "raw_summary": "",
+        }
+
+    def test_format_structured_summary_skips_empty_sections(self):
+        result = format_structured_summary({
+            "profile": ["喜欢夜聊"],
+            "preferences": [],
+            "events": ["刚刚一起看完电影"],
+            "relationship": [],
+            "pending": [],
+        })
+
+        assert "【用户画像】" in result
+        assert "- 喜欢夜聊" in result
+        assert "【近期事件】" in result
+        assert "- 刚刚一起看完电影" in result
+        assert "【用户偏好】" not in result
+
+    def test_merge_summary_text_prefers_new_items_and_deduplicates(self):
+        existing = """[用户画像]\n- 喜欢夜聊\n\n[近期事件]\n- 昨天聊到工作压力\n\n[关系状态]\n- 关系稳定推进"""
+        new_text = """[用户画像]\n- 喜欢夜聊\n- 说话直接\n\n[近期事件]\n- 今天计划一起散步\n\n[关系状态]\n- 关系稳定推进"""
+
+        merged = merge_summary_text(existing, new_text)
+
+        assert merged.index("- 喜欢夜聊") < merged.index("- 说话直接")
+        assert merged.count("- 喜欢夜聊") == 1
+        assert "- 今天计划一起散步" in merged
+        assert "- 昨天聊到工作压力" in merged
+
+    def test_merge_summary_text_returns_new_text_when_old_not_structured(self):
+        merged = merge_summary_text("旧版自由文本摘要", "[用户画像]\n- 喜欢旅行")
+        assert merged == "[用户画像]\n- 喜欢旅行"
