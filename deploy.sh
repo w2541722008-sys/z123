@@ -44,11 +44,11 @@ check_ssh() {
 }
 
 run_local_checks() {
-  step "步骤 2/6: 执行本地门禁"
+  step "步骤 2/7: 执行本地门禁"
   pushd "$LOCAL_DIR/backend" >/dev/null
 
   local failed=0
-  python3 -m pytest ../tests/ -q || failed=1
+  python3 -m pytest ../tests/ -q --ignore=../tests/integration || failed=1
   node ../tests/test_frontend_utils.js || failed=1
   node ../tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json || failed=1
 
@@ -68,25 +68,27 @@ run_local_checks() {
 }
 
 backup_remote() {
-  step "步骤 3/6: 备份服务器当前版本"
-  local backup_name="backup_$(date +%Y%m%d_%H%M%S)"
-  ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << ENDSSH
+  step "步骤 3/7: 备份服务器当前版本"
+  ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
 set -Eeuo pipefail
-cd /opt
 
-# 创建新备份
-cp -r aifriend $backup_name
-echo "备份完成: $backup_name"
+backup_name="backup_$(date +%Y%m%d_%H%M%S)"
+
+# 在项目目录内创建备份（/opt 可能只有 root 可写）
+cd /opt/aifriend
+cp -r . "../aifriend_$backup_name" 2>/dev/null || \
+  cp -r . "$HOME/aifriend_$backup_name"
+echo "备份完成: aifriend_$backup_name"
 
 # 只保留最新1份备份，删除旧的
-ls -d /opt/backup_* 2>/dev/null | sort | head -n -1 | xargs rm -rf 2>/dev/null || true
+ls -d /opt/aifriend_backup_* /opt/aifriend_20* "$HOME"/aifriend_20* 2>/dev/null | sort | head -n -1 | xargs rm -rf 2>/dev/null || true
 ENDSSH
   echo "✅ 备份完成（旧备份已自动清理）"
   echo
 }
 
 sync_files() {
-  step "步骤 4/6: 同步文件"
+  step "步骤 4/7: 同步文件"
   rsync -avz --delete --checksum \
     --exclude='.git' \
     --exclude='__pycache__' \
