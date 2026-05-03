@@ -1,6 +1,4 @@
-# 文档导航（SSOT）
-
-本目录文档按"单一事实来源"维护：每个领域仅保留一个主文档，其他文档只做引用或归档。
+# 文档导航
 
 ## 运行与部署
 
@@ -24,16 +22,16 @@
 ## 数据库
 
 - Schema 管理：Alembic 迁移框架（`backend/alembic/`）
-- 基线迁移：`backend/alembic/versions/001_initial_schema.py`（含全部建表）
-- 类型修复迁移：`backend/alembic/versions/002_text_to_timestamptz_jsonb.py`（text→timestamptz/jsonb）
-- 历史参考：`supabase_schema.sql`、`migrations/`（已由 Alembic 替代，仅作归档）
+- `001_initial_schema.py`：基线迁移（全部建表）
+- `002_text_to_timestamptz_jsonb.py`：类型修复（text→timestamptz/jsonb）
+- `003_add_reset_code_attempt_count.py`：密码重试计数列
+- 历史参考：`supabase_schema.sql`、`migrations/`（已由 Alembic 替代，仅归档）
 
-## 归档与草稿
+## 归档
 
-- 重构进度：`docs/OPTIMIZATION_PROGRESS.md`
-- 研究草稿：`.trae/documents/`（不作为正式运行文档）
+- 重构进度：`OPTIMIZATION_PROGRESS.md`
+- 重构审计：`refactoring_audit_report.md`
+- 测试诊断：`test_diagnostic_report.md`
 
-说明：
-
-- 新环境初始化数据库使用 `alembic upgrade head`，不再需要手动执行 SQL 文件。
-- 文档与代码不一致时，以当前代码与脚本行为为准，再同步回文档。
+> 新环境初始化使用 `alembic upgrade head`，不再需要手动执行 SQL。
+> 文档与代码不一致时，以代码和脚本行为为准。

@@ -15,6 +15,7 @@
 - [ ] 已执行 `alembic upgrade head` 完成全部迁移
 - [ ] 确认 `001_initial_schema.py` 已创建全部 18 张表
 - [ ] 确认 `002_text_to_timestamptz_jsonb.py` 已将时间列转为 timestamptz、JSON 列转为 jsonb
+- [ ] 确认 `003_add_reset_code_attempt_count.py` 已添加 attempt_count 列（幂等）
 - [ ] `chat_messages.versions` 字段存在（基线迁移已包含）
 
 ## 代码质量门禁

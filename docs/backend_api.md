@@ -94,7 +94,7 @@ SSE 事件格式：
 ## 鉴权说明
 
 - 认证方式：Cookie（`aifriend_session`），登录后自动设置
-- Cookie 属性：HttpOnly、SameSite=Lax、Path=/api、Secure（生产环境）
+- Cookie 属性：HttpOnly、SameSite=Strict（生产）/Lax（开发）、Path=/api、Secure（生产环境）
 - Token 滑动续期：距过期不足 7 天时自动续期
 - 备用方式：Cookie 不存在时，支持 `Authorization: Bearer <token>` 头
 - 需要登录的接口：Cookie 或 Authorization 头中需携带有效 session token

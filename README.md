@@ -5,16 +5,16 @@
 ## 项目现状
 
 - 前端用户站：`/`（`index.html` + `frontend/modules/`）
-- 管理后台：`/admin.html`（服务端入口）与 `/frontend/admin/index.html`（静态入口）
+- 管理后台：`/admin.html`
 - 后端 API：`/api/*`
 - 健康检查：`/api/health`
 
 ## 技术栈
 
 - 后端：Python 3.10+、FastAPI、Uvicorn、httpx、psycopg2（ThreadedConnectionPool）
-- 数据库：PostgreSQL（Supabase）
+- 数据库：PostgreSQL（Supabase）+ Alembic 迁移
 - 前端：原生 HTML/CSS/JavaScript（IIFE）
-- 测试：pytest + Node.js 脚本
+- 测试：pytest（878 tests）+ Node.js 脚本
 
 ## 本地开发
 
@@ -31,11 +31,19 @@ pip install -r requirements.txt
 
 - 复制 `backend/.env.example` 为 `backend/.env`
 - 至少配置：`DATABASE_URL`、`AIFRIEND_API_KEY`、`AIFRIEND_BASE_URL`、`AIFRIEND_MODEL`
+- 邮件服务：SMTP 或 Resend 任一即可
 
 ### 3) 初始化数据库
 
-- 使用 Alembic 自动迁移：`cd backend && python3 -m alembic upgrade head`
-- 基线迁移包含全部建表，无需手动执行 SQL
+```bash
+cd backend && python3 -m alembic upgrade head
+```
+
+迁移说明：
+
+- `001_initial_schema.py`：基线迁移，创建全部 18 张表
+- `002_text_to_timestamptz_jsonb.py`：类型修复（幂等可重跑）
+- `003_add_reset_code_attempt_count.py`：密码重试计数列（幂等）
 
 ### 4) 启动后端
 
@@ -48,29 +56,22 @@ python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ```bash
 cd backend
-python3 -m pytest ../tests/ -q
+python3 -m pytest ../tests/ -q --ignore=../tests/integration
 
 cd ..
 node tests/test_frontend_utils.js
 node tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json
 ```
 
-CI 与本地保持同一门禁策略：后端测试、前端测试、admin action 严格校验。
-
-## 一键部署（项目标准）
+## 一键部署
 
 ```bash
-cd /Users/jjj/aifriend
 bash deploy.sh
 ```
 
-`deploy.sh` 会执行：
+`deploy.sh` 执行：SSH 检查 → 本地门禁 → 服务器备份 → rsync 同步 → 数据库迁移 → 重启服务 → 健康检查门禁
 
-- SSH 连通性检查
-- 本地测试门禁
-- 服务器备份（`/opt/backup_*`）
-- rsync 同步到 `/opt/aifriend`
-- 远端重启与健康检查
+回滚：`bash rollback.sh`
 
 ## 文档导航
 
@@ -79,5 +80,4 @@ bash deploy.sh
 - 上线检查清单：[docs/DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md)
 - 后端接口文档：[docs/backend_api.md](docs/backend_api.md)
 - 前端架构文档：[docs/FRONTEND_ARCHITECTURE.md](docs/FRONTEND_ARCHITECTURE.md)
-- 后台使用文档：[docs/ADMIN_PANEL_GUIDE.md](docs/ADMIN_PANEL_GUIDE.md)
-- 数据库备份文档：[docs/DATABASE_BACKUP_GUIDE.md](docs/DATABASE_BACKUP_GUIDE.md)
+- 开发规范：[docs/dev_rules.md](docs/dev_rules.md)
