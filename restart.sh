@@ -55,12 +55,28 @@ restart_backend() {
 
   if [[ -f "$BACKEND_DIR/.env" ]]; then
     set -a
-    source "$BACKEND_DIR/.env"
+    # 逐行读取 .env，跳过注释和空行，处理含特殊字符的值
+    while IFS='=' read -r key value; do
+      key="${key#export }"
+      # 跳过注释和空行
+      [[ -z "$key" || "$key" =~ ^[[:space:]]*# ]] && continue
+      # 去除值两端引号
+      value="${value#\"}" ; value="${value%\"}"
+      value="${value#\'}" ; value="${value%\'}"
+      export "$key=$value"
+    done < "$BACKEND_DIR/.env"
     set +a
   fi
 
   cd "$BACKEND_DIR"
-  nohup "$BACKEND_DIR/venv/bin/python3" -m uvicorn main:app --host 0.0.0.0 --port 8000 > /var/log/aifriend.log 2>&1 &
+  LOG_FILE="/var/log/aifriend.log"
+  # 确保日志文件可写
+  if [[ ! -f "$LOG_FILE" ]]; then
+    touch "$LOG_FILE" 2>/dev/null || LOG_FILE="$BACKEND_DIR/aifriend.log"
+  elif [[ ! -w "$LOG_FILE" ]]; then
+    LOG_FILE="$BACKEND_DIR/aifriend.log"
+  fi
+  nohup "$BACKEND_DIR/venv/bin/python3" -m uvicorn main:app --host 0.0.0.0 --port 8000 >> "$LOG_FILE" 2>&1 &
   sleep 3
 
   if pgrep -f "uvicorn main:app" >/dev/null 2>&1; then
