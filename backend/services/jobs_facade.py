@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 
-from database import get_conn
+from core.database import get_conn
 from services.billing_order_service import close_expired_pending_orders
 
 
@@ -17,7 +17,7 @@ def start_order_cleanup_daemon(*, interval_seconds: int = 3600) -> threading.Thr
                 close_expired_pending_orders(conn)
                 logging.info("✅ 已清理超时订单")
             except Exception as e:
-                logging.error(f"❌ 订单清理失败: {e}", exc_info=True)
+                logging.error("❌ 订单清理失败: %s", e, exc_info=True)
             finally:
                 if conn is not None:
                     conn.close()

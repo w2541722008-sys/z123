@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
-from config import utc_now_iso
+from datetime import datetime, timezone
+
+from core.config import utc_now
 
 ORDER_STATUS_PENDING = "pending"
 ORDER_STATUS_CLOSED = "closed"
@@ -18,16 +20,16 @@ ORDER_STATUS_CLOSED = "closed"
 
 def close_expired_pending_orders(
     conn,
-    user_id: int | None = None,
+    user_id: int | str | None = None,
     *,
     commit: bool = True,
 ) -> int:
-    now = utc_now_iso()
+    now = utc_now()
     if user_id is None:
         cursor = conn.execute(
             """
             UPDATE membership_orders
-            SET status = %s, closed_at = %s
+            SET status = %s, closed_at = %s, updated_at = now()
             WHERE status = %s
               AND expires_at IS NOT NULL
               AND expires_at <= %s
@@ -38,7 +40,7 @@ def close_expired_pending_orders(
         cursor = conn.execute(
             """
             UPDATE membership_orders
-            SET status = %s, closed_at = %s
+            SET status = %s, closed_at = %s, updated_at = now()
             WHERE user_id = %s
               AND status = %s
               AND expires_at IS NOT NULL
@@ -48,4 +50,4 @@ def close_expired_pending_orders(
         )
     if commit:
         conn.commit()
-    return cursor.rowcount
+    return int(cursor.rowcount)

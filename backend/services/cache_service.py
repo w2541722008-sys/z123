@@ -22,39 +22,47 @@
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from threading import Lock
 from typing import Any
 
 
 class SimpleCache:
-    """简单的内存缓存，支持过期时间和大小上限。"""
-    
+    """LRU 内存缓存，支持过期时间和大小上限。
+
+    淘汰策略：
+        - 满时先清理过期项
+        - 仍超限则淘汰最久未访问的项（LRU）
+    """
+
     def __init__(self, default_ttl: int = 300, max_size: int = 500):
         """
         初始化缓存。
-        
+
         Args:
             default_ttl: 默认过期时间（秒），默认 5 分钟
-            max_size: 缓存条目上限，超过时触发过期清理和最旧项淘汰
+            max_size: 缓存条目上限，超过时触发过期清理和 LRU 淘汰
         """
-        self._cache: dict[str, tuple[Any, float]] = {}
+        self._cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
         self._lock = Lock()
         self.default_ttl = default_ttl
         self.max_size = max_size
-    
+
     def get(self, key: str) -> Any | None:
-        """获取缓存值，如果过期则返回 None。"""
+        """获取缓存值，命中时提升到最近访问位置；过期则返回 None。"""
         with self._lock:
             if key not in self._cache:
                 return None
-            
+
             value, expires_at = self._cache[key]
-            
+
             # 检查是否过期
             if time.time() > expires_at:
                 del self._cache[key]
                 return None
-            
+
+            # LRU: 命中后移到末尾（最近访问）
+            self._cache.move_to_end(key)
             return value
     
     def set(self, key: str, value: Any, ttl: int | None = None) -> None:
@@ -70,7 +78,7 @@ class SimpleCache:
                 self._cleanup_expired_unlocked()
                 # 清理后仍超限，淘汰最旧项
                 if len(self._cache) >= self.max_size:
-                    self._evict_oldest_unlocked()
+                    self._evict_lru_unlocked()
             
             self._cache[key] = (value, expires_at)
     
@@ -97,12 +105,10 @@ class SimpleCache:
             del self._cache[key]
         return len(expired_keys)
     
-    def _evict_oldest_unlocked(self) -> None:
-        """淘汰最旧（最早过期）的缓存项（不加锁，调用方需持有锁）。"""
-        if not self._cache:
-            return
-        oldest_key = min(self._cache, key=lambda k: self._cache[k][1])
-        del self._cache[oldest_key]
+    def _evict_lru_unlocked(self) -> None:
+        """淘汰最久未访问的缓存项（LRU，不加锁，调用方需持有锁）。"""
+        if self._cache:
+            self._cache.popitem(last=False)
     
     def __len__(self) -> int:
         """返回当前缓存条目数。"""
@@ -131,17 +137,17 @@ def invalidate_character(character_id: str) -> None:
 
 
 # 便捷方法：用户缓存
-def get_user(user_id: int) -> dict[str, Any] | None:
+def get_user(user_id: int | str) -> dict[str, Any] | None:
     """获取缓存的用户数据。"""
     return cache.get(f"user:{user_id}")
 
 
-def set_user(user_id: int, user_data: dict[str, Any], ttl: int = 300) -> None:
+def set_user(user_id: int | str, user_data: dict[str, Any], ttl: int = 300) -> None:
     """缓存用户数据。"""
     cache.set(f"user:{user_id}", user_data, ttl)
 
 
-def invalidate_user(user_id: int) -> None:
+def invalidate_user(user_id: int | str) -> None:
     """使用户缓存失效（更新用户时调用）。"""
     cache.delete(f"user:{user_id}")
 
@@ -159,3 +165,13 @@ def cache_set(key: str, value: Any, ttl: int | None = None) -> None:
 def cache_delete(key: str) -> None:
     """删除指定 key 的缓存值。"""
     cache.delete(key)
+
+
+def invalidate_character_affection_rules(character_id: str) -> None:
+    """使好感度规则缓存失效（更新角色时调用）。"""
+    cache.delete(f"affection_rules:{character_id}")
+
+
+def invalidate_character_list_all() -> None:
+    """使角色列表缓存失效（创建/删除/更新角色时调用）。"""
+    cache.delete("character_list_all")

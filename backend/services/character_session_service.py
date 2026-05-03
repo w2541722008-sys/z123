@@ -8,12 +8,12 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from config import utc_now_iso
+from core.database import ConnType
 from services.character_state import get_character_state
-from services.chat_service import ensure_opening_message
+from services.chat_query import ensure_opening_message
+from utils.json_utils import parse_json_object
 
 
 def _normalize_greeting_index(raw_index: Any) -> tuple[Any, int, bool]:
@@ -27,7 +27,7 @@ def _normalize_greeting_index(raw_index: Any) -> tuple[Any, int, bool]:
     return raw_index, index, is_non_default
 
 
-def _resolve_chat_clear_greeting(conn: Any, character_id: str, greeting_index: Any) -> str:
+def _resolve_chat_clear_greeting(conn: ConnType, character_id: str, greeting_index: Any) -> str:
     char_row = conn.execute(
         "SELECT opening_message, structured_asset_json FROM characters WHERE id = %s",
         (character_id,),
@@ -49,16 +49,16 @@ def _resolve_chat_clear_greeting(conn: Any, character_id: str, greeting_index: A
         if greeting_row and (greeting_row["content"] or "").strip():
             greeting = greeting_row["content"].strip()
 
-    structured = json.loads(char_row["structured_asset_json"] or "{}") if char_row["structured_asset_json"] else {}
+    structured = parse_json_object(char_row["structured_asset_json"], fallback={})
     alts = structured.get("alternate_greetings", [])
     if not is_non_default:
-        return char_row["opening_message"] or (alts[0] if alts else greeting)
+        return str(char_row["opening_message"] or "") or (alts[0] if alts else greeting)
     if greeting == "你好，很高兴认识你。" and isinstance(alts, list) and 1 <= index <= len(alts):
-        return alts[index - 1]
+        return str(alts[index - 1])
     return greeting
 
 
-def _clear_chat_data(conn: Any, user_id: int, character_id: str) -> None:
+def _clear_chat_data(conn: ConnType, user_id: int | str, character_id: str) -> None:
     """清除指定用户和角色的聊天消息和摘要数据。
 
     Args:
@@ -77,9 +77,9 @@ def _clear_chat_data(conn: Any, user_id: int, character_id: str) -> None:
 
 
 def reset_character_chat_state(
-    conn: Any,
+    conn: ConnType,
     *,
-    user_id: int,
+    user_id: int | str,
     character_id: str,
     clear_state: bool,
     commit: bool = True,
@@ -104,9 +104,9 @@ def reset_character_chat_state(
 
 
 def clear_chat_history_with_greeting(
-    conn: Any,
+    conn: ConnType,
     *,
-    user_id: int,
+    user_id: int | str,
     character_id: str,
     greeting_index: Any,
     commit: bool = True,
@@ -115,10 +115,10 @@ def clear_chat_history_with_greeting(
     greeting = _resolve_chat_clear_greeting(conn, character_id, greeting_index)
     conn.execute(
         """
-        INSERT INTO chat_messages(user_id, character_id, role, content, created_at, is_summarized)
-        VALUES (%s, %s, 'assistant', %s, %s, 1)
+        INSERT INTO chat_messages(user_id, character_id, role, content, is_summarized)
+        VALUES (%s, %s, 'assistant', %s, 1)
         """,
-        (user_id, character_id, greeting, utc_now_iso()),
+        (user_id, character_id, greeting),
     )
     if commit:
         conn.commit()

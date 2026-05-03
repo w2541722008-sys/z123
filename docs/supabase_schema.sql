@@ -1,6 +1,6 @@
 -- AI男友项目完整数据库（PostgreSQL / Supabase）
 -- 用途：云端正式部署时建表
--- 最后更新：2026-03-31（与代码字段完全对齐）
+-- 最后更新：2026-05-03（text→timestamptz/jsonb 迁移后）
 
 create extension if not exists pgcrypto;
 
@@ -16,17 +16,17 @@ create table if not exists users (
   nickname   text,
   avatar_url text,
   plan_type  text not null default 'free',        -- 'free' | 'vip' | 'svip'
-  plan_expires_at text,                            -- ISO 字符串，过期时间
-  created_at text not null,
-  updated_at text not null
+  plan_expires_at timestamptz,                    -- 过期时间（NULL=无过期）
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 create table if not exists auth_tokens (
   id         bigserial primary key,
   user_id    bigint not null references users(id) on delete cascade,
   token      text not null unique,
-  expires_at text not null,
-  created_at text not null
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
 );
 
 create index if not exists idx_auth_tokens_token   on auth_tokens(token);
@@ -36,9 +36,9 @@ create table if not exists password_reset_codes (
   id         bigserial primary key,
   email      text not null,
   code       text not null,
-  expires_at text not null,
+  expires_at timestamptz not null,
   used       int  not null default 0,   -- 0=未使用 1=已使用
-  created_at text not null
+  created_at timestamptz not null default now()
 );
 
 create index if not exists idx_password_reset_codes_email on password_reset_codes(email);
@@ -55,7 +55,7 @@ create table if not exists characters (
   avatar_url          text,
   cover_url           text,
   description         text,
-  tags                text not null default '[]',  -- JSON 字符串
+  tags                jsonb not null default '[]'::jsonb,
   opening_message     text,
   system_prompt       text not null default '',
   asset_type          text not null default 'hybrid',  -- 'character'|'hybrid'|'scenario'|'world'|'system'
@@ -67,17 +67,17 @@ create table if not exists characters (
   sort_order          int  not null default 0,
   import_locked       int  not null default 0,          -- 1=禁止覆盖导入
   affection_enabled   int  not null default 1,          -- 1=启用好感度系统
-  affection_rules_json text not null default '{}',     -- 好感度规则 JSON
-  mock_reply_style    text not null default '[]',       -- 降级回复风格 JSON
-  runtime_cache_json  text not null default '{}',       -- 导卡时缓存的 runtime layers
-  structured_asset_json text not null default '{}',     -- 结构化资产数据（包含 runtime_layers）
-  raw_card_json       text not null default '',         -- 原始角色卡 JSON（用于 AI 分析）
+  affection_rules_json jsonb not null default '{}'::jsonb,
+  mock_reply_style    jsonb not null default '[]'::jsonb,
+  runtime_cache_json  jsonb not null default '{}'::jsonb,
+  structured_asset_json jsonb not null default '{}'::jsonb,
+  raw_card_json       jsonb,                            -- NULL=无原始卡数据
   source_kind         text not null default 'manual',   -- 来源类型：png/json/manual
   source_path         text not null default '',         -- 来源路径
   embedded_format     text not null default 'json',     -- 嵌入格式
-  import_diagnostics  text not null default '[]',       -- 导入诊断信息
-  created_at          text not null,
-  updated_at          text not null
+  import_diagnostics  jsonb not null default '[]'::jsonb,
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now()
 );
 
 create index if not exists idx_characters_is_visible on characters(is_visible);
@@ -93,11 +93,11 @@ create table if not exists chat_messages (
   character_id text   not null references characters(id) on delete cascade,
   role         text   not null check (role in ('user', 'assistant', 'system')),
   content      text   not null,
-  versions     jsonb  not null default '[]',
+  versions     jsonb  not null default '[]'::jsonb,
   current_version_index int not null default 0,
   is_summarized int   not null default 0,   -- 0=未摘要 1=已摘要
-  created_at   text   not null,
-  updated_at   text   not null default ''
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
 );
 
 create index if not exists idx_chat_messages_user_char on chat_messages(user_id, character_id);
@@ -110,9 +110,9 @@ create table if not exists chat_summaries (
   summary           text   not null default '',
   memory_version    int    not null default 1,
   last_message_id   bigint references chat_messages(id) on delete set null,
-  last_summarized_at text,
-  created_at        text   not null,
-  updated_at        text   not null,
+  last_summarized_at timestamptz,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
   unique(user_id, character_id)
 );
 
@@ -126,8 +126,8 @@ create table if not exists user_character_profiles (
   character_id         text   not null references characters(id) on delete cascade,
   remark               text   not null default '',
   custom_signature     text   not null default '',
-  created_at           text   not null,
-  updated_at           text   not null,
+  created_at           timestamptz not null default now(),
+  updated_at           timestamptz not null default now(),
   unique(user_id, character_id)
 );
 
@@ -138,14 +138,14 @@ create table if not exists character_states (
   affection             int    not null default 30,
   story_phase           text   not null default 'stranger',  -- stranger|acquaintance|friend|lover
   mood                  text   not null default 'neutral',
-  custom_vars           text   not null default '{}',        -- JSON 字符串
+  custom_vars           jsonb  not null default '{}'::jsonb,
   -- 三防机制（反刷分）计数器
-  daily_event_counts    text   not null default '{}',        -- 今日各事件触发次数 JSON
+  daily_event_counts    jsonb  not null default '{}'::jsonb,
   daily_affection_gained int   not null default 0,           -- 今日已获得好感度
-  last_event_timestamps text   not null default '{}',        -- 各事件最后触发时间 JSON
+  last_event_timestamps jsonb  not null default '{}'::jsonb,
   daily_reset_date      text   not null default '',          -- 日计数归零日期 YYYY-MM-DD
-  created_at            text   not null,
-  updated_at            text   not null,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
   unique(user_id, character_id)
 );
 
@@ -165,12 +165,12 @@ create table if not exists membership_orders (
   payment_provider text,
   provider_trade_no text,
   checkout_url   text,
-  paid_at        text,
-  expires_at     text,
-  closed_at      text,
-  meta_json      text     not null default '{}',
-  created_at     text     not null,
-  updated_at     text     not null
+  paid_at        timestamptz,
+  expires_at     timestamptz,
+  closed_at      timestamptz,
+  meta_json      jsonb    not null default '{}'::jsonb,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
 );
 
 create index if not exists idx_membership_orders_user_id  on membership_orders(user_id);
@@ -193,7 +193,7 @@ create table if not exists ai_request_logs (
   used_fallback           int    not null default 0,   -- 0=真实AI 1=降级
   status                  text   not null default 'success',  -- success|error|fallback
   error_detail            text   not null default '',
-  created_at              text   not null
+  created_at              timestamptz not null default now()
 );
 
 create index if not exists idx_ai_request_logs_user_id    on ai_request_logs(user_id);
@@ -212,8 +212,8 @@ create table if not exists memory_categories (
   description  text not null default '',
   color        text not null default '#1890FF',
   sort_order   int  not null default 0,
-  created_at   text not null,
-  updated_at   text not null
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
 );
 
 create index if not exists idx_memory_categories_character on memory_categories(character_id);
@@ -230,8 +230,8 @@ create table if not exists character_memories (
   priority      int    not null default 100,
   comment       text   not null default '',
   is_active     int    not null default 1,
-  created_at    text   not null,
-  updated_at    text   not null
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
 );
 
 create index if not exists idx_character_memories_character on character_memories(character_id);
@@ -247,8 +247,8 @@ create table if not exists character_storylines (
   is_default   int  not null default 0,
   is_active    int  not null default 1,
   sort_order   int  not null default 0,
-  created_at   text not null,
-  updated_at   text not null
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
 );
 
 create index if not exists idx_character_storylines_character on character_storylines(character_id);
@@ -264,8 +264,8 @@ create table if not exists character_greetings (
   priority     int  not null default 100,
   is_active    int  not null default 1,
   use_count    int  not null default 0,
-  created_at   text not null,
-  updated_at   text not null
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
 );
 
 create index if not exists idx_character_greetings_character on character_greetings(character_id);
@@ -281,8 +281,8 @@ create table if not exists character_post_rules (
   story_phase  text,                              -- NULL=通用，否则限定阶段
   priority     int    not null default 100,
   is_active    int    not null default 1,
-  created_at   text   not null,
-  updated_at   text   not null
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
 );
 
 create index if not exists idx_character_post_rules_character on character_post_rules(character_id, is_active);
@@ -300,8 +300,8 @@ create table if not exists story_events (
   event_content         text   not null default '',
   sort_order            int    not null default 0,
   is_active             int    not null default 1,
-  created_at            text   not null,
-  updated_at            text   not null
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now()
 );
 
 create index if not exists idx_story_events_character on story_events(character_id, is_active);
@@ -313,18 +313,12 @@ create table if not exists user_story_progress (
   character_id         text   not null references characters(id) on delete cascade,
   triggered_event_ids  text   not null default '',   -- 逗号分隔的已触发事件ID
   current_storyline_id bigint references character_storylines(id) on delete set null,
-  last_updated         text   not null,
-  created_at           text   not null,
+  last_updated         timestamptz not null default now(),
+  created_at           timestamptz not null default now(),
   unique(user_id, character_id)
 );
 
 create index if not exists idx_user_story_progress_user on user_story_progress(user_id, character_id);
-
--- ============================================
--- 注意：character_greetings 引用了 character_storylines，
---       所以 character_storylines 必须在 character_greetings 之前创建。
---       上面的顺序已经正确（storylines → greetings）。
--- ============================================
 
 -- ============================================
 -- 管理后台操作审计日志

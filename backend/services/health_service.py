@@ -11,8 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from config import FRONTEND_DIR, PROJECT_DIR
-from database import get_db
+from core.config import FRONTEND_DIR, PROJECT_DIR
+from core.database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def check_db_health() -> bool:
     """检查数据库健康状态（带 TTL 缓存，30 秒内不重复查询）。"""
     now = time.time()
     if now - _db_health_cache["ts"] < _DB_HEALTH_TTL:
-        return _db_health_cache["ok"]
+        return bool(_db_health_cache["ok"])
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
@@ -38,7 +38,7 @@ def check_db_health() -> bool:
         _db_health_cache["ok"] = False
     finally:
         _db_health_cache["ts"] = time.time()
-    return _db_health_cache["ok"]
+    return bool(_db_health_cache["ok"])
 
 
 def media_path_exists(media_value: str) -> bool:
@@ -92,7 +92,7 @@ def check_media_health(*, force: bool = False) -> dict[str, object]:
                     if not media_path_exists(value):
                         missing.append(f"{character_id}:{field}:{value}")
     except Exception as exc:
-        logging.warning(f"媒体资源健康检查失败: {exc}")
+        logging.warning("媒体资源健康检查失败: %s", exc)
         _media_health_cache["ok"] = False
         _media_health_cache["missing_count"] = 1
         _media_health_cache["samples"] = [f"health-check-error:{exc}"]

@@ -10,10 +10,10 @@ JSON 工具函数
 所有函数均支持 fallback 参数，确保现有代码无需改动即可迁移
 """
 import json
-from typing import Any, List, Dict
+from typing import Any, Dict, List, Optional
 
 
-def parse_json_list(text: Any, fallback: List[Any] | None = None) -> List[Any]:
+def parse_json_list(text: Any, fallback: Optional[List[Any]] = None) -> List[Any]:
     """
     安全解析 JSON 数组。
     
@@ -65,7 +65,7 @@ def parse_json_list(text: Any, fallback: List[Any] | None = None) -> List[Any]:
     return value if isinstance(value, list) else list(fallback)
 
 
-def parse_json_object(text: Any, fallback: Dict[str, Any] | None = None) -> Dict[str, Any]:
+def parse_json_object(text: Any, fallback: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     安全解析 JSON 对象。
     

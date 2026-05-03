@@ -4,7 +4,7 @@
 
 - 用户前台：`index.html` + `frontend/modules/*.js`
 - 管理后台：`frontend/admin/index.html` + `frontend/admin/js/*.js`
-- 共享常量：`frontend/shared/constants.js`
+- 共享工具：`frontend/shared/shared-utils.js`
 
 前台与后台均使用原生 JavaScript + IIFE 模块组织，不依赖前端框架。
 
@@ -14,9 +14,9 @@
 
 - 配置与工具：`config.js`、`utils.js`
 - API 与认证：`api.js`、`auth.js`
-- 业务主流程：`app.js`、`chat.js`、`chat-menu.js`
+- 业务主流程：`app.js`、`chat.js`、`chat-menu.js`、`chat-status-panel.js`
 - 页面能力：`char-detail.js`、`greeting-select.js`
-- UI 与启动：`ui.js`、`init.js`
+- UI 与启动：`ui.js`、`error-boundary.js`、`init.js`
 
 ## 后台模块（`frontend/admin/js/`）
 

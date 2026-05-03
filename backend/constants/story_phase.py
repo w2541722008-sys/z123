@@ -13,3 +13,12 @@ class StoryPhase(str, Enum):
     ACQUAINTANCE = "acquaintance"  # 熟人
     FRIEND = "friend"              # 朋友
     LOVER = "lover"                # 恋人
+
+
+# 关系阶段中文标签映射（唯一权威定义）
+STORY_PHASE_LABELS: dict[str, str] = {
+    StoryPhase.STRANGER.value: "陌生人",
+    StoryPhase.ACQUAINTANCE.value: "普通朋友",
+    StoryPhase.FRIEND.value: "好友",
+    StoryPhase.LOVER.value: "恋人",
+}

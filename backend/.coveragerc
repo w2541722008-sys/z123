@@ -1,0 +1,19 @@
+[run]
+source = .
+branch = True
+omit =
+    tests/*
+    alembic/*
+    */__pycache__/*
+    */migrations/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    pass
+    raise NotImplementedError
+    @abstractmethod
+
+fail_under = 55
+show_missing = True

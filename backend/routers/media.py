@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import struct
 import uuid
 from pathlib import Path
 from typing import Any
@@ -12,21 +13,43 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
-from auth import get_current_user
-from config import FRONTEND_DIR, PROJECT_DIR
-from database import get_db
+from core.auth import get_current_user
+from core.config import AVATARS_DIR, FRONTEND_DIR, PROJECT_DIR
+from core.database import ConnType, get_db_dep
+from repositories import character_repository as char_repo
+from repositories import user_repository as user_repo
 
 router = APIRouter(tags=["media"])
 
 logger = logging.getLogger(__name__)
 
-# 用户上传头像目录
-AVATARS_DIR = Path(__file__).parent.parent.parent / "avatars"
+# 确保用户上传头像目录存在
 AVATARS_DIR.mkdir(exist_ok=True)
 
 _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _MAX_AVATAR_SIZE = 2 * 1024 * 1024  # 2MB
 _ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+# 图片文件头魔术字节（用于验证文件内容是否真正是图片）
+_IMAGE_SIGNATURES = {
+    b"\xff\xd8\xff": "jpeg",       # JPEG: FFD8FF
+    b"\x89PNG\r\n\x1a\n": "png",   # PNG: 89504E470D0A1A0A
+    b"RIFF": "webp",               # WebP: RIFF...WEBP
+}
+
+
+def _validate_image_content(content: bytes, declared_ext: str) -> bool:
+    """验证文件内容是否与声明的图片格式匹配（防伪装上传）。"""
+    if len(content) < 12:
+        return False
+    for sig, fmt in _IMAGE_SIGNATURES.items():
+        if content[:len(sig)] == sig:
+            if fmt == "webp":
+                # WebP 格式: RIFF....WEBP
+                return content[8:12] == b"WEBP"
+            # JPEG/PNG 签名匹配即可
+            return True
+    return False
 
 # FileResponse 允许的根目录白名单
 _SAFE_MEDIA_ROOTS = [AVATARS_DIR, FRONTEND_DIR, PROJECT_DIR / "assets", PROJECT_DIR / "covers"]
@@ -71,7 +94,7 @@ def resolve_media_response(raw_value: str, *, fallback_path: Path | None = None)
                     if resolved.exists() and _is_under_safe_dir(resolved):
                         return FileResponse(resolved)
         except Exception as exc:
-            logger.warning(f"avatar resolve failed for value={media_value[:80]}: {exc}")
+            logger.warning("avatar resolve failed for value=%s: %s", media_value[:80], exc)
 
     if fallback_path and fallback_path.exists():
         return FileResponse(fallback_path)
@@ -80,40 +103,33 @@ def resolve_media_response(raw_value: str, *, fallback_path: Path | None = None)
 
 
 @router.get("/avatar/{character_id}")
-def get_avatar(character_id: str):
+def get_avatar(character_id: str, conn: ConnType = Depends(get_db_dep)):
     """返回角色卡头像图片。"""
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT avatar_url FROM characters WHERE id = %s",
-            (character_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="角色不存在")
+    avatar_url = char_repo.get_avatar_url(conn, character_id)
+    if avatar_url is None:
+        raise HTTPException(status_code=404, detail="角色不存在")
 
-        default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
-        return resolve_media_response(row["avatar_url"] or "", fallback_path=default_avatar)
+    default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
+    return resolve_media_response(avatar_url or "", fallback_path=default_avatar)
 
 
 @router.get("/cover/{character_id}")
-def get_cover(character_id: str):
+def get_cover(character_id: str, conn: ConnType = Depends(get_db_dep)):
     """返回角色卡封面图片，支持本地文件、静态路径和外链。"""
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT avatar_url, cover_url FROM characters WHERE id = %s",
-            (character_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="角色不存在")
+    avatar_url, cover_url = char_repo.get_cover_urls(conn, character_id)
+    if avatar_url is None:
+        raise HTTPException(status_code=404, detail="角色不存在")
 
-        default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
-        cover_value = (row["cover_url"] or "").strip() or (row["avatar_url"] or "").strip()
-        return resolve_media_response(cover_value, fallback_path=default_avatar)
+    default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
+    cover_value = (cover_url or "").strip() or (avatar_url or "").strip()
+    return resolve_media_response(cover_value, fallback_path=default_avatar)
 
 
 @router.post("/user/avatar")
 async def upload_user_avatar(
     file: UploadFile = File(...),
     user=Depends(get_current_user),
+    conn: ConnType = Depends(get_db_dep),
 ):
     """上传/更换用户头像。
 
@@ -131,26 +147,29 @@ async def upload_user_avatar(
     if len(content) > _MAX_AVATAR_SIZE:
         raise HTTPException(status_code=400, detail="图片大小不能超过 2MB")
 
-    ext = Path(file.filename).suffix.lower()
+    ext = Path(file.filename or "").suffix.lower()
     if ext not in _ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=400, detail="不支持的文件扩展名")
 
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT avatar_url FROM users WHERE id = %s", (user.id,)
-        ).fetchone()
-        old_avatar_url = row["avatar_url"] if row else None
+    # 验证文件内容是否真正是图片（防止恶意文件伪装为图片上传）
+    if not _validate_image_content(content, ext):
+        raise HTTPException(status_code=400, detail="文件内容与图片格式不匹配")
 
-        filename = f"{uuid.uuid4().hex}{ext}"
-        filepath = AVATARS_DIR / filename
-        filepath.write_bytes(content)
+    row = user_repo.get_user_avatar_url(conn, user.id)
+    old_avatar_url = row if row else None
 
-        avatar_url = f"/avatars/{filename}"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = AVATARS_DIR / filename
+    filepath.write_bytes(content)
 
-        conn.execute(
-            "UPDATE users SET avatar_url = %s, updated_at = NOW() WHERE id = %s",
-            (avatar_url, user.id),
-        )
+    avatar_url = f"/avatars/{filename}"
+
+    user_repo.update_user_avatar(conn, user.id, avatar_url)
+    conn.commit()
+
+    # 清除用户缓存，确保头像更新后前台能立即看到
+    from services.cache_service import invalidate_user
+    invalidate_user(user.id)
 
     if old_avatar_url and old_avatar_url.startswith("/avatars/"):
         try:
@@ -164,13 +183,9 @@ async def upload_user_avatar(
 
 
 @router.get("/user/avatar")
-def get_user_avatar(user=Depends(get_current_user)):
+def get_user_avatar(user=Depends(get_current_user), conn: ConnType = Depends(get_db_dep)):
     """获取当前登录用户的头像图片。"""
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT avatar_url FROM users WHERE id = %s", (user.id,)
-        ).fetchone()
-        avatar_value = row["avatar_url"] if row else None
+    avatar_value = user_repo.get_user_avatar_url(conn, user.id)
 
     default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
     return resolve_media_response(avatar_value or "", fallback_path=default_avatar)

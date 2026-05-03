@@ -2,10 +2,16 @@
 管理后台 - 共享常量和工具函数
 """
 
-import json
-from typing import Any
+from __future__ import annotations
 
+import json
+import logging
+from typing import Any, Optional
+
+from core.database import ConnType
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 # 管理后台可编辑的字段白名单
 _ADMIN_EDITABLE_FIELDS = {
@@ -48,34 +54,47 @@ def _build_where_clause(conditions: list[str]) -> str:
     return "WHERE " + " AND ".join(conditions) if conditions else ""
 
 
-def _count_with_where(conn: Any, count_from_sql: str, where_clause: str, params: list[Any]) -> int:
+# count_from_sql 允许的 SQL 片段白名单（防御性校验）
+_ALLOWED_COUNT_FROM = {
+    "FROM users",
+    "FROM membership_orders o LEFT JOIN users u ON u.id = o.user_id",
+}
+
+
+def _count_with_where(conn: ConnType, count_from_sql: str, where_clause: str, params: list[Any]) -> int:
+    # 白名单校验：确保 count_from_sql 来自安全来源，防止 SQL 注入
+    # 注意：不使用 assert，因为 python -O 会跳过 assert 导致安全防护失效
+    if count_from_sql not in _ALLOWED_COUNT_FROM:
+        raise HTTPException(
+            status_code=500,
+            detail=f"非法 count_from_sql，如需新增请更新 _ALLOWED_COUNT_FROM 白名单",
+        )
     count_row = conn.execute(
         f"SELECT COUNT(*) AS total {count_from_sql} {where_clause}",
         tuple(params),
     ).fetchone()
-    return count_row["total"]
+    return int(count_row["total"])
 
 
 def _write_audit_log(
-    conn: Any,
-    operator_id: str,
+    conn: ConnType,
+    operator_id: int,
     operator_email: str,
     action: str,
     target_type: str,
-    target_id: str | None = None,
-    detail: dict[str, Any] | None = None,
+    target_id: Optional[str] = None,
+    detail: Optional[dict[str, Any]] = None,
 ) -> None:
     """
     内部函数：写入一条操作日志。
     注意：此函数不自行 commit，调用方负责提交事务。
     """
-    from config import utc_now_iso
     try:
         conn.execute(
             """
             INSERT INTO admin_audit_logs
-            (operator_id, operator_email, action, target_type, target_id, detail, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            (operator_id, operator_email, action, target_type, target_id, detail)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
                 operator_id,
@@ -84,8 +103,7 @@ def _write_audit_log(
                 target_type,
                 target_id,
                 json.dumps(detail or {}, ensure_ascii=False),
-                utc_now_iso(),
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("审计日志写入失败: %s", exc)

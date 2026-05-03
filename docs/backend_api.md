@@ -42,7 +42,7 @@
 SSE 事件格式：
 
 - `event: chunk` — 流式文本片段（`data: {"text": "..."}`）
-- `event: done` — 生成完成（含 `message_id`、`reply`、`summary_enabled` 等字段）
+- `event: done` — 生成完成（含 `message_id`、`reply`、`summary_enabled`、`character_state` 等字段）
 - `event: error` — 错误事件
 
 ## 计费（billing）
@@ -81,12 +81,25 @@ SSE 事件格式：
   - `GET /admin/character/{character_id}`
   - `POST /admin/character/{character_id}`
   - `DELETE /admin/character/{character_id}`
-  - 以及 memories / greetings / storylines / post-rules / story-events / test-keywords / message-preview 等子路由
+  - 角色子资源：
+    - 记忆：`GET/POST /admin/character/{id}/memories`、`PUT/DELETE /admin/character/{id}/memories/{mid}`
+    - 记忆分类：`GET/POST /admin/character/{id}/memory-categories`、`PUT/DELETE /admin/character/{id}/memory-categories/{cid}`、`GET /admin/character/{id}/memory-categories/{cid}/delete-impact`
+    - 开场白：`GET/POST/PUT/DELETE /admin/character/{id}/greetings`、`PUT/DELETE /admin/character/{id}/greetings/{gid}`
+    - 剧情线：`GET/POST /admin/character/{id}/storylines`、`PUT/DELETE /admin/character/{id}/storylines/{sid}`、`GET /admin/character/{id}/storylines/{sid}/delete-impact`
+    - 后规则：`GET/POST /admin/character/{id}/post-rules`、`PUT/DELETE /admin/character/{id}/post-rules/{rid}`
+    - 剧情事件：`GET/POST /admin/character/{id}/story-events`、`PUT/DELETE /admin/character/{id}/story-events/{eid}`
+    - 洞察：`GET /admin/character/{id}/config-summary`、`GET /admin/character/{id}/message-preview`、`POST /admin/character/{id}/test-keywords`
+  - 媒体缺失检查：`GET /admin/media-missing`
 
 ## 鉴权说明
 
-- 需要登录的接口使用 `Authorization: Bearer <token>`
-- 管理接口需要管理员身份
+- 认证方式：Cookie（`aifriend_session`），登录后自动设置
+- Cookie 属性：HttpOnly、SameSite=Lax、Path=/api、Secure（生产环境）
+- Token 滑动续期：距过期不足 7 天时自动续期
+- 备用方式：Cookie 不存在时，支持 `Authorization: Bearer <token>` 头
+- 需要登录的接口：Cookie 或 Authorization 头中需携带有效 session token
+- 管理接口：需管理员身份（`ADMIN_EMAILS` 配置的用户）
+- 游客接口：无需登录（`/chat/guest-stream`）
 
 ## 错误返回约定
 

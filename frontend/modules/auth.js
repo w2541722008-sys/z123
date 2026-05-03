@@ -47,9 +47,13 @@
      }
    }
 
-   /** 登录成功后的统一处理 */
-   function _onAuthSuccess(result) {
-    AppState.setToken(result.token);
+  /** 登录成功后的统一处理 */
+  function _onAuthSuccess(result) {
+    // Cookie 由浏览器自动管理，此处仅保留 token 作为过渡兼容
+    // 后端已同时设置 HttpOnly Cookie，前端不再必须手动存储 token
+    if (result.token) {
+      AppState.setToken(result.token);  // 过渡期保留，未来移除
+    }
     user = {
       id: result.user.id,
       name: result.user.nickname,
@@ -78,7 +82,7 @@
      const email    = document.getElementById('input-email').value.trim();
      const password = document.getElementById('input-password').value.trim();
      if (!email)    { UI.toast('请输入邮箱', 'warn'); return; }
-     if (!password || password.length < 6) { UI.toast('密码至少 6 位', 'warn'); return; }
+     if (!password || password.length < 8) { UI.toast('密码至少 8 位', 'warn'); return; }
 
      try {
        const result = await API.login({ email, password });
@@ -100,7 +104,7 @@
      const nickname = document.getElementById('input-nickname').value.trim();
      const password = document.getElementById('input-password').value.trim();
      if (!email)    { UI.toast('请输入邮箱', 'warn'); return; }
-     if (!password || password.length < 6) { UI.toast('密码至少 6 位', 'warn'); return; }
+     if (!password || password.length < 8) { UI.toast('密码至少 8 位', 'warn'); return; }
 
      try {
        const result = await API.register({ email, password, nickname });
@@ -125,15 +129,11 @@
        renderProfile();
      }
 
-     const token = AppState.getToken();
-     if (!token) {
-       renderProfile();
-       return;
-     }
-
+     // 尝试用 Cookie 认证（优先）或 Authorization 头（兼容）
+     // 不再依赖 localStorage token 存在性判断登录状态
      try {
       const me = await API.me();
-     user = { name: me.nickname, email: me.email, id: me.id, avatar_url: me.avatar_url || '' };
+      user = { name: me.nickname, email: me.email, id: me.id, avatar_url: me.avatar_url || '' };
       loggedIn = true;
       AppState.setUser(user);
     } catch (err) {
@@ -150,9 +150,7 @@
 
    async function logout() {
      try {
-       if (AppState.getToken()) {
-         await API.logout();
-       }
+       await API.logout();  // 后端会清除 Cookie
      } catch (_) {}
      AppState.setToken('');
      AppState.setUser(null);
@@ -172,7 +170,6 @@
       avatarEl.textContent = '';
       avatarEl.style.background = 'none';
       if (user.avatar_url) {
-        const SERVER_ORIGIN = typeof API_BASE !== 'undefined' ? API_BASE.replace(/\/api$/, '') : '';
         const imgSrc = user.avatar_url.startsWith('/') ? SERVER_ORIGIN + user.avatar_url : user.avatar_url;
         const img = document.createElement('img');
         img.src = imgSrc;

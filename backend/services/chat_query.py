@@ -1,0 +1,258 @@
+"""
+聊天查询服务 - 角色查询、消息加载、上下文准备
+
+职责：
+- 角色查询（带缓存）
+- 开场白获取
+- 消息加载与统计
+- Regenerate/Continue 目标消息查询
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import HTTPException
+
+from core.config import logger
+from core.database import ConnType
+from services.cache_service import get_character, set_character
+from services.plan_service import ensure_plan_access, plan_display_name
+from services.character_state import get_character_state
+from services.memory_service import get_recent_messages, get_summary_for_prompt
+
+
+# ============================================================
+# 角色查询
+# ============================================================
+def get_character_or_404(
+    conn: ConnType,
+    character_id: str,
+    viewer_plan: str | None = None,
+) -> Any:
+    """获取角色，不存在时抛出 404。优先从缓存读取。"""
+    
+    # 尝试从缓存获取
+    cached = get_character(character_id)
+    if cached:
+        row = cached
+    else:
+        # 缓存未命中，查询数据库
+        row = conn.execute(
+            "SELECT * FROM characters WHERE id = %s AND is_visible = 1",
+            (character_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="角色不存在")
+        # 存入缓存
+        set_character(character_id, row)
+    
+    if viewer_plan is not None:
+        required_plan = row["required_plan"] if "required_plan" in row.keys() else "guest"
+        ensure_plan_access(
+            viewer_plan,
+            required_plan,
+            detail=f"该角色仅 {plan_display_name(required_plan)} 可访问",
+        )
+    return row
+
+
+# ============================================================
+# 开场白
+# ============================================================
+def get_greeting_for_phase(
+    conn: ConnType,
+    character_id: str,
+    story_phase: str = "stranger",
+    storyline_id: int | None = None,
+) -> tuple[int | None, str | None]:
+    """
+    根据关系阶段获取对应的开场白。
+    
+    优先级：
+    1. 从 character_greetings 表中查询匹配当前阶段和剧情线的开场白
+    2. 如果没有匹配，返回 characters.opening_message
+    
+    返回：
+        (greeting_id, 开场白内容)
+        - 命中 character_greetings 时返回真实 greeting_id
+        - 回退到 characters.opening_message 时返回 (None, content)
+    """
+    # 1. 尝试从多阶段开场白表中获取
+    row = None
+    if storyline_id:
+        storyline_id_str = str(storyline_id)
+        row = conn.execute(
+            """
+            SELECT id, content FROM character_greetings
+            WHERE character_id = %s AND story_phase = %s AND is_active = 1
+              AND (storyline_id = %s OR storyline_id IS NULL)
+            ORDER BY 
+                CASE WHEN storyline_id = %s THEN 0 ELSE 1 END,
+                priority ASC, RANDOM()
+            LIMIT 1
+            """,
+            (character_id, story_phase, storyline_id_str, storyline_id_str),
+        ).fetchone()
+        
+        if not row:
+            logger.info(
+                "未找到剧情线 %s 的开场白，将尝试通用开场白",
+                storyline_id,
+            )
+    
+    # 2. 如果没有指定剧情线，或指定剧情线未匹配到，尝试通用开场白
+    if not row:
+        row = conn.execute(
+            """
+            SELECT id, content FROM character_greetings
+            WHERE character_id = %s AND story_phase = %s AND is_active = 1
+              AND storyline_id IS NULL
+            ORDER BY priority ASC, RANDOM()
+            LIMIT 1
+            """,
+            (character_id, story_phase),
+        ).fetchone()
+    
+    if row and row["content"]:
+        return row["id"], row["content"]
+    
+    # 3. 回退到角色的默认开场白
+    row = conn.execute(
+        "SELECT opening_message FROM characters WHERE id = %s",
+        (character_id,),
+    ).fetchone()
+    
+    return None, (row["opening_message"] if row else None)
+
+
+def ensure_opening_message(
+    conn: ConnType,
+    user_id: int | str,
+    character_id: str,
+    *,
+    commit: bool = True,
+) -> None:
+    """
+    确保用户首次和角色对话时，数据库里有一条角色的开场白。
+    
+    根据当前关系阶段选择对应的开场白，支持多阶段开场白系统。
+    """
+    row = conn.execute(
+        "SELECT 1 FROM chat_messages WHERE user_id = %s AND character_id = %s LIMIT 1",
+        (user_id, character_id),
+    ).fetchone()
+    if row:
+        return  # 已有消息，不需要开场白
+    
+    # 获取当前关系阶段和剧情线
+    state = get_character_state(conn, user_id, character_id)
+    story_phase = state.get("story_phase", "stranger") if state else "stranger"
+    storyline_id = state.get("storyline_id") if state else None
+    
+    # 获取对应阶段和剧情线的开场白
+    greeting_id, greeting = get_greeting_for_phase(conn, character_id, story_phase, storyline_id)
+    
+    if not greeting:
+        return
+    
+    # 插入开场白与更新 use_count 保持同一事务
+    conn.execute(
+        """
+        INSERT INTO chat_messages(user_id, character_id, role, content, is_summarized)
+        VALUES (%s, %s, 'assistant', %s, 1)
+        """,
+        (user_id, character_id, greeting),
+    )
+
+    if greeting_id is not None:
+        conn.execute(
+            """
+            UPDATE character_greetings 
+            SET use_count = use_count + 1 
+            WHERE id = %s AND character_id = %s
+            """,
+            (greeting_id, character_id),
+        )
+
+    if commit:
+        conn.commit()
+
+
+# ============================================================
+# 消息校验与加载
+# ============================================================
+def _normalize_non_empty_message(user_message: str) -> str:
+    clean_text = user_message.strip()
+    if not clean_text:
+        raise HTTPException(status_code=400, detail="消息不能为空")
+    return clean_text
+
+
+def _load_recent_messages_and_summary(
+    conn: ConnType,
+    *,
+    user_id: int | str,
+    character_id: str,
+    clean_text: str,
+    persist_user_message: bool,
+) -> tuple[list[dict[str, str]], str]:
+    recent_messages = get_recent_messages(conn, user_id, character_id)
+    if not persist_user_message and clean_text:
+        recent_messages.append({"role": "user", "content": clean_text})
+    memory_summary = get_summary_for_prompt(conn, user_id, character_id)
+    return recent_messages, memory_summary
+
+
+# ============================================================
+# 消息统计
+# ============================================================
+def count_chat_messages(conn: ConnType, user_id: int | str, character_id: str) -> int:
+    """统计用户和某角色的聊天消息总数。"""
+    row = conn.execute(
+        "SELECT COUNT(*) AS total FROM chat_messages WHERE user_id = %s AND character_id = %s",
+        (user_id, character_id),
+    ).fetchone()
+    return int(row["total"]) if row else 0
+
+
+def get_linked_assets(conn: ConnType, character_id: str) -> list[Any]:
+    """
+    获取角色关联的资产列表（世界卡/剧情卡等）。
+    
+    当前 MVP 阶段暂未建立关联表，默认返回空列表。
+    """
+    return []
+
+
+# ============================================================
+# Regenerate/Continue 目标消息查询
+# ============================================================
+def get_message_for_regenerate_or_continue(
+    conn: ConnType,
+    user_id: int | str,
+    message_id: str,
+    operation: str = "regenerate",
+) -> tuple[dict[str, Any], str]:
+    """
+    获取要 regenerate/continue 的目标 assistant 消息及角色信息。
+    
+    返回：
+        (message_row, character_id)
+    
+    异常：
+        HTTPException 404: 消息不存在或不属于当前用户
+        HTTPException 400: 消息不是 assistant 类型
+    """
+    _ = operation
+
+    row = conn.execute(
+        """SELECT * FROM chat_messages 
+           WHERE id = %s AND user_id = %s AND role = 'assistant'""",
+        (message_id, user_id),
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="消息不存在或无权操作")
+
+    return dict(row), row["character_id"]

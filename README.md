@@ -34,8 +34,8 @@ pip install -r requirements.txt
 
 ### 3) 初始化数据库
 
-- 首次建表执行：`docs/supabase_schema.sql`
-- 若已有旧库，补充执行：`docs/migrations/001_add_message_versions.sql`（如未生效）
+- 使用 Alembic 自动迁移：`cd backend && python3 -m alembic upgrade head`
+- 基线迁移包含全部建表，无需手动执行 SQL
 
 ### 4) 启动后端
 
@@ -60,7 +60,7 @@ CI 与本地保持同一门禁策略：后端测试、前端测试、admin actio
 ## 一键部署（项目标准）
 
 ```bash
-cd /Users/jjj/Aifriend
+cd /Users/jjj/aifriend
 bash deploy.sh
 ```
 

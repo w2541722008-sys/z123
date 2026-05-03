@@ -7,7 +7,8 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from config import COST_ESTIMATE_CHARS_PER_TOKEN, utc_now_iso
+from core.config import COST_ESTIMATE_CHARS_PER_TOKEN
+from core.database import ConnType
 
 # 常量定义
 ERROR_DETAIL_MAX_LENGTH = 500
@@ -46,9 +47,9 @@ def _day_range_utc() -> tuple[str, str]:
 
 
 def get_daily_usage(
-    conn: Any,
+    conn: ConnType,
     *,
-    user_id: int | None = None,
+    user_id: int | str | None = None,
     guest_ip: str | None = None,
 ) -> dict[str, int]:
     """读取今天已消耗的聊天请求次数和 token 数。"""
@@ -92,9 +93,9 @@ def get_daily_usage(
 
 
 def enforce_daily_budget(
-    conn: Any,
+    conn: ConnType,
     *,
-    user_id: int | None = None,
+    user_id: int | str | None = None,
     guest_ip: str | None = None,
     planned_tokens: int,
     token_limit: int,
@@ -108,9 +109,9 @@ def enforce_daily_budget(
 
 
 def log_ai_request(
-    conn: Any,
+    conn: ConnType,
     *,
-    user_id: int | None,
+    user_id: int | str | None,
     guest_ip: str,
     character_id: str,
     endpoint: str,
@@ -129,8 +130,8 @@ def log_ai_request(
         INSERT INTO ai_request_logs(
             user_id, guest_ip, character_id, endpoint,
             request_chars, estimated_input_tokens, estimated_output_tokens,
-            total_estimated_tokens, used_fallback, status, error_detail, created_at
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            total_estimated_tokens, used_fallback, status, error_detail
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             user_id,
@@ -144,7 +145,6 @@ def log_ai_request(
             1 if used_fallback else 0,
             status,
             (error_detail or "")[:ERROR_DETAIL_MAX_LENGTH],
-            utc_now_iso(),
         ),
     )
     if commit:

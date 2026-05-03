@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.database import ConnType
 from fastapi import HTTPException
 
 
@@ -16,7 +17,7 @@ def _split_csv_ids(raw: str | None) -> list[str]:
 
 
 def _assert_memory_category_owned(
-    conn: Any,
+    conn: ConnType,
     character_id: str,
     category_id: str | None,
 ) -> None:
@@ -31,7 +32,7 @@ def _assert_memory_category_owned(
 
 
 def _assert_storyline_owned(
-    conn: Any,
+    conn: ConnType,
     character_id: str,
     storyline_id: str | None,
 ) -> None:
@@ -46,7 +47,7 @@ def _assert_storyline_owned(
 
 
 def _assert_story_event_unlock_refs_owned(
-    conn: Any,
+    conn: ConnType,
     character_id: str,
     unlocked_memory_ids: str | None,
     unlocked_greeting_ids: str | None,

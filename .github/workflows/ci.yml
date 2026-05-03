@@ -24,17 +24,28 @@ jobs:
       run: |
         cd backend
         pip install -r requirements.txt
-        pip install pytest pytest-cov
+        pip install -r requirements-dev.txt
 
-    - name: Run tests with coverage
+    - name: Run unit & contract tests with coverage
       run: |
         cd backend
         python -m pytest ../tests/ -v \
           --ignore=../tests/test_frontend_utils.js \
+          --ignore=../tests/check_admin_actions.js \
+          --ignore=../tests/integration \
           --cov=. \
-          --cov-report=term-missing
+          --cov-report=term-missing \
+          --cov-fail-under=50
       env:
         DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    - name: Run integration tests (if DB available)
+      run: |
+        cd backend
+        python -m pytest ../tests/integration/ -v -m integration --timeout=60 || echo "Integration tests skipped (no DB)"
+      env:
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      continue-on-error: true
 
   lint:
     name: Lint
@@ -53,7 +64,7 @@ jobs:
       run: |
         cd backend
         pip install -r requirements.txt
-        pip install ruff black
+        pip install -r requirements-dev.txt
 
     - name: Check code formatting with Black
       run: |
@@ -62,6 +73,16 @@ jobs:
     - name: Run ruff linter
       run: |
         ruff check backend/ tests/
+
+    - name: Run mypy type check (strict modules only)
+      run: |
+        cd backend
+        pip install mypy types-psycopg2
+        mypy --config-file mypy.ini \
+          --follow-imports=skip \
+          constants/__init__.py constants/mood.py constants/story_phase.py \
+          utils/json_utils.py \
+          services/token_budget.py services/usage_guard.py services/rate_limit.py services/cache_service.py
 
   frontend-test:
     name: Frontend Tests

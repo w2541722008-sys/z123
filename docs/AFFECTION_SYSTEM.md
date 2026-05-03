@@ -107,10 +107,12 @@ AI 只判断"发生了什么事"，不判断"加多少分"：
 | `deep_conversation` | 1 小时 | 深聊不能连续触发 |
 | `comfort` | 30 分钟 | |
 | `flirt` | 20 分钟 | |
-| `help` / `shared_secret` | 1-2 小时 | |
+| `help` | 1 小时 | |
+| `shared_secret` | 2 小时 | |
 | `gift` | 24 小时 | 礼物每天只算一次 |
 | `date` | 12 小时 | |
 | `first_hug` / `kiss` / `confession` | 7 天 | 里程碑事件极其稀缺 |
+| `first_meeting` | 7 天 | 首次打招呼每天只算一次 |
 
 **负向事件**：无冷却时间，可连续生效（惩罚要真实）。
 
@@ -223,15 +225,7 @@ WHERE name = '陈序';
 
 ### 7.3 从 character_book 词条提取（未来规划）
 
-在 `character_book` 里加一条特殊词条：
-```json
-{
-  "comment": "[affection_rules]",
-  "content": "first_hug=8\ncall_nickname=3\nmention_ex=-8\nkiss=10",
-  "constant": true
-}
-```
-`card_feature_mapper.py` 解析到这条词条，自动提取并写入 `affection_rules_json`。
+后续可在管理后台自动从 World Info 词条提取好感度规则。
 
 ---
 
@@ -251,17 +245,19 @@ WHERE name = '陈序';
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `daily_event_counts` | JSON 对象 | 今日各事件有效触发次数（边际递减用） |
-| `daily_affection_gained` | 整数 | 今日累计好感度涨幅（日上限用） |
-| `last_event_timestamps` | JSON 对象 | 各事件上次触发的 UTC ISO 时间（冷却用） |
-| `daily_reset_date` | 字符串 | 记录上次重置日期（YYYY-MM-DD，惰性重置判断） |
+| `daily_event_counts` | JSONB（经 002 迁移） | 今日各事件有效触发次数（边际递减用） |
+| `daily_affection_gained` | INTEGER | 今日累计好感度涨幅（日上限用） |
+| `last_event_timestamps` | JSONB（经 002 迁移） | 各事件上次触发的 UTC 时间（冷却用） |
+| `daily_reset_date` | TEXT | 记录上次重置日期（YYYY-MM-DD，惰性重置判断） |
+
+> 注意：`storyline_id` 字段不属于 `character_states` 表，而是通过 `user_story_progress` 表动态查询获得。
 
 ### characters 表（新增字段）
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `affection_enabled` | 整数（0/1） | 是否启用好感度，默认 1；world 卡建议设 0 |
-| `affection_rules_json` | JSON 字符串 | 角色卡自定义加减分规则，空时使用全局底座 |
+| `affection_enabled` | INTEGER（0/1） | 是否启用好感度，默认 1；world 卡建议设 0 |
+| `affection_rules_json` | JSONB（经 002 迁移） | 角色卡自定义加减分规则，空时使用全局底座 |
 
 ---
 
@@ -273,12 +269,12 @@ WHERE name = '陈序';
 
 ```json
 {
-  "character_id": "xxx",
   "state": {
     "affection": 35,
     "story_phase": "acquaintance",
     "mood": "warm",
-    "custom_vars": {}
+    "custom_vars": {},
+    "storyline_id": "default"
   }
 }
 ```

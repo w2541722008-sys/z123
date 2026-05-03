@@ -5,8 +5,6 @@
     - 读取最近消息（用于 AI 上下文窗口）
     - 读取/更新记忆摘要
     - 触发摘要生成（当未摘要消息达到阈值）
-    - 文本清理和格式化
-    - 流式响应内容过滤
 
 摘要触发机制：
     - 当未摘要消息达到 SUMMARY_TRIGGER_COUNT（默认 24 条）时触发
@@ -20,8 +18,10 @@
     - get_structured_summary: 获取结构化摘要
     - refresh_memory_summary: 刷新摘要（后台调用）
     - run_memory_summary_background: 后台线程启动摘要生成
-    - parse_state_update_tag: 解析 AI 状态更新标签
-    - sanitize_stream_chunk: 流式响应内容过滤
+
+已拆分的函数（通过 re-export 保持向后兼容）：
+    - normalize_reply_text, sanitize_stream_chunk, parse_state_update_tag → stream_filter
+    - fetch_character_memories, fetch_character_post_rules → character_memory_repository
 """
 
 from __future__ import annotations
@@ -34,10 +34,9 @@ import threading
 from typing import Any
 
 # 本地模块导入
-from config import SUMMARY_MAX_TOKENS, SUMMARY_TRIGGER_COUNT, logger, utc_now_iso
-from database import get_conn, get_db
-from model_adapter import get_ai_config, request_chat_completion
-from prompt_assembler import RECENT_MESSAGE_WINDOW, build_memory_summary_messages
+from core.config import RECENT_MESSAGE_WINDOW, SUMMARY_MAX_TOKENS, SUMMARY_TRIGGER_COUNT, logger, utc_now
+from core.database import ConnType, get_conn
+from core.model_adapter import get_ai_config, request_chat_completion
 from utils.json_utils import parse_json_list, parse_json_object
 
 
@@ -71,6 +70,9 @@ _SUMMARY_SECTION_ALIASES: dict[str, str] = {
 _SUMMARY_JOB_LOCK = threading.Lock()
 _SUMMARY_RUNNING_KEYS: set[tuple[int, str]] = set()
 
+# 后台摘要线程最大并发数，防止连接池被耗尽
+_MAX_SUMMARY_THREADS = threading.Semaphore(5)
+
 
 def _empty_structured_summary() -> dict[str, Any]:
     return {
@@ -83,7 +85,7 @@ def _empty_structured_summary() -> dict[str, Any]:
     }
 
 
-def _claim_summary_job(user_id: int, character_id: str) -> bool:
+def _claim_summary_job(user_id: int | str, character_id: str) -> bool:
     """尝试占用一份摘要任务，避免同一用户-角色对被重复并发处理。"""
     key = (user_id, character_id)
     with _SUMMARY_JOB_LOCK:
@@ -93,7 +95,7 @@ def _claim_summary_job(user_id: int, character_id: str) -> bool:
         return True
 
 
-def _release_summary_job(user_id: int, character_id: str) -> None:
+def _release_summary_job(user_id: int | str, character_id: str) -> None:
     """释放摘要任务占用标记。"""
     key = (user_id, character_id)
     with _SUMMARY_JOB_LOCK:
@@ -104,8 +106,8 @@ def _release_summary_job(user_id: int, character_id: str) -> None:
 # 消息查询
 # ============================================================
 def get_recent_messages(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
     limit: int = RECENT_MESSAGE_WINDOW,
 ) -> list[dict[str, str]]:
@@ -127,26 +129,28 @@ def get_recent_messages(
     """
     rows = conn.execute(
         """
-        SELECT role, content
-        FROM chat_messages
-        WHERE user_id = %s AND character_id = %s
-        ORDER BY id DESC
-        LIMIT %s
+        SELECT role, content FROM (
+            SELECT id, role, content
+            FROM chat_messages
+            WHERE user_id = %s AND character_id = %s
+            ORDER BY id DESC
+            LIMIT %s
+        ) sub
+        ORDER BY id ASC
         """,
         (user_id, character_id, limit),
     ).fetchall()
-    # 反转列表，保持时间正序（旧消息在前，新消息在后）
     return [
         {"role": row["role"], "content": row["content"]}
-        for row in reversed(rows)
+        for row in rows
     ]
 
 
 def get_unsummarized_messages(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
-) -> list[Any]:
+) -> list[dict[str, Any]]:
     """
     获取所有未摘要的消息。
 
@@ -158,23 +162,24 @@ def get_unsummarized_messages(
     Returns:
         未摘要消息列表（按时间正序）
     """
-    return conn.execute(
+    rows: list[dict[str, Any]] = conn.execute(
         """
         SELECT id, role, content, created_at
         FROM chat_messages
-        WHERE user_id = %s AND character_id = %s AND is_summarized = 0
+        WHERE user_id = %s AND character_id = %s AND is_summarized = FALSE
         ORDER BY id ASC
         """,
         (user_id, character_id),
     ).fetchall()
+    return rows
 
 
 # ============================================================
 # 摘要管理
 # ============================================================
 def get_summary_record(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
 ) -> Any | None:
     """
@@ -195,8 +200,8 @@ def get_summary_record(
 
 
 def get_summary_text(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
 ) -> str:
     """
@@ -218,7 +223,7 @@ def get_summary_text(
 
 def _parse_structured_summary_text(summary_text: str) -> dict[str, list[str]]:
     """把摘要文本拆成结构化分区，兼容旧格式和轻微标题变体。"""
-    result = {key: [] for key, _ in _SUMMARY_SECTION_TITLES}
+    result: dict[str, list[str]] = {key: [] for key, _ in _SUMMARY_SECTION_TITLES}
     current_key: str | None = None
 
     for raw_line in (summary_text or "").split("\n"):
@@ -281,8 +286,8 @@ def _render_structured_summary(summary: dict[str, list[str]]) -> str:
 
 
 def get_summary_for_prompt(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
 ) -> str:
     """返回给 Prompt 使用的长期记忆文本，优先走结构化整理后的格式。"""
@@ -294,8 +299,8 @@ def get_summary_for_prompt(
 
 
 def should_refresh_summary(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
 ) -> bool:
     """
@@ -311,13 +316,16 @@ def should_refresh_summary(
     Returns:
         True 表示需要刷新摘要
     """
-    rows = get_unsummarized_messages(conn, user_id, character_id)
-    return len(rows) >= SUMMARY_TRIGGER_COUNT
+    row = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM chat_messages WHERE user_id = %s AND character_id = %s AND is_summarized = FALSE",
+        (user_id, character_id),
+    ).fetchone()
+    return int(row["cnt"]) >= SUMMARY_TRIGGER_COUNT
 
 
 def get_structured_summary(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
 ) -> dict[str, Any]:
     """
@@ -525,8 +533,8 @@ def merge_summary_text(existing_summary: str, new_summary_text: str) -> str:
 
 
 def save_summary(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
     summary_text: str,
     last_message_id: int | None,
@@ -544,10 +552,9 @@ def save_summary(
         summary_text: 摘要文本内容
         last_message_id: 最后摘要的消息 ID
     """
-    now = utc_now_iso()
+    now = utc_now()
     existing = get_summary_record(conn, user_id, character_id)
     if existing:
-        # 更新已有记录：版本号 +1，更新时间戳
         conn.execute(
             """
             UPDATE chat_summaries
@@ -555,25 +562,26 @@ def save_summary(
                 memory_version = memory_version + 1,
                 last_message_id = %s,
                 last_summarized_at = %s,
-                updated_at = %s
+                updated_at = now()
             WHERE user_id = %s AND character_id = %s
             """,
-            (summary_text, last_message_id, now, now, user_id, character_id),
+            (summary_text, last_message_id, now, user_id, character_id),
         )
     else:
         # 插入新记录：版本号从 1 开始
+        # created_at / updated_at 由 DB DEFAULT now() 填充
         conn.execute(
             """
             INSERT INTO chat_summaries(
                 user_id, character_id, summary, memory_version,
-                last_message_id, last_summarized_at, created_at, updated_at
-            ) VALUES (%s, %s, %s, 1, %s, %s, %s, %s)
+                last_message_id, last_summarized_at
+            ) VALUES (%s, %s, %s, 1, %s, %s)
             """,
-            (user_id, character_id, summary_text, last_message_id, now, now, now),
+            (user_id, character_id, summary_text, last_message_id, now),
         )
 
 
-def mark_messages_summarized(conn: Any, message_ids: list[int]) -> None:
+def mark_messages_summarized(conn: ConnType, message_ids: list[int]) -> None:
     """
     将指定消息标记为已摘要。
 
@@ -591,8 +599,8 @@ def mark_messages_summarized(conn: Any, message_ids: list[int]) -> None:
 
 
 def refresh_memory_summary(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
     character: Any,
 ) -> None:
@@ -625,6 +633,7 @@ def refresh_memory_summary(
         return
 
     # 步骤 3：获取已有摘要，构建提示词
+    from services.prompt_assembler import build_memory_summary_messages
     existing_summary = get_summary_text(conn, user_id, character_id)
     prompt_messages = build_memory_summary_messages(character, existing_summary, summary_target_rows)
 
@@ -657,7 +666,7 @@ def refresh_memory_summary(
 
 
 def run_memory_summary_background(
-    user_id: int,
+    user_id: int | str,
     character_id: str,
     character_row_data: dict,
 ) -> None:
@@ -703,6 +712,11 @@ def run_memory_summary_background(
         return
 
     def target():
+        acquired = _MAX_SUMMARY_THREADS.acquire(blocking=False)
+        if not acquired:
+            logger.warning("摘要线程已满(%d)，跳过 user_id=%s character_id=%s", 5, user_id, character_id)
+            _release_summary_job(user_id, character_id)
+            return
         conn = None
         try:
             conn = get_conn()
@@ -724,6 +738,7 @@ def run_memory_summary_background(
         finally:
             if conn is not None:
                 conn.close()
+            _MAX_SUMMARY_THREADS.release()
             _release_summary_job(user_id, character_id)
 
     threading.Thread(target=target, daemon=True).start()
@@ -872,6 +887,7 @@ def sanitize_stream_chunk(chunk: str, state: dict[str, Any]) -> str:
 # ============================================================
 
 def fetch_character_memories(
+    conn: ConnType,
     character_id: str,
     context_text: str,
     *,
@@ -883,6 +899,7 @@ def fetch_character_memories(
     从数据库查询角色的记忆条目，并根据上下文文本匹配关键词。
 
     参数：
+        conn: 数据库连接
         character_id: 角色 ID
         context_text: 用于匹配的上下文文本
         max_triggered: 最多触发条目数
@@ -892,74 +909,74 @@ def fetch_character_memories(
     返回：
         (before_list, after_list) — 分别对应 position='before' 和 'after' 的匹配内容列表
     """
-    with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT keywords, trigger_logic, content, position, priority
-            FROM character_memories
-            WHERE character_id = %s AND is_active = 1
-            ORDER BY priority ASC, id ASC
-            """,
-            (character_id,),
-        ).fetchall()
+    rows = conn.execute(
+        """
+        SELECT keywords, trigger_logic, content, position, priority
+        FROM character_memories
+        WHERE character_id = %s AND is_active = 1
+        ORDER BY priority ASC, id ASC
+        """,
+        (character_id,),
+    ).fetchall()
 
-        if not rows or not context_text:
-            return [], []
+    if not rows or not context_text:
+        return [], []
 
-        ctx_lower = context_text.lower()
-        triggered = []
+    ctx_lower = context_text.lower()
+    triggered = []
 
-        for row in rows:
-            keywords = [k.strip().lower() for k in row["keywords"].split(",") if k.strip()]
-            if not keywords:
-                continue
+    for row in rows:
+        keywords = [k.strip().lower() for k in row["keywords"].split(",") if k.strip()]
+        if not keywords:
+            continue
 
-            trigger_logic = row["trigger_logic"] or "any"
+        trigger_logic = row["trigger_logic"] or "any"
 
-            if trigger_logic == "all":
-                if all(kw in ctx_lower for kw in keywords):
-                    matched = keywords
-                else:
-                    matched = []
+        if trigger_logic == "all":
+            if all(kw in ctx_lower for kw in keywords):
+                matched = keywords
             else:
-                matched = [kw for kw in keywords if kw in ctx_lower]
+                matched = []
+        else:
+            matched = [kw for kw in keywords if kw in ctx_lower]
 
-            if matched:
-                triggered.append({
-                    "content": row["content"],
-                    "position": row["position"] or "before",
-                    "priority": row["priority"] or 100,
-                })
+        if matched:
+            triggered.append({
+                "content": row["content"],
+                "position": row["position"] or "before",
+                "priority": row["priority"] or 100,
+            })
 
-        triggered.sort(key=lambda e: e["priority"])
-        triggered = triggered[:max_triggered]
+    triggered.sort(key=lambda e: e["priority"])
+    triggered = triggered[:max_triggered]
 
-        before_list = []
-        after_list = []
-        wi_used = 0
+    before_list = []
+    after_list = []
+    wi_used = 0
 
-        for entry in triggered:
-            content = entry["content"].strip()
-            if not content:
-                continue
+    for entry in triggered:
+        content = entry["content"].strip()
+        if not content:
+            continue
 
-            if len(content) > max_per_entry:
-                content = content[:max_per_entry].rstrip() + "\n…（内容已截断）"
+        if len(content) > max_per_entry:
+            content = content[:max_per_entry].rstrip() + "\n…（内容已截断）"
 
-            if wi_used + len(content) > wi_max:
-                break
+        if wi_used + len(content) > wi_max:
+            break
 
-            wi_used += len(content)
+        wi_used += len(content)
 
-            if entry["position"] == "after":
-                after_list.append(content)
-            else:
-                before_list.append(content)
+        if entry["position"] == "after":
+            after_list.append(content)
+        else:
+            before_list.append(content)
 
-        return before_list, after_list
+    return before_list, after_list
 
 
 def fetch_character_post_rules(
+    conn: ConnType,
     character_id: str,
     *,
     storyline_id: int | None = None,
@@ -970,6 +987,7 @@ def fetch_character_post_rules(
     从数据库查询角色的后置规则。
 
     参数：
+        conn: 数据库连接
         character_id: 角色 ID
         storyline_id: 当前剧情线 ID（可选）
         story_phase: 当前关系阶段（可选）
@@ -978,48 +996,63 @@ def fetch_character_post_rules(
     返回：
         匹配的后置规则内容列表（已按优先级排序）
     """
-    with get_db() as conn:
-        conditions = ["character_id = %s", "is_active = 1"]
-        params: list[Any] = [character_id]
+    conditions = ["character_id = %s", "is_active = 1"]
+    params: list[Any] = [character_id]
 
-        if storyline_id is not None:
-            conditions.append("(storyline_id IS NULL OR storyline_id = %s)")
-            params.append(storyline_id)
+    if storyline_id is not None:
+        conditions.append("(storyline_id IS NULL OR storyline_id = %s)")
+        params.append(storyline_id)
 
-        if story_phase:
-            conditions.append("(story_phase IS NULL OR story_phase = '' OR story_phase = %s)")
-            params.append(story_phase)
+    if story_phase:
+        conditions.append("(story_phase IS NULL OR story_phase = '' OR story_phase = %s)")
+        params.append(story_phase)
 
-        where_clause = " AND ".join(conditions)
+    where_clause = " AND ".join(conditions)
 
-        rows = conn.execute(
-            f"""
-            SELECT content, priority
-            FROM character_post_rules
-            WHERE {where_clause}
-            ORDER BY priority ASC, id ASC
-            """,
-            tuple(params),
-        ).fetchall()
+    rows = conn.execute(
+        f"""
+        SELECT content, priority
+        FROM character_post_rules
+        WHERE {where_clause}
+        ORDER BY priority ASC, id ASC
+        """,
+        tuple(params),
+    ).fetchall()
 
-        if not rows:
-            return []
+    if not rows:
+        return []
 
-        rules = []
-        total_chars = 0
+    rules = []
+    total_chars = 0
 
-        for row in rows:
-            content = row["content"].strip()
-            if not content:
-                continue
+    for row in rows:
+        content = row["content"].strip()
+        if not content:
+            continue
 
-            if total_chars + len(content) > max_chars:
-                remaining = max_chars - total_chars
-                if remaining > 100:
-                    rules.append(content[:remaining].rstrip() + "\n…（内容已截断）")
-                break
+        if total_chars + len(content) > max_chars:
+            remaining = max_chars - total_chars
+            if remaining > 100:
+                rules.append(content[:remaining].rstrip() + "\n…（内容已截断）")
+            break
 
-            total_chars += len(content)
-            rules.append(content)
+        total_chars += len(content)
+        rules.append(content)
 
-        return rules
+    return rules
+
+
+# ============================================================
+# 兼容性 re-export：已拆分到独立模块的函数
+# 调用方仍可通过 from services.memory_service import xxx 使用
+# 新代码建议直接从新模块导入
+# ============================================================
+from services.stream_filter import (  # noqa: E402, F401
+    normalize_reply_text,
+    parse_state_update_tag,
+    sanitize_stream_chunk,
+)
+from services.character_memory_repository import (  # noqa: E402, F401
+    fetch_character_memories,
+    fetch_character_post_rules,
+)

@@ -4,8 +4,7 @@ __pycache__/
 *.pyo
 
 # 虚拟环境
-.venv/
-.venv_local312/
+.venv*/
 venv/
 
 # 环境变量（含 API Key，绝不提交）
@@ -68,9 +67,6 @@ backups/
 # 服务器配置（含密码，绝不提交）
 .server_config
 
-# Nginx 配置（含服务器 IP）
-aifriend.conf
-
 # 审计报告（临时产物）
 AI_Friend_代码审计报告.docx
 
@@ -114,4 +110,5 @@ skills-lock.json
 
 # 测试缓存
 .pytest_cache/
+.ruff_cache/
 .coverage

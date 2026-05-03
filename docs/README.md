@@ -18,21 +18,22 @@
 
 ## 业务专题
 
-- 角色导入：`CHARACTER_IMPORT_SOP.md`
+- 角色创建：`CHARACTER_IMPORT_SOP.md`
 - 好感度系统：`AFFECTION_SYSTEM.md`
-- Regenerate/Continue 测试：`REGENERATE_CONTINUE_TEST_CHECKLIST.md`
 
 ## 数据库
 
-- 全量建表：`supabase_schema.sql`
-- 迁移脚本：`migrations/`
+- Schema 管理：Alembic 迁移框架（`backend/alembic/`）
+- 基线迁移：`backend/alembic/versions/001_initial_schema.py`（含全部建表）
+- 类型修复迁移：`backend/alembic/versions/002_text_to_timestamptz_jsonb.py`（text→timestamptz/jsonb）
+- 历史参考：`supabase_schema.sql`、`migrations/`（已由 Alembic 替代，仅作归档）
 
 ## 归档与草稿
 
-- 历史过程记录：`/OPTIMIZATION_PROGRESS.md`
+- 重构进度：`docs/OPTIMIZATION_PROGRESS.md`
 - 研究草稿：`.trae/documents/`（不作为正式运行文档）
 
 说明：
 
-- 生产环境若发现 `chat_messages.versions` 缺失，请执行 `migrations/001_add_message_versions.sql`。
+- 新环境初始化数据库使用 `alembic upgrade head`，不再需要手动执行 SQL 文件。
 - 文档与代码不一致时，以当前代码与脚本行为为准，再同步回文档。

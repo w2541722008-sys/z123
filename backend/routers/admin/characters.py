@@ -3,7 +3,7 @@
 """
 from fastapi import APIRouter, Depends
 
-from auth import get_admin_user
+from core.auth import get_admin_user
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 

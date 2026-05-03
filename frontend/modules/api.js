@@ -7,6 +7,7 @@
       ...(options.headers || {}),
     };
 
+    // Cookie 自动携带认证信息；Authorization 头仅作过渡兼容
     const token = AppState.getToken();
     if (token) {
       headers.Authorization = `Bearer ${token}`;
@@ -23,6 +24,7 @@
          headers,
          body: options.body ? JSON.stringify(options.body) : undefined,
          signal: controller.signal,
+         credentials: 'include',  // 携带 HttpOnly Cookie
        });
      } catch (err) {
        if (err.name === 'AbortError') throw new Error('请求超时，请检查网络后重试');
@@ -31,29 +33,31 @@
        clearTimeout(timer);
      }
 
-     let data = null;
-     try {
-       data = await resp.json();
-     } catch (_) {
-       data = null;
-     }
+    let data = null;
+    try {
+      data = await resp.json();
+    } catch (_) {
+      data = null;
+    }
 
-     if (!resp.ok) {
-       throw new Error(data?.detail || '请求失败');
-     }
-     return data;
-   }
+    if (!resp.ok) {
+      throw new Error(data?.detail || '请求失败');
+    }
+    return data;
+  }
 
-   async function streamMessageToUrl(url, payload, handlers = {}, signal) {
+  async function streamMessageToUrl(url, payload, handlers = {}, signal) {
     const token = AppState.getToken();
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
     const resp = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers,
       body: JSON.stringify(payload),
       signal,
+      credentials: 'include',  // 携带 HttpOnly Cookie
     });
 
      if (!resp.ok) {
@@ -127,10 +131,13 @@
     if (!token) throw new Error('请先登录');
     const formData = new FormData();
     formData.append('file', file);
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
     const resp = await fetch(`${API_BASE}/user/avatar`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers,
       body: formData,
+      credentials: 'include',  // 携带 HttpOnly Cookie
     });
     let data = null;
     try { data = await resp.json(); } catch (_) { data = null; }

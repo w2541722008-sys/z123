@@ -1,2 +1,9 @@
 # 开发/测试依赖（不用于生产环境）
 pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-timeout>=2.2.0
+ruff>=0.4.0
+black>=24.0.0
+mypy>=1.8.0
+types-psycopg2>=2.9.0
+pre-commit>=3.6.0

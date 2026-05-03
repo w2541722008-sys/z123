@@ -35,13 +35,19 @@ from __future__ import annotations
 
 # 标准库导入
 import json
+import logging
 from datetime import date, datetime, timezone
 from typing import Any
 
 # 本地模块导入
-from config import utc_now_iso
+from core.config import utc_now
 from constants import Mood, StoryPhase
+from core.database import ConnType
+from services.cache_service import cache_get, cache_set
+from services.story_event_service import check_and_trigger_story_events
 from utils.json_utils import parse_json_object
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # 全局配置常量
@@ -132,14 +138,21 @@ def _get_today_date() -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
-def _get_affection_rules(conn: Any, character_id: str) -> dict[str, int]:
-    """读取角色卡自定义规则，与全局底座合并（角色卡覆盖同名 key）。"""
+def _get_affection_rules(conn: ConnType, character_id: str) -> dict[str, int]:
+    """读取角色卡自定义规则，与全局底座合并（角色卡覆盖同名 key）。结果缓存 300s。"""
+    cache_key = f"affection_rules:{character_id}"
+    cached = cache_get(cache_key)
+    if cached is not None:
+        return dict(cached)
+
     row = conn.execute(
         "SELECT affection_rules_json, affection_enabled FROM characters WHERE id = %s",
         (character_id,),
     ).fetchone()
     if not row:
-        return dict(_AFFECTION_BASE_RULES)
+        result = dict(_AFFECTION_BASE_RULES)
+        cache_set(cache_key, result, ttl=300)
+        return result
 
     merged = dict(_AFFECTION_BASE_RULES)
     card_rules = parse_json_object(row["affection_rules_json"] or "{}", fallback={})
@@ -165,10 +178,11 @@ def _get_affection_rules(conn: Any, character_id: str) -> dict[str, int]:
 
         merged[k] = raw_val
 
+    cache_set(cache_key, merged, ttl=300)
     return merged
 
 
-def is_affection_enabled(conn: Any, character_id: str) -> bool:
+def is_affection_enabled(conn: ConnType, character_id: str) -> bool:
     """判断该角色卡是否启用好感度系统。"""
     row = conn.execute(
         "SELECT affection_enabled, affection_rules_json, card_type FROM characters WHERE id = %s",
@@ -194,7 +208,7 @@ def is_affection_enabled(conn: Any, character_id: str) -> bool:
 # ============================================================
 # 状态读写
 # ============================================================
-def get_character_state(conn: Any, user_id: int, character_id: str) -> dict[str, Any]:
+def get_character_state(conn: ConnType, user_id: int | str, character_id: str) -> dict[str, Any]:
     """读取用户对某角色的当前关系状态，不存在时返回默认值。"""
     # 查询角色状态
     row = conn.execute(
@@ -256,8 +270,8 @@ def _reset_daily_fields_if_needed(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def upsert_character_state(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
     affection: int,
     story_phase: str,
@@ -288,9 +302,9 @@ def upsert_character_state(
         INSERT INTO character_states(
             user_id, character_id, affection, story_phase, mood, custom_vars,
             daily_event_counts, daily_affection_gained, last_event_timestamps,
-            daily_reset_date, created_at, updated_at
+            daily_reset_date
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT(user_id, character_id) DO UPDATE SET
             affection = excluded.affection,
             story_phase = excluded.story_phase,
@@ -300,7 +314,7 @@ def upsert_character_state(
             daily_affection_gained = excluded.daily_affection_gained,
             last_event_timestamps = excluded.last_event_timestamps,
             daily_reset_date = excluded.daily_reset_date,
-            updated_at = excluded.updated_at
+            updated_at = now()
         """,
         (
             user_id, character_id, affection, story_phase, mood,
@@ -309,8 +323,6 @@ def upsert_character_state(
             daily_affection_gained,
             json.dumps(last_event_timestamps, ensure_ascii=False),
             daily_reset_date,
-            utc_now_iso(),   # created_at（首次插入时使用，UPSERT 时被忽略）
-            utc_now_iso(),   # updated_at（每次更新都更新）
         ),
     )
     if commit:
@@ -426,7 +438,7 @@ def _update_anti_abuse_counters(
 ) -> dict[str, Any]:
     """更新三防计数器。"""
     last_ts_map = dict(current_state.get("_last_event_timestamps", {}))
-    last_ts_map[event] = utc_now_iso()
+    last_ts_map[event] = utc_now().isoformat()
 
     daily_counts = dict(current_state.get("_daily_event_counts", {}))
     daily_gained = current_state.get("_daily_affection_gained", 0)
@@ -525,7 +537,7 @@ def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(delta, dict):
         return {}
     
-    sanitized = {}
+    sanitized: dict[str, str | int | dict[str, str | int | float]] = {}
     
     for key, value in delta.items():
         # 只处理白名单字段
@@ -579,8 +591,8 @@ def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_state_delta(
-    conn: Any,
-    user_id: int,
+    conn: ConnType,
+    user_id: int | str,
     character_id: str,
     delta: dict[str, Any],
     *,
@@ -665,7 +677,7 @@ def apply_state_delta(
                 custom_vars[k] = v
 
     # 检查并触发剧情事件（在写库之前，基于新的好感度）
-    triggered_events = _check_and_trigger_story_events(
+    triggered_events = check_and_trigger_story_events(
         conn, user_id, character_id, affection, story_phase, commit=False
     )
 
@@ -693,187 +705,6 @@ def apply_state_delta(
         result["_triggered_events"] = triggered_events
 
     return result
-
-
-# ============================================================
-# 剧情事件系统
-# ============================================================
-
-def _check_and_trigger_story_events(
-    conn: Any,
-    user_id: int,
-    character_id: str,
-    current_affection: int,
-    current_phase: str,
-    *,
-    commit: bool = True,
-) -> list[dict[str, Any]]:
-    """
-    检查并触发剧情事件。
-
-    当用户好感度达到事件触发阈值时，自动触发对应的剧情事件，
-    解锁相关的记忆、开场白、剧情线等内容。
-
-    Args:
-        conn: 数据库连接
-        user_id: 用户ID
-        character_id: 角色ID
-        current_affection: 当前好感度
-        current_phase: 当前关系阶段
-
-    Returns:
-        触发的事件列表，每个事件包含标题、描述、解锁内容等
-    """
-    triggered = []
-
-    try:
-        # 1. 获取该角色所有启用的剧情事件
-        events = conn.execute(
-            """
-            SELECT id, title, description, trigger_score,
-                   unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
-                   event_content, is_active
-            FROM story_events
-            WHERE character_id = %s AND is_active = 1
-            ORDER BY trigger_score ASC
-            """,
-            (character_id,),
-        ).fetchall()
-
-        if not events:
-            return triggered
-
-        # 2. 获取用户已触发的事件ID列表
-        progress_row = conn.execute(
-            """
-            SELECT triggered_event_ids FROM user_story_progress
-            WHERE user_id = %s AND character_id = %s
-            """,
-            (user_id, character_id),
-        ).fetchone()
-
-        triggered_ids = set()
-        if progress_row and progress_row["triggered_event_ids"]:
-            triggered_ids = set(
-                int(x.strip())
-                for x in str(progress_row["triggered_event_ids"]).split(",")
-                if x.strip().isdigit()
-            )
-
-        # 3. 检查每个事件是否应该触发
-        new_triggered_ids = []
-        for event in events:
-            event_id = event["id"]
-
-            # 已触发过，跳过
-            if event_id in triggered_ids:
-                continue
-
-            # 好感度未达到触发阈值，跳过
-            if current_affection < event["trigger_score"]:
-                continue
-
-            # 触发事件
-            new_triggered_ids.append(str(event_id))
-
-            event_data = {
-                "id": event_id,
-                "title": event["title"],
-                "description": event["description"] or "",
-                "trigger_score": event["trigger_score"],
-                "event_content": event["event_content"] or "",
-                "unlocked": {},
-            }
-
-            # 4. 解锁相关内容
-            # 解锁记忆条目
-            if event["unlocked_memory_ids"]:
-                memory_ids = [
-                    int(x.strip())
-                    for x in str(event["unlocked_memory_ids"]).split(",")
-                    if x.strip().isdigit()
-                ]
-                if memory_ids:
-                    # 激活这些记忆条目
-                    placeholders = ",".join(["%s"] * len(memory_ids))
-                    conn.execute(
-                        f"""
-                        UPDATE character_memories
-                        SET is_active = 1
-                        WHERE character_id = %s AND id IN ({placeholders})
-                        """,
-                        (character_id,) + tuple(memory_ids),
-                    )
-                    event_data["unlocked"]["memories"] = memory_ids
-
-            # 解锁开场白
-            if event["unlocked_greeting_ids"]:
-                greeting_ids = [
-                    int(x.strip())
-                    for x in str(event["unlocked_greeting_ids"]).split(",")
-                    if x.strip().isdigit()
-                ]
-                if greeting_ids:
-                    # 激活这些开场白
-                    placeholders = ",".join(["%s"] * len(greeting_ids))
-                    conn.execute(
-                        f"""
-                        UPDATE character_greetings
-                        SET is_active = 1
-                        WHERE character_id = %s AND id IN ({placeholders})
-                        """,
-                        (character_id,) + tuple(greeting_ids),
-                    )
-                    event_data["unlocked"]["greetings"] = greeting_ids
-
-            # 解锁剧情线
-            if event["unlocked_storyline_id"]:
-                storyline_id = int(event["unlocked_storyline_id"])
-                conn.execute(
-                    """
-                    UPDATE character_storylines
-                    SET is_active = 1
-                    WHERE character_id = %s AND id = %s
-                    """,
-                    (character_id, storyline_id),
-                )
-                event_data["unlocked"]["storyline_id"] = storyline_id
-
-            triggered.append(event_data)
-
-        # 5. 更新用户剧情进度
-        if new_triggered_ids:
-            all_triggered = triggered_ids | set(int(x) for x in new_triggered_ids)
-            all_triggered_str = ",".join(sorted(str(x) for x in all_triggered))
-
-            conn.execute(
-                """
-                INSERT INTO user_story_progress
-                (user_id, character_id, triggered_event_ids, current_storyline_id,
-                 last_updated, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT(user_id, character_id) DO UPDATE SET
-                    triggered_event_ids = excluded.triggered_event_ids,
-                    last_updated = excluded.last_updated
-                """,
-                (
-                    user_id,
-                    character_id,
-                    all_triggered_str,
-                    None,  # current_storyline_id 保持不变
-                    utc_now_iso(),
-                    utc_now_iso(),
-                ),
-            )
-            if commit:
-                conn.commit()
-
-    except Exception as e:
-        # 剧情事件触发失败不应影响主流程，记录错误但继续
-        import logging
-        logging.getLogger(__name__).error(f"剧情事件触发失败: {e}")
-
-    return triggered
 
 
 

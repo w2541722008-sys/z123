@@ -1,247 +1,117 @@
-# aifriend 项目开发协作与回退规则
+# aifriend 开发规则
 
-适用项目：aifriend（项目根目录）
-
-最后更新：2026-03-30
+最后更新：2026-05-03
 
 ---
 
-## 1. 这份规则是干什么的
+## 1. 总则
 
-这份文档不是摆样子，作用只有一个：
-
-> **保证这个项目后续所有修改都可追踪、可回退、可复盘。**
-
-以后无论是修后台权限、补支付闭环、收紧部署配置，还是调整 AI 聊天逻辑，都要遵守这里的规则。
+- **稳定优先**：稳定 > 可维护 > 可回退 > 结构优化，未经确认不做大重构
+- **一次一目标**：一个分支只做一件事，一次提交只解决一个问题
+- **先回退点再改**：高风险模块修改前必须确认已有可回退版本点
 
 ---
 
-## 2. 总原则
+## 2. 数据库操作
 
-### 2.1 先建回退点，再改高风险代码
+### 游标生命周期
 
-高风险模块在修改前，必须先确认当前状态已经有明确版本点。
+`conn.commit()` 会关闭所有游标，`fetchone()` 必须在 `commit()` 之前：
 
-如果没有版本点，不允许直接开改。
+```python
+# ✅ 先取值再提交
+cur.execute("INSERT INTO ... RETURNING id", (...))
+row = cur.fetchone()
+conn.commit()
 
-### 2.2 一次只解决一个明确目标
+# ❌ commit 后游标已关闭
+conn.commit()
+row = cur.fetchone()  # InterfaceError
+```
 
-禁止一边修支付、一边改样式、一边顺手重构。
+### 类型与参数
 
-正确方式：
+- **int 列用 `1`/`0`，禁止 `True`/`False`**：PostgreSQL integer 列不接受 Python 布尔值（如 `is_visible`、`is_active`）
+- **`%s` 占位符必须与参数元组严格对齐**：修改 SQL 后逐一核对
+- **有 DB DEFAULT 的列**（`created_at`、`updated_at`）不在 INSERT 中显式传入
 
-- 一次分支只做一个目标
-- 一次提交只解决一个问题或同一类小问题
-- 每次修改都能解释清楚“为什么改、改了什么、怎么回退”
+### JSON 列
 
-### 2.3 稳定优先，不为“看起来更优雅”大改
+- 新增结构化数据列必须用 `jsonb`，禁止 `text` 存储 JSON
+- `jsonb` 列：psycopg2 自动序列化，直接传/读 dict
+- `text` 列（历史遗留）存 JSON：写 `json.dumps()`，读 `json.loads()` + 异常处理
 
-当前项目优先级是：
+### 连接管理
 
-1. 稳定
-2. 可维护
-3. 可回退
-4. 再谈结构优化
-
-未经确认，不做大重构。
-
----
-
-## 3. Git 使用规则
-
-## 3.1 主分支规则
-
-- `main`：只保留相对稳定、可回退的版本
-- 禁止长期直接在 `main` 上连续开发
-
-## 3.2 分支命名规则
-
-按用途创建分支：
-
-- `audit/...`：排查、审计、分析
-- `fix/...`：缺陷修复
-- `feat/...`：新增功能
-- `refactor/...`：结构整理（仅限低风险且已确认）
-- `release/...`：上线前收口
-
-### 示例
-
-- `audit/security-check`
-- `fix/admin-auth`
-- `fix/payment-callback`
-- `fix/chat-no-mock-fallback`
-- `release/v0.2-prelaunch`
+- 路由层通过 `get_db_dep()` 获取连接，禁止 `with get_db()` 手动管理
+- 服务层事务控制使用 `ConnWrapper` 或 `_transaction()`
+- 连接归还前确保无未提交事务，不依赖 finally rollback 兜底
 
 ---
 
-## 4. 提交规则
+## 3. 分层架构
 
-## 4.1 提交信息格式
+```
+routers → services → repositories → core/constants
+```
 
-统一使用：
-
-`type(scope): 简明说明`
-
-### 推荐类型
-
-- `fix`
-- `feat`
-- `refactor`
-- `chore`
-- `docs`
-- `test`
-
-### 示例
-
-- `fix(admin): 为管理接口补充管理员鉴权`
-- `fix(billing): 补齐支付回调后的订单落账逻辑`
-- `fix(chat): 移除 AI 失败时静默 mock 回复`
-- `chore(deploy): 关闭生产环境 debug 暴露`
-- `docs(rules): 新增开发协作与回退规则`
-
-## 4.2 禁止的提交方式
-
-禁止这种无信息量提交：
-
-- `update`
-- `fix bug`
-- `change`
-- `test`
-
-这种以后排查问题基本没用。
+| 层 | 职责 | 禁止 |
+|---|------|------|
+| routers | 参数校验、鉴权、调用 service、构造响应 | 包含裸 SQL |
+| services | 业务逻辑、跨表操作、缓存 | 导入 routers |
+| repositories | 纯 SQL，不含业务逻辑 | — |
+| core | 基础设施（auth/config/database/schemas） | 依赖 services（需通信用回调注入） |
+| constants | 枚举常量，单一来源 | — |
 
 ---
 
-## 5. 标签与回退规则
+## 4. 错误处理
 
-## 5.1 基线标签
-
-接手前的基线标签使用：
-
-- `v0.1-baseline`
-
-## 5.2 关键节点标签建议
-
-后续可以继续按阶段打标签：
-
-- `v0.2-admin-fixed`
-- `v0.3-payment-ready`
-- `v0.4-chat-safe`
-- `v1.0-release`
-
-## 5.3 回退原则
-
-1. 先看差异，再回退
-2. 优先回退最小范围
-3. 能回退单个提交，就不要整段倒退
-4. 上线故障优先回退到最近稳定标签
-5. 高风险回退前必须再次确认影响范围
+- **禁止 `assert` 做运行时校验**（`-O` 模式下会移除），改用 `if + raise HTTPException`
+- 用户侧：`HTTPException(4xx)`，`detail` 简明，不暴露内部实现/堆栈/SQL
+- 服务端：`logger.exception()` 记录日志，不用 f-string；返回 `500` 不含技术细节
+- 数据库异常：先 rollback 再返回错误
 
 ---
 
-## 6. 高风险改动规则
+## 5. 测试
 
-以下文件或模块，默认按高风险处理：
-
-- `backend/routers/admin/`（整个目录）
-- `backend/routers/billing.py`
-- `backend/services/chat_service.py`
-- `backend/auth.py`
-- `backend/database.py`
-- `.env`
-- 服务器部署配置
-- 反向代理配置
-- 支付相关密钥与回调配置
-
-### 高风险改动必须满足
-
-- 修改前先确认已有回退点
-- 修改目标单独开分支
-- 不混入无关改动
-- 改动原因和影响范围要写清楚
+- 当前使用 `FakeSequenceConn` 模拟，**不执行真实 SQL**，`FakeQueryResult` 数量必须与实际 SQL 序列一致
+- **commit 后游标失效**：`FakeSequenceConn.commit()` 后，上次 execute 返回的 `FakeQueryResult.fetchone()` 将抛出 `RuntimeError`，模拟 psycopg2 真实行为；但可以执行新的 `execute()` 创建新游标
+- 修改路由/服务 SQL 后，必须同步检查对应测试的 FakeQueryResult
+- 必须覆盖：admin 鉴权守卫、RETURNING id 的 fetchone 顺序、int 列类型校验
+- 命名：文件 `test_{模块}_{场景}.py`，函数 `test_{功能}_{条件}_{预期}`
+- 测试分层：`unit/`（纯函数零 mock）、`services/`（轻 mock）、`routers/`（TestClient + mock DB）、`contracts/`（API 契约）、`integration/`（真实 DB，需 `-m integration`）、`regression/`（Bug 回归）
+- 集成测试标记 `@pytest.mark.integration`，默认不执行；运行：`pytest -m integration`
+- 覆盖率阈值：51%，目标 80%
 
 ---
 
-## 7. 未经确认禁止做的事
+## 6. Git 与提交
 
-以下动作默认要先确认：
-
-- 大规模重构
-- 修改数据库结构
-- 修改鉴权逻辑
-- 修改支付逻辑
-- 修改线上部署配置
-- 批量删除旧代码
-- 替换现有核心依赖
-- 改动会影响现网用户数据的逻辑
-
-没有确认，不直接执行。
+- `main` 只放稳定版本，禁止长期直接开发
+- 分支：`fix/` `feat/` `refactor/` `audit/` `release/`
+- 提交格式：`type(scope): 简明说明`（如 `fix(admin): 补充鉴权`）
+- 禁止无信息量提交（`update` / `fix bug` / `change`）
+- 回退：优先最小范围，上线故障优先回退到最近稳定标签
 
 ---
 
-## 8. 敏感信息规则
+## 7. 高风险模块
 
-以下内容严禁提交进仓库：
+以下改动默认需单独开分支、写清原因和影响范围：
 
-- `.env`
-- API Key
-- Cookie
-- 支付密钥
-- 私钥 / 证书
-- 真实数据库文件
-- 用户导出数据
-- 备份压缩包
-- 本地日志中包含的敏感内容
+- `backend/routers/admin/`、`backend/routers/billing.py`
+- `backend/services/chat_stream_service.py`、`backend/services/chat_send.py`
+- `backend/core/auth.py`、`backend/core/database.py`
+- `backend/repositories/`（SQL 集中管理）
+- `backend/alembic/versions/`（数据库迁移）
+- 鉴权/支付/部署配置/线上用户数据相关逻辑
 
-### 说明
-
-`.gitignore` 只是第一层保护，不代表绝对安全。
-
-如果敏感文件已经被 Git 跟踪，必须单独处理，不能假装没看到。
+未经确认禁止：大规模重构、改数据库结构、改鉴权/支付逻辑、批量删代码、替换核心依赖。
 
 ---
 
-## 9. .gitignore 最低要求
+## 8. 敏感信息
 
-仓库至少需要忽略这些内容：
-
-- Python 缓存
-- 虚拟环境
-- `.env` 与变体
-- `*.db` / `*.sqlite` / `*.sqlite3`
-- 日志文件
-- 证书 / 私钥文件
-- 备份文件
-- 临时导出文件
-- IDE 配置缓存
-
----
-
-## 10. 日常执行流程
-
-后续每次开始正式改动时，按这个顺序：
-
-1. 确认当前目标
-2. 检查工作区是否干净
-3. 确认当前已有可回退版本点
-4. 创建对应功能分支
-5. 完成一个目标后单独提交
-6. 关键阶段打标签
-7. 合并前再次核对改动范围
-
----
-
-## 11. 当前阶段建议
-
-在正式修复业务问题前，先完成：
-
-1. 初始化 Git 仓库（如果还没初始化）
-2. 以当前项目状态建立初始提交
-3. 打上 `v0.1-baseline` 标签
-4. 后续所有改动都按本规则执行
-
----
-
-## 12. 一句话版本
-
-> 先有回退点，再动代码；一次只改一类事；高风险变更先确认；敏感信息绝不进仓库。
+严禁提交：`.env`、API Key、Cookie、支付密钥、私钥/证书、真实数据库、用户导出数据、备份文件。已被 Git 跟踪的敏感文件必须单独处理。

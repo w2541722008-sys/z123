@@ -7,6 +7,60 @@
  */
 
 // ============================================================
+// 通用 CRUD 辅助函数
+// ============================================================
+
+/** 关闭弹窗 */
+function closeModal(modalId) {
+  document.getElementById(modalId).style.display = 'none';
+}
+
+/** 清洗 storyline_id：空值返回 null */
+function cleanStorylineId(raw) {
+  if (!raw) return null;
+  const n = raw.trim();
+  return n || null;
+}
+
+/** 校验剧情线是否存在且启用，返回错误信息或 null */
+function validateStoryline(rawStorylineId, inactiveMsg = '当前选择的剧情线已禁用，请先启用它或改为默认') {
+  if (!rawStorylineId) return null;
+  const storyline = getStorylineById(rawStorylineId);
+  if (!storyline) return '当前选择的剧情线不存在，请重新选择';
+  if (!storyline.is_active) return inactiveMsg;
+  return null;
+}
+
+/** 通用 CRUD 保存（PUT 或 POST） */
+async function crudSave(endpoint, data, modalId, idValue) {
+  const url = idValue
+    ? `${AdminAPI.API}/character/${AdminState.currentCharId}${endpoint}/${idValue}`
+    : `${AdminAPI.API}/character/${AdminState.currentCharId}${endpoint}`;
+  try {
+    await AdminAPI.apiFetch(url, { method: idValue ? 'PUT' : 'POST', body: JSON.stringify(data) });
+    closeModal(modalId);
+    toast('保存成功');
+    loadAdvancedData();
+  } catch (e) {
+    toast('保存失败：' + e.message);
+  }
+}
+
+/** 通用 CRUD 删除 */
+async function crudDelete(endpoint, idValue, modalId, confirmMsg = null) {
+  if (!idValue) return;
+  if (!confirm(confirmMsg || '确定删除？')) return;
+  try {
+    await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}${endpoint}/${idValue}`, { method: 'DELETE' });
+    closeModal(modalId);
+    toast('删除成功');
+    loadAdvancedData();
+  } catch (e) {
+    toast('删除失败：' + e.message);
+  }
+}
+
+// ============================================================
 // 子标签页切换
 // ============================================================
 function switchAdvancedTab(tab) {
@@ -186,13 +240,11 @@ function editMemory(id) {
   document.getElementById('memory-modal').style.display = 'flex';
 }
 
-function closeMemoryModal() {
-  document.getElementById('memory-modal').style.display = 'none';
-}
+function closeMemoryModal() { closeModal('memory-modal'); }
 
 async function saveMemory() {
   const id = document.getElementById('memory-id').value;
-  const data = {
+  await crudSave('/memories', {
     keywords: document.getElementById('memory-keywords').value,
     trigger_logic: document.getElementById('memory-trigger-logic').value,
     content: document.getElementById('memory-content').value,
@@ -200,45 +252,12 @@ async function saveMemory() {
     priority: parseInt(document.getElementById('memory-priority').value) || 100,
     comment: document.getElementById('memory-comment').value,
     is_active: document.getElementById('memory-is-active').checked ? 1 : 0,
-    category_id: (() => {
-      const v = document.getElementById('memory-category').value;
-      if (!v) return null;
-      return v.trim() || null;
-    })(),
-  };
-
-  try {
-    if (id) {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/memories/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(data),
-      });
-    } else {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/memories`, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    }
-    closeMemoryModal();
-    toast('保存成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('保存失败：' + e.message);
-  }
+    category_id: cleanStorylineId(document.getElementById('memory-category').value),
+  }, 'memory-modal', id);
 }
 
 async function deleteMemory() {
-  const id = document.getElementById('memory-id').value;
-  if (!id || !confirm('确定要删除这个记忆条目吗？')) return;
-
-  try {
-    await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/memories/${id}`, { method: 'DELETE' });
-    closeMemoryModal();
-    toast('删除成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('删除失败：' + e.message);
-  }
+  await crudDelete('/memories', document.getElementById('memory-id').value, 'memory-modal', '确定要删除这个记忆条目吗？');
 }
 
 // ============================================================
@@ -317,67 +336,26 @@ function editGreeting(id) {
   document.getElementById('greeting-modal').style.display = 'flex';
 }
 
-function closeGreetingModal() {
-  document.getElementById('greeting-modal').style.display = 'none';
-}
+function closeGreetingModal() { closeModal('greeting-modal'); }
 
 async function saveGreeting() {
   const id = document.getElementById('greeting-id').value;
   const rawStorylineId = document.getElementById('greeting-storyline').value;
-  const storyline = rawStorylineId ? getStorylineById(rawStorylineId) : null;
-  if (rawStorylineId && !storyline) {
-    toast('当前选择的剧情线不存在，请重新选择');
-    return;
-  }
-  if (storyline && !storyline.is_active) {
-    toast('当前选择的剧情线已禁用，请先启用它或改为默认');
-    return;
-  }
-  const data = {
+  const err = validateStoryline(rawStorylineId, '当前选择的剧情线已禁用，请先启用它或改为默认');
+  if (err) { toast(err); return; }
+
+  await crudSave('/greetings', {
     content: document.getElementById('greeting-content').value,
     story_phase: document.getElementById('greeting-phase').value,
     mood: document.getElementById('greeting-mood').value,
     priority: parseInt(document.getElementById('greeting-priority').value) || 100,
-    storyline_id: (() => {
-      if (!rawStorylineId) return null;
-      const n = rawStorylineId.trim();
-      return n || null;
-    })(),
+    storyline_id: cleanStorylineId(rawStorylineId),
     is_active: document.getElementById('greeting-is-active').checked ? 1 : 0,
-  };
-
-  try {
-    if (id) {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/greetings/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(data),
-      });
-    } else {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/greetings`, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    }
-    closeGreetingModal();
-    toast('保存成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('保存失败：' + e.message);
-  }
+  }, 'greeting-modal', id);
 }
 
 async function deleteGreeting() {
-  const id = document.getElementById('greeting-id').value;
-  if (!id || !confirm('确定要删除这个开场白吗？')) return;
-
-  try {
-    await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/greetings/${id}`, { method: 'DELETE' });
-    closeGreetingModal();
-    toast('删除成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('删除失败：' + e.message);
-  }
+  await crudDelete('/greetings', document.getElementById('greeting-id').value, 'greeting-modal', '确定要删除这个开场白吗？');
 }
 
 // ============================================================
@@ -467,39 +445,18 @@ function editStoryline(id) {
   document.getElementById('storyline-modal').style.display = 'flex';
 }
 
-function closeStorylineModal() {
-  document.getElementById('storyline-modal').style.display = 'none';
-}
+function closeStorylineModal() { closeModal('storyline-modal'); }
 
 async function saveStoryline() {
   const id = document.getElementById('storyline-id').value;
-  const data = {
+  await crudSave('/storylines', {
     name: document.getElementById('storyline-name').value,
     description: document.getElementById('storyline-description').value,
     unlock_score: parseInt(document.getElementById('storyline-unlock-score').value) || 0,
     sort_order: parseInt(document.getElementById('storyline-sort').value) || 0,
     is_default: document.getElementById('storyline-is-default').checked ? 1 : 0,
     is_active: document.getElementById('storyline-is-active').checked ? 1 : 0,
-  };
-
-  try {
-    if (id) {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/storylines/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(data),
-      });
-    } else {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/storylines`, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    }
-    closeStorylineModal();
-    toast('保存成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('保存失败：' + e.message);
-  }
+  }, 'storyline-modal', id);
 }
 
 async function deleteStoryline() {
@@ -527,16 +484,8 @@ async function deleteStoryline() {
   } catch (e) {
     confirmMsg = '确定要删除这个剧情线吗？关联的开场白、后置规则、剧情事件可能会受到影响。';
   }
-  if (!confirm(confirmMsg)) return;
 
-  try {
-    await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/storylines/${id}`, { method: 'DELETE' });
-    closeStorylineModal();
-    toast('删除成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('删除失败：' + e.message);
-  }
+  await crudDelete('/storylines', id, 'storyline-modal', confirmMsg);
 }
 
 // ============================================================
@@ -592,9 +541,7 @@ function editCategory(id) {
   document.getElementById('category-modal').style.display = 'flex';
 }
 
-function closeCategoryModal() {
-  document.getElementById('category-modal').style.display = 'none';
-}
+function closeCategoryModal() { closeModal('category-modal'); }
 
 async function saveCategory() {
   const id = document.getElementById('category-id').value;
@@ -606,25 +553,7 @@ async function saveCategory() {
   };
 
   if (!data.name.trim()) { toast('请输入分类名称'); return; }
-
-  try {
-    if (id) {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/memory-categories/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(data),
-      });
-    } else {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/memory-categories`, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    }
-    closeCategoryModal();
-    toast('保存成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('保存失败：' + e.message);
-  }
+  await crudSave('/memory-categories', data, 'category-modal', id);
 }
 
 async function deleteCategory() {
@@ -643,16 +572,8 @@ async function deleteCategory() {
   } catch (e) {
     confirmMsg = '确定删除此分类？如果还有记忆条目引用它，删除会失败。';
   }
-  if (!confirm(confirmMsg)) return;
 
-  try {
-    await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/memory-categories/${id}`, { method: 'DELETE' });
-    closeCategoryModal();
-    toast('删除成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('删除失败：' + e.message);
-  }
+  await crudDelete('/memory-categories', id, 'category-modal', confirmMsg);
 }
 
 // ============================================================
@@ -715,30 +636,18 @@ function editPostRule(id) {
   document.getElementById('postrule-modal').style.display = 'flex';
 }
 
-function closePostRuleModal() {
-  document.getElementById('postrule-modal').style.display = 'none';
-}
+function closePostRuleModal() { closeModal('postrule-modal'); }
 
 async function savePostRule() {
   const id = document.getElementById('postrule-id').value;
   const rawStorylineId = document.getElementById('postrule-storyline').value;
-  const storyline = rawStorylineId ? getStorylineById(rawStorylineId) : null;
-  if (rawStorylineId && !storyline) {
-    toast('当前选择的剧情线不存在，请重新选择');
-    return;
-  }
-  if (storyline && !storyline.is_active) {
-    toast('当前选择的剧情线已禁用，请先启用它或改为通用规则');
-    return;
-  }
+  const err = validateStoryline(rawStorylineId, '当前选择的剧情线已禁用，请先启用它或改为通用规则');
+  if (err) { toast(err); return; }
+
   const data = {
     name: document.getElementById('postrule-name').value,
     content: document.getElementById('postrule-content').value,
-    storyline_id: (() => {
-      if (!rawStorylineId) return null;
-      const n = rawStorylineId.trim();
-      return n || null;
-    })(),
+    storyline_id: cleanStorylineId(rawStorylineId),
     story_phase: document.getElementById('postrule-phase').value || null,
     priority: parseInt(document.getElementById('postrule-priority').value) || 100,
     is_active: document.getElementById('postrule-is-active').checked ? 1 : 0,
@@ -747,39 +656,11 @@ async function savePostRule() {
   if (!data.name.trim()) { toast('请输入规则名称'); return; }
   if (!data.content.trim()) { toast('请输入规则内容'); return; }
 
-  try {
-    if (id) {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/post-rules/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(data),
-      });
-    } else {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/post-rules`, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    }
-    closePostRuleModal();
-    toast('保存成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('保存失败：' + e.message);
-  }
+  await crudSave('/post-rules', data, 'postrule-modal', id);
 }
 
 async function deletePostRule() {
-  const id = document.getElementById('postrule-id').value;
-  if (!id) return;
-  if (!confirm('确定删除此后置规则？')) return;
-
-  try {
-    await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/post-rules/${id}`, { method: 'DELETE' });
-    closePostRuleModal();
-    toast('删除成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('删除失败：' + e.message);
-  }
+  await crudDelete('/post-rules', document.getElementById('postrule-id').value, 'postrule-modal', '确定删除此后置规则？');
 }
 
 // ============================================================
@@ -896,35 +777,23 @@ function editEvent(id) {
   document.getElementById('event-modal').style.display = 'flex';
 }
 
-function closeEventModal() {
-  document.getElementById('event-modal').style.display = 'none';
-}
+function closeEventModal() { closeModal('event-modal'); }
 
 async function saveEvent() {
   const id = document.getElementById('event-id').value;
   const selectedMemoryIds = getCheckedValues('event-memory-selector');
   const selectedGreetingIds = getCheckedValues('event-greeting-selector');
   const rawStorylineId = String(document.getElementById('event-storyline-id').value || '').trim();
-  const storyline = rawStorylineId ? getStorylineById(rawStorylineId) : null;
-  if (rawStorylineId && !storyline) {
-    toast('当前选择的解锁剧情线不存在，请重新选择');
-    return;
-  }
-  if (storyline && !storyline.is_active) {
-    toast('当前选择的解锁剧情线已禁用，请先启用它');
-    return;
-  }
+  const err = validateStoryline(rawStorylineId, '当前选择的解锁剧情线已禁用，请先启用它');
+  if (err) { toast(err); return; }
+
   const data = {
     title: document.getElementById('event-title').value,
     description: document.getElementById('event-description').value,
     trigger_score: parseInt(document.getElementById('event-trigger-score').value) || 0,
     unlocked_memory_ids: selectedMemoryIds.join(','),
     unlocked_greeting_ids: selectedGreetingIds.join(','),
-    unlocked_storyline_id: (() => {
-      if (!rawStorylineId) return null;
-      const n = rawStorylineId.trim();
-      return n || null;
-    })(),
+    unlocked_storyline_id: cleanStorylineId(rawStorylineId),
     event_content: document.getElementById('event-content').value,
     sort_order: parseInt(document.getElementById('event-sort-order').value) || 0,
     is_active: document.getElementById('event-is-active').checked ? 1 : 0,
@@ -945,39 +814,11 @@ async function saveEvent() {
     if (!goOn) return;
   }
 
-  try {
-    if (id) {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/story-events/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(data),
-      });
-    } else {
-      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/story-events`, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-    }
-    closeEventModal();
-    toast('保存成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('保存失败：' + e.message);
-  }
+  await crudSave('/story-events', data, 'event-modal', id);
 }
 
 async function deleteEvent() {
-  const id = document.getElementById('event-id').value;
-  if (!id) return;
-  if (!confirm('确定删除此剧情事件？')) return;
-
-  try {
-    await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/story-events/${id}`, { method: 'DELETE' });
-    closeEventModal();
-    toast('删除成功');
-    loadAdvancedData();
-  } catch (e) {
-    toast('删除失败：' + e.message);
-  }
+  await crudDelete('/story-events', document.getElementById('event-id').value, 'event-modal', '确定删除此剧情事件？');
 }
 
 // ============================================================
@@ -1016,27 +857,5 @@ async function testKeywords() {
     `).join('');
   } catch (e) {
     container.innerHTML = `<div class="no-results" style="color:#f87171">测试失败：${e.message}</div>`;
-  }
-}
-
-// ============================================================
-// 用户档位设置（单用户）
-// ============================================================
-async function saveUserPlan(userId) {
-  const planEl = document.getElementById(`user-plan-${userId}`);
-  const daysEl = document.getElementById(`user-days-${userId}`);
-  if (!planEl || !daysEl) return;
-  try {
-    const result = await AdminAPI.apiFetch(`${AdminAPI.API}/users/${userId}/plan`, {
-      method: 'POST',
-      body: JSON.stringify({
-        plan_type: planEl.value,
-        duration_days: parseInt(daysEl.value, 10) || 30,
-      }),
-    });
-    toast(result.message || '会员设置成功');
-    loadMembershipData();
-  } catch (e) {
-    toast('设置失败：' + e.message);
   }
 }

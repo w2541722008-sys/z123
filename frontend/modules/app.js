@@ -50,7 +50,6 @@
    }
 
   function preloadCharacterImages(characters) {
-    const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
     const loaded = new Set();
     characters.forEach(char => {
       [char.avatarImg, char.coverImg].forEach(img => {

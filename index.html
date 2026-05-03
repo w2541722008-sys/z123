@@ -171,7 +171,7 @@
             <div class="setting-row-icon">💬</div>
             <div class="setting-row-text">
               <div class="row-label">试聊说明</div>
-              <div class="row-hint">登录后可先试聊，但无法使用继续生成、重新生成回复功能。</div>
+              <div class="row-hint">未登录可先试聊，但无法使用继续生成、重新生成回复功能。</div>
             </div>
           </div>
         </div>
@@ -333,17 +333,20 @@
 
   <!-- ============================================================
        JS 逻辑（模块化加载）
-       加载顺序：基础工具 → 配置 → 工具函数 → API → 主入口 → 认证 → 聊天 → 菜单 → 详情 → 开场白选择 → 初始化
+       加载顺序：错误边界 → 基础工具 → 配置 → 工具函数 → API → 主入口 → 认证 → 聊天 → 菜单 → 详情 → 开场白选择 → 初始化
+       注意：error-boundary.js 必须最先加载，捕获后续模块的异常
        注意：utils.js 必须在 chat/auth/char-detail 等模块之前加载（function 声明跨 script 不提升）
   ============================================================ -->
+  <script src="frontend/modules/error-boundary.js?v=1"></script>
   <script src="frontend/modules/ui.js?v=3"></script>
-  <script src="frontend/shared/constants.js?v=1"></script>
+  <script src="frontend/shared/shared-utils.js?v=2"></script>
   <script src="frontend/modules/config.js?v=3"></script>
   <script src="frontend/modules/utils.js?v=3"></script>
   <script src="frontend/modules/api.js?v=3"></script>
   <script src="frontend/modules/app.js?v=5"></script>
   <script src="frontend/modules/auth.js?v=5"></script>
-  <script src="frontend/modules/chat.js?v=29"></script>
+  <script src="frontend/modules/chat-status-panel.js?v=1"></script>
+  <script src="frontend/modules/chat.js?v=30"></script>
   <script src="frontend/modules/chat-menu.js?v=3"></script>
   <script src="frontend/modules/char-detail.js?v=6"></script>
   <script src="frontend/modules/greeting-select.js?v=8"></script>

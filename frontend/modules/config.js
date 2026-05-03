@@ -27,6 +27,7 @@ const API_BASE = (() => {
   }
   return `${protocol}//${hostname}:8000/api`;
 })();
+const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
  let CHARACTERS = [];
 
 

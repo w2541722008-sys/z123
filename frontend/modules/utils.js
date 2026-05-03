@@ -19,15 +19,13 @@
    return `${formatDate(date)} ${formatTime(date)}`;
  }
 
- function escapeHtml(text = '') {
-   return String(text)
-     .replace(/&/g, '&amp;')
-     .replace(/</g, '&lt;')
-     .replace(/>/g, '&gt;')
-     .replace(/"/g, '&quot;')
-     .replace(/'/g, '&#39;')
-     .replace(/\n/g, '<br/>');
- }
+function escapeHtml(text = '', options) {
+  return window.AIFriendShared.escapeHtml(text, { convertNewlines: true, ...options });
+}
+
+function sanitizeCssUrl(url) {
+  return window.AIFriendShared.sanitizeCssUrl(url);
+}
 
  /* ----------------------------------------------------------------
     toggleSection(key) — 点击分区标题时展开/收起该分区卡片列表
@@ -48,8 +46,7 @@
 
    // ── 推荐横幅（取对话陪伴分组里第一个有封面图的角色）──────────────
    const bannerEl = document.getElementById('featured-banner');
-   const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
-   const featuredChar = CHARACTERS.find(c => (c.card_type || 'intimate') !== 'scenario' && (c.coverImg || c.avatarImg));
+  const featuredChar = CHARACTERS.find(c => (c.card_type || 'intimate') !== 'scenario' && (c.coverImg || c.avatarImg));
    if (bannerEl && featuredChar) {
      const imgSrc = (() => {
        const img = featuredChar.coverImg || featuredChar.avatarImg;
@@ -140,13 +137,13 @@
        ? `${escapeHtml(displayName)}<small>原名：${escapeHtml(char.name)}</small>`
        : escapeHtml(displayName || '未命名角色');
      const bioText = char.subtitle || (char.bio ? char.bio.slice(0, 80) : '');
-     const warningLabel = char.has_import_warning ? `<span class="char-tag warning-tag">需检查</span>` : '';
-     const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
-     const coverStyle = (() => {
+    const warningLabel = char.has_import_warning ? `<span class="char-tag warning-tag">需检查</span>` : '';
+    const coverStyle = (() => {
        const img = char.coverImg || char.avatarImg;
        if (img) {
          const imgUrl = img.startsWith('/') ? SERVER_ORIGIN + img : img;
-         return `background:${char.color || 'linear-gradient(135deg,#7b5cff,#ff7eb6)'};background-image:url(${imgUrl});background-size:cover;background-position:center top`;
+         const safeUrl = sanitizeCssUrl(imgUrl);
+         return `background:${char.color || 'linear-gradient(135deg,#7b5cff,#ff7eb6)'};${safeUrl ? `background-image:url('${safeUrl}');` : ''}background-size:cover;background-position:center top`;
        }
        return `background:${char.color || 'linear-gradient(135deg,#7b5cff,#ff7eb6)'}`;
      })();

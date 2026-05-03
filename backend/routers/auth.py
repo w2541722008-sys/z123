@@ -25,18 +25,22 @@ from typing import Any
 
 # 第三方库导入
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 # 本地模块导入
-from auth import (
+from core.auth import (
     CurrentUser,
+    _extract_token_from_request,
+    clear_auth_cookie,
     create_token,
     delete_token,
     get_current_user,
     hash_password_bcrypt,
+    set_auth_cookie,
     verify_password,
     _is_admin_email,
 )
-from config import (
+from core.config import (
     LOGIN_RATE_LIMIT_COUNT,
     LOGIN_RATE_LIMIT_EMAIL_COUNT,
     LOGIN_RATE_LIMIT_WINDOW_SECONDS,
@@ -47,18 +51,21 @@ from config import (
     VERIFY_CODE_RATE_LIMIT_COUNT,
     VERIFY_CODE_RATE_LIMIT_WINDOW_SECONDS,
     logger,
-    utc_now_iso,
 )
-from database import get_conn
-from models import (
+from core.database import ConnType, get_db_dep
+from core.database import ConnWrapper
+from core.schemas import (
     ForgotPasswordPayload,
     LoginPayload,
     RegisterPayload,
     ResetPasswordPayload,
     VerifyCodePayload,
+    _normalize_email,
 )
+from repositories import auth_repository as auth_repo
+from repositories import user_repository as user_repo
 from services.email import generate_reset_code, send_reset_code_email
-from services.plan_service import serialize_plan_info
+from core.plan_constants import serialize_plan_info
 from services.rate_limit import enforce_rate_limit, get_request_client_ip
 
 router = APIRouter()
@@ -66,7 +73,7 @@ router = APIRouter()
 
 def _build_user_payload(
     *,
-    user_id: int,
+    user_id: int | str,
     email: str,
     nickname: str,
     plan_type: str = "free",
@@ -86,37 +93,39 @@ def _build_user_payload(
     }
 
 
-def _normalize_email(email: str) -> str:
-    """统一邮箱格式，减少大小写和首尾空格带来的问题。"""
-    return email.strip().lower()
+
+_RESET_CODE_MAX_ATTEMPTS = 5  # 单个验证码最大错误尝试次数
 
 
-def _get_latest_valid_reset_code(conn: Any, normalized_email: str, now_iso: str) -> dict[str, Any] | None:
-    return conn.execute(
-        """
-        SELECT id, code, expires_at, used
-        FROM password_reset_codes
-        WHERE email = %s AND used = 0 AND expires_at > %s
-        ORDER BY created_at DESC LIMIT 1
-        """,
-        (normalized_email, now_iso),
-    ).fetchone()
+def _get_latest_valid_reset_code(conn: ConnType, normalized_email: str, now: datetime) -> dict[str, Any] | None:
+    return auth_repo.get_latest_valid_reset_code(conn, normalized_email, now)
 
 
 def _verify_reset_code_or_raise(
     reset_code: dict[str, Any] | None,
     input_code: str,
     *,
+    conn: ConnType | None = None,
     invalid_detail: str,
 ) -> None:
     if not reset_code:
         raise HTTPException(status_code=400, detail=invalid_detail)
+    # 检查单码最大尝试次数
+    attempts = reset_code.get("attempt_count", 0) or 0
+    if attempts >= _RESET_CODE_MAX_ATTEMPTS:
+        # 标记为已使用，防止继续尝试
+        if conn is not None:
+            auth_repo.mark_reset_code_used(conn, reset_code["id"])
+        raise HTTPException(status_code=400, detail="验证码已失效，请重新获取")
     if not hmac.compare_digest(str(reset_code["code"]), str(input_code)):
+        # 递增尝试计数
+        if conn is not None:
+            auth_repo.increment_reset_code_attempts(conn, reset_code["id"])
         raise HTTPException(status_code=400, detail=invalid_detail)
 
 
 @router.post("/auth/register")
-def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
+def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = Depends(get_db_dep)) -> JSONResponse:
     """
     用户注册接口。
 
@@ -124,13 +133,13 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
         1. 检查邮箱是否已存在
         2. 使用 bcrypt 哈希密码
         3. 生成用户记录（昵称默认为邮箱前缀）
-        4. 创建登录 token
+        4. 创建登录 token 并设置 HttpOnly Cookie
 
     Args:
         payload: 注册请求体（邮箱、密码、可选昵称）
 
     Returns:
-        包含 token 和用户信息的对象
+        包含用户信息的对象（token 通过 HttpOnly Cookie 传递）
 
     Raises:
         HTTPException: 400 邮箱已被注册
@@ -145,14 +154,9 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
     )
     normalized_email = _normalize_email(payload.email)
 
-    conn = get_conn()
     try:
         # 步骤 1：检查邮箱是否已存在
-        existing = conn.execute(
-            "SELECT 1 FROM users WHERE LOWER(email) = %s",
-            (normalized_email,),
-        ).fetchone()
-        if existing:
+        if user_repo.check_email_exists(conn, normalized_email):
             raise HTTPException(status_code=400, detail="该邮箱已被注册")
 
         # 步骤 2：密码哈希（bcrypt，rounds=12）
@@ -162,18 +166,13 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
         nickname = payload.nickname or normalized_email.split("@")[0]
 
         # 步骤 4：插入用户记录，使用 RETURNING id 获取新生成的主键（PostgreSQL 专用）
-        now = utc_now_iso()
-        cur = conn.execute(
-            """
-            INSERT INTO users(email, password_hash, password_algo, nickname, created_at, updated_at)
-            VALUES (%s, %s, 'bcrypt', %s, %s, %s)
-            RETURNING id
-            """,
-            (normalized_email, password_hash, nickname, now, now),
+        user_id = user_repo.insert_user(
+            conn,
+            email=normalized_email,
+            password_hash=password_hash,
+            password_algo="bcrypt",
+            nickname=nickname,
         )
-        row_result = cur.fetchone()
-        # RealDictCursor 返回字典，需要用 get() 访问
-        user_id = row_result.get("id") if row_result else None
         if not user_id:
             raise RuntimeError("用户创建失败：无法获取新用户ID")
 
@@ -181,8 +180,9 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
         token = create_token(user_id, conn=conn, commit=False)
         conn.commit()
 
-        return {
-            "token": token,
+        # 设置 HttpOnly Cookie + 返回用户信息
+        body = {
+            "token": token,  # 保留兼容：前端过渡期仍可读取
             "user": _build_user_payload(
                 user_id=user_id,
                 email=normalized_email,
@@ -192,15 +192,16 @@ def auth_register(payload: RegisterPayload, request: Request) -> dict[str, Any]:
                 is_admin=_is_admin_email(normalized_email),
             ),
         }
+        response = JSONResponse(body)
+        set_auth_cookie(response, token)
+        return response
     except Exception:
         conn.rollback()
         raise
-    finally:
-        conn.close()
 
 
 @router.post("/auth/login")
-def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
+def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends(get_db_dep)) -> JSONResponse:
     """
     用户登录接口。
 
@@ -240,19 +241,9 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
         detail="该邮箱登录尝试过于频繁",
     )
 
-    conn = get_conn()
     try:
         # 步骤 1：查询用户
-        row = conn.execute(
-            """
-            SELECT id, email, password_hash, password_algo, COALESCE(nickname, '') AS nickname,
-                   COALESCE(plan_type, 'free') AS plan_type,
-                   COALESCE(CAST(plan_expires_at AS VARCHAR), '') AS plan_expires_at,
-                   avatar_url
-            FROM users WHERE LOWER(email) = %s
-            """,
-            (normalized_email,),
-        ).fetchone()
+        row = user_repo.find_user_by_email(conn, normalized_email)
 
         if not row:
             raise HTTPException(status_code=401, detail="邮箱或密码错误")
@@ -265,18 +256,16 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
         # 步骤 3：平滑迁移 - 旧 SHA-256 密码升级为 bcrypt
         if algo != "bcrypt":
             new_hash = hash_password_bcrypt(payload.password)
-            conn.execute(
-                "UPDATE users SET password_hash = %s, password_algo = 'bcrypt', updated_at = %s WHERE id = %s",
-                (new_hash, utc_now_iso(), row["id"]),
-            )
+            user_repo.update_password(conn, row["id"], new_hash)
 
         # 步骤 4：生成 token，并与密码升级保持同一事务
         token = create_token(row["id"], conn=conn, commit=False)
         conn.commit()
         nickname = row["nickname"] or normalized_email.split("@")[0]
 
-        return {
-            "token": token,
+        # 设置 HttpOnly Cookie + 返回用户信息
+        body = {
+            "token": token,  # 保留兼容：前端过渡期仍可读取
             "user": _build_user_payload(
                 user_id=row["id"],
                 email=row["email"],
@@ -287,11 +276,12 @@ def auth_login(payload: LoginPayload, request: Request) -> dict[str, Any]:
                 avatar_url=row.get("avatar_url"),
             ),
         }
+        response = JSONResponse(body)
+        set_auth_cookie(response, token)
+        return response
     except Exception:
         conn.rollback()
         raise
-    finally:
-        conn.close()
 
 
 @router.get("/auth/me")
@@ -318,25 +308,31 @@ def auth_me(user: CurrentUser = Depends(get_current_user)) -> dict[str, Any]:
 
 @router.post("/auth/logout")
 def auth_logout(
+    request: Request,
     authorization: str | None = Header(default=None),
     user: CurrentUser = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> JSONResponse:
     """
     用户登出接口。
 
-    删除当前 token，使其失效。用户需要重新登录才能获取新的 token。
+    删除当前 token，使其失效，并清除 HttpOnly Cookie。
 
     Args:
+        request: FastAPI 请求对象（用于读取 Cookie）
         authorization: HTTP Authorization 头
         user: 当前登录用户（通过 Depends 自动注入）
 
     Returns:
         成功标记
     """
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ", 1)[1].strip()
+    # 从 Cookie 或 Header 提取 token 并删除
+    token = _extract_token_from_request(request, authorization)
+    if token:
         delete_token(token)
-    return {"ok": True}
+
+    response = JSONResponse({"ok": True})
+    clear_auth_cookie(response)
+    return response
 
 
 # ============================================================
@@ -344,7 +340,7 @@ def auth_logout(
 # ============================================================
 
 @router.post("/auth/forgot-password")
-def forgot_password(payload: ForgotPasswordPayload, request: Request) -> dict[str, Any]:
+def forgot_password(payload: ForgotPasswordPayload, request: Request, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
     """
     发送密码重置验证码。
 
@@ -378,29 +374,20 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request) -> dict[st
     )
     normalized_email = _normalize_email(payload.email)
 
-    conn = get_conn()
     try:
         # 步骤 1：检查邮箱是否存在
-        user = conn.execute(
-            "SELECT id, email FROM users WHERE LOWER(email) = %s",
-            (normalized_email,),
-        ).fetchone()
-
+        user = user_repo.find_user_by_email(conn, normalized_email)
+        # find_user_by_email 返回完整字段，但我们只需 id 和 email
         if not user:
-            logger.info(f"密码重置请求：邮箱不存在或未命中用户 {normalized_email}")
+            logger.info("密码重置请求：邮箱不存在或未命中用户 %s", normalized_email)
             return {"ok": True, "message": "如果该邮箱已注册，验证码会发送至您的邮箱，10 分钟内有效"}
 
         now = datetime.now(timezone.utc)
 
         # 步骤 2：检查 60 秒内是否已发送过验证码（防刷机制）
-        recent_code = conn.execute(
-            """
-            SELECT created_at FROM password_reset_codes
-            WHERE email = %s AND used = 0 AND created_at > %s
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            (normalized_email, (now - timedelta(seconds=60)).isoformat()),
-        ).fetchone()
+        recent_code = auth_repo.check_recent_reset_code(
+            conn, normalized_email, (now - timedelta(seconds=60)).isoformat()
+        )
 
         if recent_code:
             raise HTTPException(
@@ -412,15 +399,14 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request) -> dict[st
         code = generate_reset_code()
 
         # 步骤 4：计算过期时间（10 分钟后）
-        expires_at = (now + timedelta(minutes=10)).isoformat()
+        expires_at = now + timedelta(minutes=10)
 
         # 步骤 5：存入数据库
-        conn.execute(
-            """
-            INSERT INTO password_reset_codes (email, code, expires_at, used, created_at)
-            VALUES (%s, %s, %s, 0, %s)
-            """,
-            (normalized_email, code, expires_at, now.isoformat()),
+        auth_repo.insert_reset_code(
+            conn,
+            email=normalized_email,
+            code=code,
+            expires_at=expires_at,
         )
 
         # 步骤 6：发送邮件
@@ -430,18 +416,16 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request) -> dict[st
             raise HTTPException(status_code=500, detail="邮件发送失败，请稍后重试")
 
         conn.commit()
-        logger.info(f"密码重置验证码已发送: {user['email']}")
+        logger.info("密码重置验证码已发送: %s", user["email"])
         return {"ok": True, "message": "验证码已发送至您的邮箱，10 分钟内有效"}
 
     except Exception:
         conn.rollback()
         raise
-    finally:
-        conn.close()
 
 
 @router.post("/auth/verify-code")
-def verify_reset_code(payload: VerifyCodePayload, request: Request) -> dict[str, Any]:
+def verify_reset_code(payload: VerifyCodePayload, request: Request, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
     """
     验证密码重置验证码。
 
@@ -472,24 +456,21 @@ def verify_reset_code(payload: VerifyCodePayload, request: Request) -> dict[str,
     )
     normalized_email = _normalize_email(payload.email)
 
-    conn = get_conn()
-    try:
-        now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
 
-        reset_code = _get_latest_valid_reset_code(conn, normalized_email, now)
-        if not reset_code:
-            raise HTTPException(status_code=400, detail="验证码已过期或无效")
-        if not hmac.compare_digest(str(reset_code["code"]), str(payload.code)):
-            raise HTTPException(status_code=400, detail="验证码错误")
-
-        return {"ok": True, "message": "验证通过"}
-
-    finally:
-        conn.close()
+    reset_code = _get_latest_valid_reset_code(conn, normalized_email, now)
+    _verify_reset_code_or_raise(
+        reset_code,
+        payload.code,
+        conn=conn,
+        invalid_detail="验证码已过期或无效",
+    )
+    conn.commit()
+    return {"ok": True, "message": "验证通过"}
 
 
 @router.post("/auth/reset-password")
-def reset_password(payload: ResetPasswordPayload, request: Request) -> dict[str, Any]:
+def reset_password(payload: ResetPasswordPayload, request: Request, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
     """
     重置密码。
 
@@ -523,7 +504,6 @@ def reset_password(payload: ResetPasswordPayload, request: Request) -> dict[str,
     )
     normalized_email = _normalize_email(payload.email)
 
-    conn = get_conn()
     try:
         now = datetime.now(timezone.utc).isoformat()
 
@@ -532,14 +512,14 @@ def reset_password(payload: ResetPasswordPayload, request: Request) -> dict[str,
         _verify_reset_code_or_raise(
             reset_code,
             payload.code,
+            conn=conn,
             invalid_detail="验证码无效或已过期",
         )
+        if reset_code is None:
+            raise HTTPException(status_code=400, detail="验证码无效或已过期")
 
         # 步骤 2：查找用户
-        user = conn.execute(
-            "SELECT id, email FROM users WHERE LOWER(email) = %s",
-            (normalized_email,),
-        ).fetchone()
+        user = user_repo.find_user_by_email(conn, normalized_email)
 
         if not user:
             raise HTTPException(status_code=400, detail="用户不存在")
@@ -548,34 +528,23 @@ def reset_password(payload: ResetPasswordPayload, request: Request) -> dict[str,
         new_hash = hash_password_bcrypt(payload.new_password)
 
         # 步骤 4：更新密码
-        conn.execute(
-            """
-            UPDATE users
-            SET password_hash = %s, password_algo = 'bcrypt', updated_at = %s
-            WHERE id = %s
-            """,
-            (new_hash, utc_now_iso(), user["id"]),
-        )
+        user_repo.update_password(conn, user["id"], new_hash)
 
         # 步骤 5：标记验证码已使用
-        conn.execute(
-            "UPDATE password_reset_codes SET used = 1 WHERE id = %s",
-            (reset_code["id"],),
-        )
+        auth_repo.mark_reset_code_used(conn, reset_code["id"])
 
         # 步骤 6：清理该邮箱其他未使用的验证码
-        conn.execute(
-            "DELETE FROM password_reset_codes WHERE email = %s AND id != %s",
-            (normalized_email, reset_code["id"]),
-        )
+        auth_repo.delete_other_reset_codes(conn, normalized_email, reset_code["id"])
 
         conn.commit()
 
-        logger.info(f"密码重置成功: {user['email']}")
+        # 清除用户缓存，确保后续查询获取最新数据
+        from services.cache_service import invalidate_user
+        invalidate_user(str(user["id"]))
+
+        logger.info("密码重置成功: %s", user["email"])
         return {"ok": True, "message": "密码重置成功，请使用新密码登录"}
 
     except Exception:
         conn.rollback()
         raise
-    finally:
-        conn.close()

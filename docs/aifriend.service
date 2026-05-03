@@ -1,0 +1,17 @@
+[Unit]
+Description=AIFriend Backend (FastAPI + uvicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/aifriend/backend
+EnvironmentFile=/opt/aifriend/backend/.env
+ExecStart=/opt/aifriend/backend/venv/bin/python3 -m uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/aifriend.log
+StandardError=append:/var/log/aifriend.log
+
+[Install]
+WantedBy=multi-user.target

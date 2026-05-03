@@ -19,17 +19,12 @@ function toast(msg, duration = 2500) {
 
 /**
  * HTML 特殊字符转义，防止 XSS
+ * 委托给共享的 window.AIFriendShared.escapeHtml，确保前后端行为一致
  * @param {*} s - 任意值，会被转为字符串处理
  * @returns {string} 转义后的安全 HTML 字符串
  */
 function escHtml(s) {
-  const map = {
-    '&': String.fromCharCode(38) + 'amp;',
-    '<': String.fromCharCode(38) + 'lt;',
-    '>': String.fromCharCode(38) + 'gt;',
-    '"': String.fromCharCode(38) + 'quot;'
-  };
-  return String(s).replace(/[&<>"]/g, ch => map[ch]);
+  return window.AIFriendShared.escapeHtml(s);
 }
 
 /**

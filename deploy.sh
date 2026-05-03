@@ -2,8 +2,8 @@
 
 set -Eeuo pipefail
 
-SERVER_IP="45.76.182.245"
-SERVER_USER="root"
+SERVER_IP="124.156.199.146"
+SERVER_USER="ubuntu"
 SERVER_DIR="/opt/aifriend"
 SSH_KEY="/Users/jjj/.ssh/id_ed25519_aifriend"
 LOCAL_DIR="/Users/jjj/aifriend"
@@ -70,22 +70,43 @@ run_local_checks() {
 backup_remote() {
   step "步骤 3/6: 备份服务器当前版本"
   local backup_name="backup_$(date +%Y%m%d_%H%M%S)"
-  ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" "cd /opt && cp -r aifriend $backup_name && echo 备份完成:$backup_name"
-  echo "✅ 备份完成"
+  ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << ENDSSH
+set -Eeuo pipefail
+cd /opt
+
+# 创建新备份
+cp -r aifriend $backup_name
+echo "备份完成: $backup_name"
+
+# 只保留最新1份备份，删除旧的
+ls -d /opt/backup_* 2>/dev/null | sort | head -n -1 | xargs rm -rf 2>/dev/null || true
+ENDSSH
+  echo "✅ 备份完成（旧备份已自动清理）"
   echo
 }
 
 sync_files() {
   step "步骤 4/6: 同步文件"
-  rsync -avz --delete \
+  rsync -avz --delete --checksum \
     --exclude='.git' \
     --exclude='__pycache__' \
     --exclude='.pytest_cache' \
+    --exclude='.ruff_cache' \
     --exclude='*.pyc' \
     --exclude='node_modules' \
     --exclude='.env' \
+    --exclude='.env.*' \
+    --exclude='.venv*' \
     --exclude='venv' \
     --exclude='*.log' \
+    --exclude='.DS_Store' \
+    --exclude='.trae' \
+    --exclude='.codebuddy' \
+    --exclude='.server_config' \
+    --exclude='.coverage' \
+    --exclude='*.tar.gz' \
+    --exclude='admin.yaml' \
+    --exclude='aifriend.conf' \
     -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=no" \
     "$LOCAL_DIR/" \
     "$SERVER_USER@$SERVER_IP:$SERVER_DIR/"
@@ -94,7 +115,7 @@ sync_files() {
 }
 
 restart_remote() {
-  step "步骤 5/6: 重启服务"
+  step "步骤 5/7: 重启服务"
   ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
 set -Eeuo pipefail
 
@@ -105,6 +126,14 @@ cd backend
 if [[ -f requirements.txt ]]; then
   pip3 install -r requirements.txt --quiet --break-system-packages 2>/dev/null || \
   pip3 install -r requirements.txt --quiet 2>/dev/null || true
+fi
+
+# 执行数据库迁移（Alembic）
+if [[ -f alembic.ini ]]; then
+  echo "🔄 执行数据库迁移..."
+  /opt/aifriend/backend/venv/bin/python3 -m alembic upgrade head 2>/dev/null || \
+  python3 -m alembic upgrade head 2>/dev/null || \
+  echo "⚠️ 数据库迁移失败，请手动检查"
 fi
 
 cd /opt/aifriend
@@ -119,18 +148,44 @@ fi
 sleep 3
 echo "=== 服务状态 ==="
 ps aux | grep uvicorn | grep -v grep | head -1 || echo "❌ 服务未启动"
-echo "=== 健康检查 ==="
-curl -s http://localhost:8000/api/health || echo "❌ 健康检查失败"
 ENDSSH
   echo
 }
 
+
+health_check() {
+  step "步骤 6/7: 健康检查门禁"
+  local http_code
+  http_code=$(ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" \
+    'curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health 2>/dev/null || echo "000"')
+
+  if [[ "$http_code" == "200" ]]; then
+    echo "✅ 健康检查通过 (HTTP $http_code)"
+  else
+    echo "❌ 健康检查失败 (HTTP $http_code)"
+    echo "⚠️  服务可能需要更多时间启动，等待 10 秒后重试..."
+    sleep 10
+    http_code=$(ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" \
+      'curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health 2>/dev/null || echo "000"')
+    if [[ "$http_code" == "200" ]]; then
+      echo "✅ 健康检查通过 (HTTP $http_code)"
+    else
+      echo "❌ 健康检查持续失败 (HTTP $http_code)"
+      echo "⚠️  建议执行回滚: bash rollback.sh"
+      echo "⚠️  查看日志: ssh $SERVER_USER@$SERVER_IP 'tail -50 /var/log/aifriend.log'"
+      return 1
+    fi
+  fi
+  echo
+}
+
 print_finish() {
-  step "步骤 6/6: 输出结果"
+  step "步骤 7/7: 输出结果"
   echo "✅ 部署完成"
   echo "🌐 访问: https://lunawhisp.com/"
   echo "🔍 健康检查: https://lunawhisp.com/api/health"
-  echo "📋 日志: ssh root@45.76.182.245 'tail -f /var/log/aifriend.log'"
+  echo "📋 日志: ssh $SERVER_USER@$SERVER_IP 'tail -f /var/log/aifriend.log'"
+  echo "⏪ 回滚: bash rollback.sh"
 }
 
 main() {
@@ -141,6 +196,7 @@ main() {
   backup_remote
   sync_files
   restart_remote
+  health_check
   print_finish
 }
 

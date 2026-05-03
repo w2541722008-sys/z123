@@ -12,7 +12,7 @@ from collections import defaultdict
 from threading import Lock
 from typing import Any
 
-from config import logger
+from core.config import logger
 
 # 性能统计数据
 _stats: dict[str, dict[str, Any]] = defaultdict(lambda: {
@@ -39,7 +39,7 @@ def track_query(operation: str, duration: float) -> None:
         
         if duration > SLOW_QUERY_THRESHOLD:
             stats["slow_queries"] += 1
-            logger.warning(f"慢查询检测: {operation} 耗时 {duration:.3f}s")
+            logger.warning("慢查询检测: %s 耗时 %.3fs", operation, duration)
 
 
 def get_stats() -> dict[str, Any]:

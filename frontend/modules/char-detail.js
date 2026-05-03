@@ -5,16 +5,17 @@
      pendingChar = char;
      const cover = document.getElementById('detail-cover');
      cover.style.background = char.color || 'linear-gradient(135deg,#8a72ff,#ff7eb6)';
-     // 优先用 avatarImg（/api/avatar/xxx 路由），和广场页保持一致
-     const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
-     const rawCover = char.coverImg || char.avatarImg || null;
+    // 优先用 avatarImg（/api/avatar/xxx 路由），和广场页保持一致
+    const rawCover = char.coverImg || char.avatarImg || null;
      const imgSrc = rawCover
        ? (rawCover.startsWith('/') ? SERVER_ORIGIN + rawCover : rawCover)
        : null;
      if (imgSrc) {
-      // 使用 textContent 安全设置 URL，避免 CSS 注入
-      const safeImgSrc = imgSrc.replace(/'/g, "\\'").replace(/"/g, '\\"');
-      cover.style.backgroundImage = `url('${safeImgSrc}')`;
+      // 使用 sanitizeCssUrl 安全设置 URL，避免 CSS 注入
+      const safeImgSrc = window.AIFriendShared.sanitizeCssUrl(imgSrc);
+      if (safeImgSrc) {
+        cover.style.backgroundImage = `url('${safeImgSrc}')`;
+      }
       cover.style.backgroundSize = 'cover';
       cover.style.backgroundPosition = 'center top';
     } else {

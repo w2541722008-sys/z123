@@ -8,13 +8,15 @@ AI Friend 后端主入口
     4. 挂载静态文件
     5. 启动时初始化数据库
 
-所有业务逻辑已拆分到：
-    - config.py      - 配置常量
-    - database.py    - 数据库连接和初始化
-    - auth.py        - 认证核心
-    - models.py      - Pydantic 模型
-    - services/      - 业务逻辑层
-    - routers/       - API 路由层
+架构分层：
+    main.py          - 应用入口
+    core/            - 基础设施层（auth/config/database/schemas/model_adapter/prompt_assembler）
+    services/        - 业务逻辑层
+    routers/         - API 路由层
+    constants/       - 枚举常量
+    utils/           - 通用工具
+
+依赖方向：routers/ → services/ → core/
 
 启动方式：
     开发模式：python main.py
@@ -27,6 +29,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -37,9 +41,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # 项目内部导入
-import config as _cfg
-from config import FRONTEND_DIR, FRONTEND_STATIC_DIR, PROJECT_DIR, validate_production_config
-from database import init_db_pool, close_db_pool
+import core.config as _cfg
+from core.config import AVATARS_DIR, FRONTEND_DIR, FRONTEND_STATIC_DIR, PROJECT_DIR, validate_production_config
+from core.database import init_db_pool, close_db_pool
 from services.health_service import check_db_health, check_media_health
 from services.jobs_facade import start_order_cleanup_daemon
 
@@ -49,7 +53,7 @@ from routers import admin, auth, billing, characters, chat, media
 # ============================================================
 # 启动和关闭事件（使用现代 lifespan 模式）
 # ============================================================
-_cleanup_thread = None  # 可选删除：仅用于调试参考，非功能依赖
+
 
 def _default_allowed_origins() -> list[str]:
     return [
@@ -93,26 +97,38 @@ def _serve_html_file(path: Path, missing_message: str) -> HTMLResponse:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理：启动时初始化资源，关闭时清理。"""
+    # 配置线程池大小匹配连接池上限，避免高并发时线程排队等连接
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=_cfg.DB_POOL_MAX_CONN))
+
     init_db_pool(_cfg.DATABASE_URL)
     logging.info("✅ 数据库连接池已初始化")
 
-    global _cleanup_thread
-    _cleanup_thread = start_order_cleanup_daemon(interval_seconds=3600)
+    # 注入缓存回调，解除 core.auth 对 services.cache_service 的直接依赖
+    from core.auth import register_cache_callbacks
+    from services.cache_service import cache_get, cache_set, cache_delete
+    register_cache_callbacks(cache_get, cache_set, cache_delete)
+
+    start_order_cleanup_daemon(interval_seconds=3600)
     logging.info("✅ 订单清理后台任务已启动")
 
     missing_configs = validate_production_config()
     if missing_configs:
         logging.warning("⚠️  检测到缺失的生产环境配置：")
         for config in missing_configs:
-            logging.warning(f"  - {config}")
+            logging.warning("  - %s", config)
         logging.warning("请检查 .env 文件，参考 .env.example")
 
-    media_health = check_media_health(force=True)
+    media_health: dict[str, Any] = check_media_health(force=True)
     if media_health["ok"]:
         logging.info("✅ 媒体资源自检通过")
     else:
+        samples = media_health.get('samples') or []
         logging.warning(
-            f"⚠️ 媒体资源自检发现缺失: {media_health['missing_count']}，样例: {', '.join(media_health['samples'])}"
+            "⚠️ 媒体资源自检发现缺失: %s，样例: %s",
+            media_health['missing_count'],
+            ', '.join(str(s) for s in samples),
         )
 
     yield
@@ -132,8 +148,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -148,7 +164,7 @@ async def log_requests(request: Request, call_next):
 
     # 只记录 API 请求
     if request.url.path.startswith("/api/"):
-        logging.info(f"请求: {request.method} {request.url.path}")
+        logging.info("请求: %s %s", request.method, request.url.path)
 
     response = await call_next(request)
 
@@ -156,8 +172,8 @@ async def log_requests(request: Request, call_next):
     if request.url.path in tracked_paths:
         duration = time.time() - start_time
         logging.info(
-            f"完成: {request.method} {request.url.path} "
-            f"状态={response.status_code} 耗时={duration:.2f}s"
+            "完成: %s %s 状态=%s 耗时=%.2fs",
+            request.method, request.url.path, response.status_code, duration,
         )
 
     return response
@@ -198,6 +214,10 @@ if FRONTEND_STATIC_DIR.exists():
 # ============================================================
 # 健康检查端点
 # ============================================================
+# 配置校验结果缓存（环境变量在运行期间不会变化，无需每次重新检查）
+_config_check_cache: list[str] | None = None
+
+
 @app.get("/api/health")
 def health() -> dict[str, str | bool | int]:
     """
@@ -205,17 +225,21 @@ def health() -> dict[str, str | bool | int]:
 
     检查项：
     - 数据库连接是否正常（带 TTL 缓存，避免高频监控压垮数据库）
-    - 关键配置是否完整
+    - 关键配置是否完整（结果缓存，环境变量运行期间不变）
     - 媒体资源是否完整
 
     Returns:
         包含状态信息的字典
     """
-    from config import utc_now_iso
+    from core.config import utc_now_iso
 
     db_ok = check_db_health()
-    missing_configs = validate_production_config()
-    config_ok = len(missing_configs) == 0
+
+    global _config_check_cache
+    if _config_check_cache is None:
+        _config_check_cache = validate_production_config()
+    config_ok = len(_config_check_cache) == 0
+
     media_health = check_media_health()
     media_ok = bool(media_health["ok"])
 
@@ -224,10 +248,6 @@ def health() -> dict[str, str | bool | int]:
     return {
         "status": status,
         "time": utc_now_iso(),
-        "database": db_ok,
-        "config": config_ok,
-        "media": media_ok,
-        "media_missing": int(media_health["missing_count"]),
     }
 
 
@@ -250,7 +270,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         )
 
     # 其他异常记录日志并返回通用错误
-    logging.error(f"未处理的异常: {type(exc).__name__}: {exc}", exc_info=True)
+    logging.error("未处理的异常: %s: %s", type(exc).__name__, exc, exc_info=True)
     return JSONResponse(
         status_code=500,
         content={"detail": "服务器内部错误，请稍后重试"},
@@ -258,7 +278,6 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 
 # 挂载用户上传的头像目录
-AVATARS_DIR = Path(__file__).parent.parent / "avatars"
 app.mount("/avatars", StaticFiles(directory=str(AVATARS_DIR)), name="avatars")
 
 

@@ -18,3 +18,17 @@ class Mood(str, Enum):
     SAD = "sad"              # 难过
     SHY = "shy"              # 害羞
     SURPRISED = "surprised"  # 惊讶
+
+
+# 心情中文标签映射（唯一权威定义）
+MOOD_LABELS: dict[str, str] = {
+    Mood.NEUTRAL.value: "平静",
+    Mood.HAPPY.value: "开心",
+    Mood.WARM.value: "温柔",
+    Mood.MELTING.value: "心动",
+    Mood.COLD.value: "冷淡",
+    Mood.ANGRY.value: "生气",
+    Mood.SAD.value: "难过",
+    Mood.SHY.value: "害羞",
+    Mood.SURPRISED.value: "惊讶",
+}
