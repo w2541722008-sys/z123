@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
 from core.schemas import MemoryCategoryPayload, MemoryEntryPayload
 
 from .characters_common import _assert_memory_category_owned
 
-router = APIRouter(tags=["admin"])
+router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
 
 @router.get("/admin/character/{character_id}/memories")

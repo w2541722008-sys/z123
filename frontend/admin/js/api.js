@@ -88,14 +88,12 @@ const AdminAPI = (() => {
   async function bootstrapAdminPage() {
     if (_bootstrapped) return true;
     const token = localStorage.getItem(TOKEN_KEY) || '';
-    console.log('[Admin Debug] TOKEN_KEY=', TOKEN_KEY, 'token=', token ? token.substring(0, 20) + '...' : '(empty)');
     if (!token) {
-      renderAccessDenied('还没检测到登录令牌（localStorage 中无 aifriend_token）。请先在前台 http://lunawhisp.com 登录管理员账号，再刷新本页面。');
+      renderAccessDenied('还没检测到登录令牌（localStorage 中无 aifriend_token）。请先在前台登录管理员账号，再刷新本页面。');
       return false;
     }
     try {
       const me = await apiFetch(`${_baseUrl}/auth/me`);
-      console.log('[Admin Debug] /auth/me response:', JSON.stringify(me));
       _currentUser = me || null;
       localStorage.setItem(USER_KEY, JSON.stringify(me || null));
       if (!me?.is_admin) {

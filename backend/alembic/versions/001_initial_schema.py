@@ -345,8 +345,7 @@ def upgrade() -> None:
     create index if not exists idx_character_states_user on character_states(user_id);
     create index if not exists idx_user_character_profiles_user on user_character_profiles(user_id);
 
-    -- 003_add_reset_code_attempt_count
-    -- 注意：此列可能已存在于线上数据库，IF NOT EXISTS 逻辑需在应用层处理
+    -- 003_add_reset_code_attempt_count 已迁移到独立脚本 003_add_reset_code_attempt_count.py
     """)
 
 

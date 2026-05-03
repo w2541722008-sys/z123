@@ -151,7 +151,7 @@
    async function logout() {
      try {
        await API.logout();  // 后端会清除 Cookie
-     } catch (_) {}
+     } catch (e) { console.warn('logout 请求失败，前端仍会清除本地状态', e); }
      AppState.setToken('');
      AppState.setUser(null);
      loggedIn = false;

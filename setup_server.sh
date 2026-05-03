@@ -148,6 +148,16 @@ sudo systemctl enable aifriend
 echo "✅ systemd 服务配置完成"
 echo
 
+# 日志轮转
+if [[ -f /opt/aifriend/docs/logrotate.conf ]]; then
+  sudo cp /opt/aifriend/docs/logrotate.conf /etc/logrotate.d/aifriend
+  sudo chmod 644 /etc/logrotate.d/aifriend
+  echo "✅ 日志轮转配置完成"
+else
+  echo "⚠️ 未找到 logrotate.conf，跳过日志轮转配置"
+fi
+echo
+
 # ----------------------------------------------------------
 # 6. 防火墙
 # ----------------------------------------------------------
@@ -184,10 +194,9 @@ echo "✅ 服务器初始化完成！"
 echo "=========================================="
 echo
 echo "📋 后续步骤："
-echo "  1. 修改 deploy.sh 中的 SERVER_IP 和 SERVER_USER"
-echo "  2. 创建 backend/.env 文件（从本地复制）"
-echo "  3. 运行 bash deploy.sh 部署项目"
-echo "  4. 配置 SSL: sudo certbot --nginx -d lunawhisp.com"
+echo "  1. 创建 backend/.env 文件（参考 backend/.env.example）"
+echo "  2. 运行 bash deploy.sh 部署项目"
+echo "  3. 配置 SSL: sudo certbot --nginx -d lunawhisp.com（如尚未配置）"
 echo
 echo "🔍 有用的命令："
 echo "  查看服务状态: sudo systemctl status aifriend"

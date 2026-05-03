@@ -154,6 +154,27 @@ app.add_middleware(
 
 
 # ============================================================
+# 安全响应头中间件
+# ============================================================
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """为所有响应添加安全头。"""
+    response = await call_next(request)
+    # 防止 MIME 嗅探
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # 防止点击劫持
+    response.headers["X-Frame-Options"] = "DENY"
+    # XSS 保护（旧浏览器兼容）
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    # HTTPS 环境下启用 HSTS
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # 引用来源策略
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
+# ============================================================
 # 请求日志中间件
 # ============================================================
 @app.middleware("http")

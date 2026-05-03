@@ -37,7 +37,7 @@ import hmac
 import logging
 import secrets
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Callable
 from datetime import datetime, timedelta, timezone
 
 # 第三方库导入
@@ -85,7 +85,7 @@ def register_cache_callbacks(
 _COOKIE_NAME = "aifriend_session"
 _COOKIE_MAX_AGE = TOKEN_EXPIRE_DAYS * 86400  # 与 token 过期时间一致
 _COOKIE_PATH = "/api"
-_COOKIE_SAMESITE: Literal["lax"] = "lax"  # Lax 防 CSRF，允许 GET 外链跳转
+_COOKIE_SAMESITE: str = "strict" if ENV == "production" else "lax"  # 生产环境 Strict 防 CSRF
 
 
 def set_auth_cookie(response: Response, token: str) -> None:

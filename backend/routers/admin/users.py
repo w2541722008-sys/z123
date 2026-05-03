@@ -300,7 +300,7 @@ def admin_batch_update_plan(
 def admin_update_user_plan(
     user_id: str,
     body: AdminUserPlanUpdatePayload,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     """管理后台：手动设置某个用户的会员档位。"""

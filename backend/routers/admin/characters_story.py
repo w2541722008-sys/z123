@@ -4,14 +4,14 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from core.auth import CurrentUser, get_current_user
+from core.auth import CurrentUser, get_admin_user, get_current_user
 from core.database import ConnType, get_db_dep
 from core.schemas import GreetingPayload, StorylinePayload
 
 from ._shared import _write_audit_log
 from .characters_common import _assert_storyline_owned
 
-router = APIRouter(tags=["admin"])
+router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
 
 @router.get("/admin/character/{character_id}/greetings")

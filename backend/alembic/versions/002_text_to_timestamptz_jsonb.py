@@ -24,6 +24,7 @@ depends_on = None
 # 辅助：安全地做 text → timestamptz 转换（幂等）
 # ================================================================
 def _safe_alter_to_timestamptz(table, col, *, set_default_now=False, nullable=True, fill_empty_with=None):
+    # 内部函数：table/col 仅从下方硬编码调用传入，不接收用户输入
     """幂等地将 text 列转为 timestamptz。如果已经是 timestamptz 则跳过。
 
     fill_empty_with: 空字符串时用哪个列的值填充（如 'created_at'），适用于 NOT NULL 列。

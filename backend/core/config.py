@@ -266,9 +266,11 @@ def validate_production_config() -> list[str]:
     if not origins or "localhost" in origins.lower():
         missing.append("ALLOWED_ORIGINS - 生产环境必须设置真实域名（不能是 localhost）")
     
-    # 检查邮件服务配置
-    if not os.environ.get("RESEND_API_KEY", "").strip():
-        missing.append("RESEND_API_KEY - 邮件服务 API Key 未设置")
+    # 检查邮件服务配置（SMTP 或 Resend 至少一个）
+    smtp_configured = bool(os.environ.get("SMTP_HOST", "").strip() and os.environ.get("SMTP_USER", "").strip())
+    resend_configured = bool(os.environ.get("RESEND_API_KEY", "").strip())
+    if not smtp_configured and not resend_configured:
+        missing.append("邮件服务未配置 - 需要设置 SMTP（SMTP_HOST+SMTP_USER+SMTP_PASSWORD）或 RESEND_API_KEY")
     
     # 检查管理员邮箱
     if not ADMIN_EMAILS:

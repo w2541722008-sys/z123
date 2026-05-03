@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
 from core.schemas import KeywordTestPayload
 from services.prompt_assembler import build_message_preview
@@ -12,7 +13,7 @@ from utils.json_utils import parse_json_object
 
 from .characters_common import _split_csv_ids
 
-router = APIRouter(tags=["admin"])
+router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
 
 def _affection_rules_use_default(raw: Any) -> bool:

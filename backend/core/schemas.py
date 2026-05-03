@@ -259,7 +259,7 @@ class ResetPasswordPayload(_EmailPayload):
 
     email: 用户邮箱
     code: 6 位数字验证码
-    new_password: 新密码（6-64 位）
+    new_password: 新密码（8-64 位）
     """
     code: str = Field(min_length=6, max_length=6)
     new_password: str = Field(min_length=8, max_length=64)

@@ -21,11 +21,8 @@ const API_BASE = (() => {
   if (shared && typeof shared.resolveApiBase === 'function') {
     return shared.resolveApiBase();
   }
-  const { protocol, hostname, port } = location;
-  if (port === '8000' || port === '' || port === '443' || port === '80') {
-    return `${protocol}//${hostname}${port ? ':' + port : ''}/api`;
-  }
-  return `${protocol}//${hostname}:8000/api`;
+  // 默认同源（生产环境由 Nginx 代理）
+  return '/api';
 })();
 const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
  let CHARACTERS = [];
