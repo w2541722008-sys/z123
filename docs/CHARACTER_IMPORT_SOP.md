@@ -154,10 +154,15 @@
 
 **特征**：
 - 有完整的人物档案（base_profile 是核心）
+- **支持人生档案（life_profile_json）**：童年、家庭、工作等完整背景，每轮对话都会注入
 - 重视长期记忆和好感度变化
-- 可以有多条剧情线（alternate_greetings）
+- 好感度系统：追踪用户关系进展（stranger → acquaintance → friend → lover）
 
 **Prompt 构建**：走 `character_builder` / `hybrid_builder`
+
+**管理后台配置**：
+- 显示"人生档案"编辑器（7个维度：基本信息、童年、家庭、工作、性格、习惯、重要经历）
+- 不显示剧情沙盒专属字段（scenario、alternate_greetings）
 
 ---
 
@@ -168,10 +173,18 @@
 **特征**：
 - `scenario` 字段丰富，有多个章节/阶段
 - `world_rules` 有明确的剧情推进规则
-- 用户选择不同开场白 → 走不同剧情线
+- `alternate_greetings` 支持多条剧情线开场白
 - 可以有多个 NPC（通过 conditional_entries 实现）
+- **支持剧情类型（scenario_type）**：`adventure`（冒险）或 `romance`（恋爱），使用不同的 System Prompt
+- 沉浸度系统：追踪剧情进展（explore、discover、challenge_won、obstacle_cleared 等事件）
 
-**Prompt 构建**：走 `scenario_builder`
+**Prompt 构建**：走 `scenario_builder`（根据 scenario_type 动态选择 System Prompt）
+
+**管理后台配置**：
+- 显示"剧情类型"选择（adventure/romance）
+- 显示剧情沙盒专属字段（scenario、alternate_greetings）
+- 不显示"人生档案"（避免污染剧情 prompt）
+- 沉浸度事件名：challenge_won、obstacle_cleared、problem_resolved、setback、unexpected_danger 等
 
 ---
 

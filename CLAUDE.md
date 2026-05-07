@@ -56,6 +56,12 @@ routers/ → services/ → repositories/ → core/ + constants/
 
 ## 关键规则
 
+**两种玩法隔离**：
+- 对话陪伴（`card_type=intimate`）：使用人生档案（`life_profile_json`），追踪好感度，重视长期记忆
+- 剧情沙盒（`card_type=scenario`）：使用剧情类型（`scenario_type`：adventure/romance），追踪沉浸度，不使用人生档案
+- 管理后台根据 `card_type` 动态显示字段，避免配置混乱
+- 后端 `prompt_assembler.py` 根据 `card_type` 选择不同的 prompt 构建逻辑
+
 **游标生命周期**：`fetchone()` 必须在 `conn.commit()` 之前调用——commit 会关闭所有游标。
 
 **数据库类型**：int 列用 `1`/`0`，禁止 `True`/`False`。`jsonb` 列直接传 dict。历史遗留 `text` JSON 列用 `json.dumps()`/`json.loads()`。
