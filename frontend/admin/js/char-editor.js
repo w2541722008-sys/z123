@@ -166,13 +166,42 @@ function renderAffectionRuleEditor(value) {
     parsed = {};
   }
 
-  // 根据 card_type 选择事件组
+  // 根据 card_type 和 scenario_type 选择事件组
   const cardType = (AdminState.currentCharData && AdminState.currentCharData.card_type) || 'intimate';
+  const scenarioType = parsed.scenario_type || 'adventure'; // 从 affection_rules_json 读取
+
   const typeRuleMap = {
-    intimate: { base: AFFECTION_BASE_RULES, all: AFFECTION_BASE_RULES, title: '❤️ 好感度规则可视化编辑器', desc: '不想直接写 JSON 的话，就在这里填。留空 = 使用系统默认值。', metricName: '好感度' },
-    scenario: { base: SCENARIO_AFFECTION_RULES, all: [...AFFECTION_BASE_RULES, ...SCENARIO_AFFECTION_RULES], title: '🎭 剧情沉浸度规则可视化编辑器', desc: '剧情沙盒使用不同的沉浸度事件。留空 = 使用系统默认值。', metricName: '沉浸度' },
+    intimate: {
+      base: AFFECTION_BASE_RULES,
+      all: AFFECTION_BASE_RULES,
+      title: '❤️ 好感度规则可视化编辑器',
+      desc: '不想直接写 JSON 的话，就在这里填。留空 = 使用系统默认值。',
+      metricName: '好感度'
+    },
+    scenario_adventure: {
+      base: ADVENTURE_AFFECTION_RULES,
+      all: [...AFFECTION_BASE_RULES, ...ADVENTURE_AFFECTION_RULES],
+      title: '🗡️ 冒险剧情沉浸度规则可视化编辑器',
+      desc: '冒险剧情使用探索、战斗、解谜等事件。留空 = 使用系统默认值。',
+      metricName: '沉浸度'
+    },
+    scenario_romance: {
+      base: ROMANCE_AFFECTION_RULES,
+      all: [...AFFECTION_BASE_RULES, ...ROMANCE_AFFECTION_RULES],
+      title: '💕 恋爱剧情沉浸度规则可视化编辑器',
+      desc: '恋爱剧情使用约会、告白、亲密互动等事件。留空 = 使用系统默认值。',
+      metricName: '沉浸度'
+    },
   };
-  const typeConfig = typeRuleMap[cardType] || typeRuleMap.intimate;
+
+  // 根据 card_type 和 scenario_type 选择配置
+  let typeConfig;
+  if (cardType === 'scenario') {
+    typeConfig = scenarioType === 'romance' ? typeRuleMap.scenario_romance : typeRuleMap.scenario_adventure;
+  } else {
+    typeConfig = typeRuleMap.intimate;
+  }
+
   const baseRules = typeConfig.base;
   const allRules = typeConfig.all;
 
@@ -235,8 +264,8 @@ function renderAffectionRuleEditor(value) {
         <h4>⚙️ 高级配置</h4>
         ${cardType === 'scenario' ? `
         <div class="affection-rule-row">
-          <div class="affection-rule-name">剧情类型（scenario_type）<span style="color:#666">（决定使用哪套剧情 System Prompt）</span></div>
-          <select data-affection-meta="scenario_type" onchange="syncAffectionRulesEditor()">
+          <div class="affection-rule-name">剧情类型（scenario_type）<span style="color:#666">（决定使用哪套剧情 System Prompt 和沉浸度事件）</span></div>
+          <select data-affection-meta="scenario_type" onchange="syncAffectionRulesEditor(); refreshAffectionEditor();">
             <option value="" ${!parsed.scenario_type ? 'selected' : ''}>默认（冒险剧情）</option>
             <option value="adventure" ${parsed.scenario_type === 'adventure' ? 'selected' : ''}>🗡️ 冒险剧情</option>
             <option value="romance" ${parsed.scenario_type === 'romance' ? 'selected' : ''}>💕 恋爱剧情</option>
@@ -476,6 +505,25 @@ function syncAffectionRulesEditor() {
 
   target.value = JSON.stringify(obj, null, 2);
   updateLen(target);
+  validateAffectionRulesEditor();
+}
+
+function refreshAffectionEditor() {
+  // 当 scenario_type 切换时，重新渲染好感度编辑器以显示对应的事件列表
+  const affectionField = document.getElementById('field-affection_rules_json');
+  if (!affectionField || !AdminState.currentCharData) return;
+
+  const currentValue = affectionField.value;
+  const affectionContainer = affectionField.closest('.field-group');
+  if (!affectionContainer) return;
+
+  // 重新渲染编辑器
+  affectionContainer.outerHTML = renderAffectionRuleEditor(currentValue);
+
+  // 重新绑定事件监听器
+  document.querySelectorAll('[data-affection-key]').forEach(input => {
+    input.addEventListener('input', syncAffectionRulesEditor);
+  });
   validateAffectionRulesEditor();
 }
 

@@ -9,24 +9,40 @@ from constants import Mood, StoryPhase
 from services.cache_service import cache_get, cache_set
 from utils.json_utils import parse_json_object
 
+# 对话陪伴 + 冒险剧情共用的基础事件
 _AFFECTION_BASE_RULES: dict[str, int] = {
     "deep_conversation": 4, "light_chat": 1, "compliment": 2, "gift": 6,
     "help": 3, "shared_secret": 5, "first_meeting": 3, "comfort": 3,
-    "flirt": 2, "date": 5, "first_hug": 7, "kiss": 8, "confession": 10,
     "argument": -5, "rude": -3, "ignore": -2, "lie": -4, "betray": -8, "insult": -6,
+}
+
+# 冒险剧情专属事件
+_ADVENTURE_AFFECTION_RULES: dict[str, int] = {
     "explore": 2, "discover": 4, "problem_resolved": 5, "challenge_won": 6,
     "obstacle_cleared": 10, "choice_made": 3, "npc_helped": 3, "secret_found": 7,
     "milestone": 8, "setback": -4, "unexpected_danger": -3, "relationship_lost": -6, "opportunity_missed": -2,
 }
 
+# 恋爱剧情专属事件
+_ROMANCE_AFFECTION_RULES: dict[str, int] = {
+    "flirt": 2, "date": 5, "first_hug": 7, "kiss": 8, "confession": 10,
+    "intimate_moment": 6, "jealousy": -3, "misunderstanding": -4, "reconciliation": 5,
+    "love_rival_appears": -2, "heartfelt_talk": 4, "surprise_gift": 3,
+}
+
 _AFFECTION_COOLDOWN_SECONDS: dict[str, int] = {
     "deep_conversation": 3600, "light_chat": 300, "compliment": 1800, "gift": 86400,
     "help": 3600, "shared_secret": 7200, "first_meeting": 604800, "comfort": 1800,
-    "flirt": 1200, "date": 43200, "first_hug": 604800, "kiss": 604800, "confession": 604800,
+    "argument": 3600, "rude": 1800, "ignore": 1800, "lie": 3600, "betray": 604800, "insult": 3600,
+    # 冒险剧情事件冷却
     "explore": 300, "discover": 1800, "problem_resolved": 86400, "challenge_won": 3600,
     "obstacle_cleared": 604800, "choice_made": 7200, "npc_helped": 3600,
     "secret_found": 86400, "milestone": 43200, "setback": 1800,
     "unexpected_danger": 1200, "relationship_lost": 86400, "opportunity_missed": 3600,
+    # 恋爱剧情事件冷却
+    "flirt": 1200, "date": 43200, "first_hug": 604800, "kiss": 604800, "confession": 604800,
+    "intimate_moment": 86400, "jealousy": 3600, "misunderstanding": 7200, "reconciliation": 86400,
+    "love_rival_appears": 604800, "heartfelt_talk": 3600, "surprise_gift": 86400,
 }
 
 # 旧事件名→新事件名迁移映射（向后兼容：运营自定义规则中可能仍使用旧名）

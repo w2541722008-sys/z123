@@ -59,8 +59,8 @@ const AFFECTION_BASE_RULES = [
   ['insult', '侮辱攻击', -6],
 ];
 
-// 剧情沙盒专属事件（与对话陪伴共享同一套分值体系，但语义不同）
-const SCENARIO_AFFECTION_RULES = [
+// 冒险剧情专属事件
+const ADVENTURE_AFFECTION_RULES = [
   ['explore', '探索新区域', 2],
   ['discover', '发现线索/物品', 4],
   ['problem_resolved', '解谜成功', 5],
@@ -75,3 +75,22 @@ const SCENARIO_AFFECTION_RULES = [
   ['relationship_lost', '失去盟友', -6],
   ['opportunity_missed', '错过线索', -2],
 ];
+
+// 恋爱剧情专属事件
+const ROMANCE_AFFECTION_RULES = [
+  ['flirt', '调情互动', 2],
+  ['date', '约会', 5],
+  ['first_hug', '初次拥抱', 7],
+  ['kiss', '亲吻', 8],
+  ['confession', '告白', 10],
+  ['intimate_moment', '亲密时刻', 6],
+  ['heartfelt_talk', '真心话', 4],
+  ['surprise_gift', '惊喜礼物', 3],
+  ['jealousy', '吃醋', -3],
+  ['misunderstanding', '误会', -4],
+  ['love_rival_appears', '情敌出现', -2],
+  ['reconciliation', '和解', 5],
+];
+
+// 向后兼容：保留旧的 SCENARIO_AFFECTION_RULES（默认为冒险）
+const SCENARIO_AFFECTION_RULES = ADVENTURE_AFFECTION_RULES;
