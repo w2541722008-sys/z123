@@ -3,10 +3,12 @@ function renderCharListSidebar() {
   const q = (document.getElementById('char-filter-search')?.value || '').trim().toLowerCase();
   const vis = document.getElementById('char-filter-visible')?.value || 'all';
   const typ = document.getElementById('char-filter-type')?.value || 'all';
+  const plan = document.getElementById('char-filter-plan')?.value || 'all';
   let chars = AdminState.allCharsCache.slice();
   if (vis === 'visible') chars = chars.filter(c => c.is_visible);
   if (vis === 'hidden') chars = chars.filter(c => !c.is_visible);
   if (typ !== 'all') chars = chars.filter(c => (c.card_type || 'intimate') === typ);
+  if (plan !== 'all') chars = chars.filter(c => (c.required_plan || 'guest') === plan);
   if (q) {
     chars = chars.filter(c =>
       (c.name || '').toLowerCase().includes(q) ||

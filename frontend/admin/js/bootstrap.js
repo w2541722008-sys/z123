@@ -106,6 +106,7 @@ function bindAdminInputEvents() {
   bind('char-filter-search', 'input', debounce(() => renderCharListSidebar(), 200));
   bind('char-filter-visible', 'change', () => renderCharListSidebar());
   bind('char-filter-type', 'change', () => renderCharListSidebar());
+  bind('char-filter-plan', 'change', () => renderCharListSidebar());
   bind('user-search', 'input', debounce(() => filterUsers(), 200));
   bind('user-plan-filter', 'change', () => filterUsers());
   bind('order-search', 'input', debounce(() => filterOrders(), 400));
@@ -136,11 +137,11 @@ function bindAdminInputEvents() {
     const hint = document.getElementById('memory-mode-hint');
     if (!hint) return;
     const hints = {
-      keyword: '关键词触发：用户消息包含关键词时才注入此条目。',
-      constant: '每轮常驻：不需要关键词匹配，每轮对话都会注入。Sticky/Cooldown不适用。',
-      always: '始终注入：无需关键词匹配。适合背景设定类内容。',
+      keyword: '<strong>关键词触发</strong>：只有用户消息包含关键词时才注入。例如：用户说「去公园」，才会注入公园的描述。',
+      constant: '<strong>每轮常驻</strong>：不需要关键词，每轮对话都注入。例如：角色的职业背景，需要AI时刻记住。Sticky/Cooldown不适用。',
+      always: '<strong>始终注入</strong>：无论什么情况都注入。例如：世界观的基础规则，必须一直存在。',
     };
-    hint.textContent = hints[mode] || '';
+    hint.innerHTML = hints[mode] || '';
   });
 
   // 确认弹窗确认按钮

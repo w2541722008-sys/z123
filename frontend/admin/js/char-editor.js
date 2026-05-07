@@ -94,13 +94,21 @@ function buildEditGuideHtml(character) {
     scenario: '剧情沙盒型最看重：剧情线、开场白差异和事件推进是否连贯。',
   };
   const typeAdvice = typeAdviceMap[character?.card_type || 'intimate'] || typeAdviceMap.intimate;
+
+  // 检查是否显示引导卡
+  const hideGuide = localStorage.getItem('admin_hide_guide') === 'true';
+  if (hideGuide) return '';
+
   return `
     <div class="guide-card">
-      <div class="guide-title">🧭 新手配置顺序</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div class="guide-title">🧭 新手配置顺序</div>
+        <button class="btn btn-ghost btn-sm" data-action="hide-guide" style="padding:2px 8px;font-size:11px;">不再显示</button>
+      </div>
       <div class="guide-desc">如果你现在对项目还不熟，可以直接按这个顺序做，不需要一次把所有字段都填满。</div>
       <ol class="guide-list">
         <li>先补齐：角色名、简介、主指令、开场白。</li>
-        <li>再看「角色内容详情」里的 base_profile / examples，这两块最影响角色像不像真人。</li>
+        <li>再看「角色核心内容」里的 base_profile / examples，这两块最影响角色像不像真人。</li>
         <li>去「世界书」里补 3 条以上高频记忆，去「剧情」里做 2 档以上开场白。</li>
         <li>最后打开 Prompt 预览，确认 AI 实际吃到的内容没有重复、冲突和空洞。</li>
       </ol>
@@ -118,8 +126,22 @@ function buildEditGuideHtml(character) {
 // 字段 HTML 生成器
 // ============================================================
 function makeFieldHtml(fieldId, label, desc, type, val, extraOpts) {
-  const lenTip = (typeof val === 'string' && val.length > 0)
-    ? `<span class="field-len">${val.length} 字</span>` : '';
+  // 字段长度提示（带建议范围）
+  let lenTip = '';
+  if (typeof val === 'string' && val.length > 0) {
+    const ranges = {
+      subtitle: '建议 30-60',
+      opening_message: '建议 100-500',
+      system_prompt: '建议 200-500',
+      description: '建议 100-300',
+      'rl__base_profile': '建议 2000-8000',
+      'rl__personality': '建议 500-3000',
+      'rl__scenario': '建议 200-2000',
+      'rl__examples': '建议 500-3000',
+    };
+    const range = ranges[fieldId] || '';
+    lenTip = `<span class="field-len">${val.length} 字${range ? ` (${range})` : ''}</span>`;
+  }
   let inputHtml = '';
 
   if (type === 'textarea') {
@@ -534,19 +556,43 @@ function renderEditPanel(c) {
   const panel = document.getElementById('tab-edit');
   AdminState.currentRlFields = [];
 
+  // 从 localStorage 读取模式
+  const isBeginnerMode = localStorage.getItem('admin_beginner_mode') !== 'false';
+
   let html = `<div class="edit-panel">
     <h2>${escHtml(c.name || '')}</h2>
     <div class="char-id">ID: ${c.id} &nbsp;|&nbsp; 类型: ${c.card_type || '?'} &nbsp;|&nbsp; 来源: ${escHtml(c.source_path || '未知')}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="font-size:12px;color:var(--text-dim);">
+        ${isBeginnerMode ? '🎯 新手模式：只显示核心字段' : '🔧 完整模式：显示所有字段'}
+      </div>
+      <button class="btn btn-ghost btn-sm" data-action="toggle-beginner-mode">
+        ${isBeginnerMode ? '切换到完整模式' : '切换到新手模式'}
+      </button>
+    </div>
     ${buildEditGuideHtml(c)}`;
 
-  // 固定字段分区（根据 card_type 过滤）
+  // 固定字段分区（根据 card_type 和模式过滤）
   const cardType = c.card_type || 'intimate';
+  const beginnerCoreFields = ['name', 'subtitle', 'opening_message', 'system_prompt', 'avatar_url', 'cover_url', 'card_type', 'is_visible', 'home_priority'];
+
   for (const section of FIXED_SECTIONS) {
     if (section.cardTypes !== 'both' && section.cardTypes !== cardType) continue;
+
+    // 新手模式：只显示包含核心字段的分区
+    if (isBeginnerMode) {
+      const hasCore = section.fields.some(f => beginnerCoreFields.includes(f));
+      if (!hasCore) continue;
+    }
+
     html += `<div class="section-title">${section.title}</div>`;
     for (const field of section.fields) {
       const meta = FIXED_FIELD_META[field];
       if (!meta) continue;
+
+      // 新手模式：跳过非核心字段
+      if (isBeginnerMode && !beginnerCoreFields.includes(field)) continue;
+
       if (field === 'affection_rules_json') {
         html += renderAffectionRuleEditor(c[field] ?? '{}');
       }
@@ -554,40 +600,56 @@ function renderEditPanel(c) {
     }
   }
 
-  html += `<div class="section-title">📎 导入与资源（只读）</div>`;
-  for (const field of READONLY_SECTION_FIELDS) {
-    const meta = READONLY_META[field];
-    if (!meta) continue;
-    html += makeFieldHtml(field, meta.label, meta.desc, 'readonly_textarea', c[field] ?? '', meta);
+  // 新手模式：隐藏只读字段
+  if (!isBeginnerMode) {
+    html += `<div class="section-title">📎 导入与资源（只读）</div>`;
+    for (const field of READONLY_SECTION_FIELDS) {
+      const meta = READONLY_META[field];
+      if (!meta) continue;
+      html += makeFieldHtml(field, meta.label, meta.desc, 'readonly_textarea', c[field] ?? '', meta);
+    }
   }
 
-  // runtime_layers 字段（根据 card_type 过滤）
+  // runtime_layers 字段（根据 card_type 和模式过滤）
   const rlFields = [];
   // 核心字段根据类型区分
   const CORE_RL_FIELDS = cardType === 'scenario'
     ? ['base_profile', 'examples', 'scenario', 'alternate_greetings', 'world_rules']
     : ['base_profile', 'examples', 'personality', 'world_rules'];
 
+  // 新手模式：只显示核心字段
+  const rlFieldsToShow = isBeginnerMode ? ['base_profile', 'examples'] : RL_DISPLAY_ORDER;
+
   // 按预定顺序先加有数据的
-  for (const rlKey of RL_DISPLAY_ORDER) {
+  for (const rlKey of rlFieldsToShow) {
     const fullKey = `rl__${rlKey}`;
     if (fullKey in c) rlFields.push(rlKey);
   }
-  // 有但不在预定顺序里的，补到末尾
-  for (const k of Object.keys(c)) {
-    if (k.startsWith('rl__') && !rlFields.includes(k.slice(4))) {
-      rlFields.push(k.slice(4));
+
+  if (!isBeginnerMode) {
+    // 有但不在预定顺序里的，补到末尾
+    for (const k of Object.keys(c)) {
+      if (k.startsWith('rl__') && !rlFields.includes(k.slice(4))) {
+        rlFields.push(k.slice(4));
+      }
     }
-  }
-  // 确保核心字段始终显示（即使为空）
-  for (const coreKey of CORE_RL_FIELDS) {
-    if (!rlFields.includes(coreKey)) {
-      rlFields.push(coreKey);
+    // 确保核心字段始终显示（即使为空）
+    for (const coreKey of CORE_RL_FIELDS) {
+      if (!rlFields.includes(coreKey)) {
+        rlFields.push(coreKey);
+      }
+    }
+  } else {
+    // 新手模式：确保 base_profile 和 examples 显示
+    for (const coreKey of ['base_profile', 'examples']) {
+      if (!rlFields.includes(coreKey)) {
+        rlFields.push(coreKey);
+      }
     }
   }
 
   if (rlFields.length > 0) {
-    html += `<div class="section-title">🎭 角色内容详情（runtime_layers）
+    html += `<div class="section-title">🎭 角色核心内容（AI实际看到的设定）
       <span style="font-size:11px;color:#666;font-weight:400">— 这里才是角色的真正内容</span>
     </div>`;
 

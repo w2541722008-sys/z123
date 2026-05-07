@@ -109,6 +109,28 @@ async function saveChar() {
     return;
   }
 
+  // 必填项校验
+  const requiredFields = [
+    { id: 'field-name', label: '角色名' },
+    { id: 'field-subtitle', label: '简介（副标题）' },
+    { id: 'field-opening_message', label: '开场白' },
+    { id: 'field-system_prompt', label: '主指令' },
+  ];
+  const missing = [];
+  for (const {id, label} of requiredFields) {
+    const el = document.getElementById(id);
+    if (el && !el.value.trim()) {
+      missing.push(label);
+      el.style.borderColor = '#dc2626';
+    } else if (el) {
+      el.style.borderColor = '';
+    }
+  }
+  if (missing.length > 0) {
+    toast(`❌ 还有 ${missing.length} 个必填项未填写：${missing.join('、')}`);
+    return;
+  }
+
   const updates = {};
 
   try {
@@ -190,5 +212,20 @@ async function deleteCurrentCharacter() {
     toast(`已删除角色：${characterName}`);
   } catch (e) {
     toast('删除失败：' + e.message);
+  }
+}
+
+function toggleBeginnerMode() {
+  const current = localStorage.getItem('admin_beginner_mode') !== 'false';
+  localStorage.setItem('admin_beginner_mode', current ? 'false' : 'true');
+  if (AdminState.currentCharData) {
+    renderEditPanel(AdminState.currentCharData);
+  }
+}
+
+function hideGuide() {
+  localStorage.setItem('admin_hide_guide', 'true');
+  if (AdminState.currentCharData) {
+    renderEditPanel(AdminState.currentCharData);
   }
 }

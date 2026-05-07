@@ -8,6 +8,8 @@ const CHARACTER_ACTION_HANDLERS = {
   'add-affection-custom-row': () => addAffectionCustomRow(),
   'remove-affection-custom-row': (trigger) => removeAffectionCustomRow(trigger),
   'reset-affection-rules': () => resetAffectionRulesEditor(),
+  'toggle-beginner-mode': () => toggleBeginnerMode(),
+  'hide-guide': () => hideGuide(),
   'select-char': (trigger) => {
     if (trigger.dataset.charId) selectChar(trigger.dataset.charId);
   },

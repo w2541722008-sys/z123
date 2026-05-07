@@ -39,6 +39,15 @@
           <option value="scenario">剧情沙盒</option>
         </select>
       </div>
+      <div class="sidebar-filter-row">
+        <select id="char-filter-plan" class="input-select">
+          <option value="all">全部档位</option>
+          <option value="guest">游客可访问</option>
+          <option value="free">注册用户</option>
+          <option value="vip">仅VIP</option>
+          <option value="svip">仅SVIP</option>
+        </select>
+      </div>
     </div>
     <div id="char-list">
       <div class="empty-state"><div class="icon">⏳</div><div>加载中...</div></div>
@@ -347,11 +356,15 @@
       <div class="form-group">
         <label>触发模式</label>
         <select id="memory-trigger-mode">
-          <option value="keyword">🔑 关键词触发（默认）— 匹配关键词时注入</option>
-          <option value="constant">🔄 每轮常驻 — 不需要关键词，每轮都注入</option>
-          <option value="always">📋 始终注入 — 无需关键词匹配，与选择性无关</option>
+          <option value="keyword">🔑 关键词触发 — 用户说「公园」时才注入</option>
+          <option value="constant">🔄 每轮常驻 — 角色职业背景，每轮都提醒AI</option>
+          <option value="always">📋 始终注入 — 世界观设定，不管说什么都加载</option>
         </select>
-        <div class="field-hint" id="memory-mode-hint">关键词触发：用户消息包含关键词时才注入此条目。</div>
+        <div class="field-hint" id="memory-mode-hint">
+          <strong>关键词触发</strong>：只有用户消息包含关键词时才注入。例如：用户说「去公园」，才会注入公园的描述。<br>
+          <strong>每轮常驻</strong>：不需要关键词，每轮对话都注入。例如：角色的职业背景，需要AI时刻记住。<br>
+          <strong>始终注入</strong>：无论什么情况都注入。例如：世界观的基础规则，必须一直存在。
+        </div>
       </div>
       <div class="form-row">
         <div class="form-group">
