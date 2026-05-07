@@ -48,31 +48,31 @@ const READONLY_META = {
   import_diagnostics: { label: '导入诊断 import_diagnostics', desc: 'JSON 数组字符串（只读）', rows: 10 },
 };
 
-// runtime_layers 字段中文说明
+// runtime_layers 字段中文说明（cardTypes: 'both' | 'intimate' | 'scenario'）
 const RL_FIELD_META = {
-  primary_system_prompt: { label: '主System Prompt（深层）', desc: '从角色卡解析出的核心指令', rows: 4 },
-  base_profile:          { label: '📖 角色档案（base_profile）', desc: '角色的人物背景、身份、外貌、性格等主要设定——最核心的内容在这里', rows: 20 },
-  personality:           { label: '性格描述', desc: '角色性格特征', rows: 6 },
-  scenario:              { label: '🎬 场景设定', desc: '故事发生的时间/地点/背景', rows: 8 },
-  world_rules:           { label: '🌐 世界规则', desc: '世界观设定、规则、禁忌', rows: 10 },
-  examples:              { label: '💬 示例对话', desc: '展示角色说话风格的例句', rows: 10 },
-  post_history_rules:    { label: '📌 对话规则（每轮提醒）', desc: '每次对话末尾注入的格式/行为规则', rows: 6 },
-  alternate_greetings:   { label: '🎭 多开场白列表', desc: '各条剧情线的开场白（用 ---分隔）', rows: 12 },
-  opening_message:       { label: '开场白（深层）', desc: 'runtime里的开场白，与表字段同步', rows: 6 },
-  structured_outline:    { label: '📋 结构化大纲', desc: '角色卡的结构化解析结果（JSON格式）', rows: 16 },
-  world_info_before:     { label: '🌍 世界书-前置词条', desc: 'character_book 里 before_char 的词条内容', rows: 8 },
-  world_info_after:      { label: '🌍 世界书-后置词条', desc: 'character_book 里 after_char 的词条内容', rows: 8 },
-  conditional_entries:   { label: '⚡ 条件触发词条', desc: '关键词触发的world info词条（JSON格式）', rows: 8 },
-  extension_hints:       { label: '扩展提示', desc: '其他扩展信息', rows: 4 },
+  primary_system_prompt: { label: '主System Prompt（深层）', desc: '从角色卡解析出的核心指令', rows: 4, cardTypes: 'both' },
+  base_profile:          { label: '📖 角色档案（base_profile）', desc: '角色的人物背景、身份、外貌、性格等主要设定——最核心的内容在这里', rows: 20, cardTypes: 'both' },
+  personality:           { label: '性格描述', desc: '角色性格特征', rows: 6, cardTypes: 'both' },
+  scenario:              { label: '🎬 场景设定', desc: '剧情沙盒专属：故事发生的时间/地点/背景', rows: 8, cardTypes: 'scenario' },
+  world_rules:           { label: '🌐 世界规则', desc: '世界观设定、规则、禁忌', rows: 10, cardTypes: 'both' },
+  examples:              { label: '💬 示例对话', desc: '展示角色说话风格的例句', rows: 10, cardTypes: 'both' },
+  post_history_rules:    { label: '📌 对话规则（每轮提醒）', desc: '每次对话末尾注入的格式/行为规则', rows: 6, cardTypes: 'both' },
+  alternate_greetings:   { label: '🎭 多开场白列表', desc: '剧情沙盒专属：各条剧情线的开场白（用 ---分隔）', rows: 12, cardTypes: 'scenario' },
+  opening_message:       { label: '开场白（深层）', desc: 'runtime里的开场白，与表字段同步', rows: 6, cardTypes: 'both' },
+  structured_outline:    { label: '📋 结构化大纲', desc: '角色卡的结构化解析结果（JSON格式）', rows: 16, cardTypes: 'both' },
+  world_info_before:     { label: '🌍 世界书-前置词条', desc: 'character_book 里 before_char 的词条内容', rows: 8, cardTypes: 'both' },
+  world_info_after:      { label: '🌍 世界书-后置词条', desc: 'character_book 里 after_char 的词条内容', rows: 8, cardTypes: 'both' },
+  conditional_entries:   { label: '⚡ 条件触发词条', desc: '关键词触发的world info词条（JSON格式）', rows: 8, cardTypes: 'both' },
+  extension_hints:       { label: '扩展提示', desc: '其他扩展信息', rows: 4, cardTypes: 'both' },
 };
 
-// 字段分区（固定字段）
+// 字段分区（固定字段）— cardTypes: 'both' | 'intimate' | 'scenario'
 const FIXED_SECTIONS = [
-  { title: '📋 基础展示信息', fields: ['name', 'abbr', 'subtitle', 'tags', 'opening_message'] },
-  { title: '🖼️ 角色形象', fields: ['avatar_url', 'cover_url'] },
-  { title: '⚙️ 系统与广场', fields: ['system_prompt', 'description', 'is_visible', 'home_priority', 'sort_order', 'card_type', 'required_plan', 'import_locked', 'affection_enabled'] },
-  { title: '👤 人生档案', fields: ['life_profile_json'] },
-  { title: '❤️ 好感度', fields: ['affection_rules_json'] },
+  { title: '📋 基础展示信息', fields: ['name', 'abbr', 'subtitle', 'tags', 'opening_message'], cardTypes: 'both' },
+  { title: '🖼️ 角色形象', fields: ['avatar_url', 'cover_url'], cardTypes: 'both' },
+  { title: '⚙️ 系统与广场', fields: ['system_prompt', 'description', 'is_visible', 'home_priority', 'sort_order', 'card_type', 'required_plan', 'import_locked', 'affection_enabled'], cardTypes: 'both' },
+  { title: '👤 人生档案', fields: ['life_profile_json'], cardTypes: 'intimate' },
+  { title: '❤️ 好感度', fields: ['affection_rules_json'], cardTypes: 'both' },
 ];
 
 const READONLY_SECTION_FIELDS = ['asset_type', 'embedded_format', 'mock_reply_style', 'import_diagnostics'];
@@ -233,6 +233,16 @@ function renderAffectionRuleEditor(value) {
       </div>
       <div class="affection-card" style="margin-top:10px;">
         <h4>⚙️ 高级配置</h4>
+        ${cardType === 'scenario' ? `
+        <div class="affection-rule-row">
+          <div class="affection-rule-name">剧情类型（scenario_type）<span style="color:#666">（决定使用哪套剧情 System Prompt）</span></div>
+          <select data-affection-meta="scenario_type" onchange="syncAffectionRulesEditor()">
+            <option value="" ${!parsed.scenario_type ? 'selected' : ''}>默认（冒险剧情）</option>
+            <option value="adventure" ${parsed.scenario_type === 'adventure' ? 'selected' : ''}>🗡️ 冒险剧情</option>
+            <option value="romance" ${parsed.scenario_type === 'romance' ? 'selected' : ''}>💕 恋爱剧情</option>
+          </select>
+        </div>
+        ` : ''}
         <div class="affection-rule-row">
           <div class="affection-rule-name">每日${typeConfig.metricName}涨幅上限（daily_cap）<span style="color:#666">（默认 15，设为 0 = 不限制，适合剧情沙盒）</span></div>
           <input type="number" data-affection-meta="daily_cap" value="${parsed.daily_cap != null ? parsed.daily_cap : ''}" placeholder="15" min="0" max="100" oninput="syncAffectionRulesEditor()" />
@@ -446,13 +456,14 @@ function syncAffectionRulesEditor() {
     if (!Number.isNaN(num)) obj[key] = num;
   });
 
-  // 高级配置项（daily_cap, allow_regression 等）
+  // 高级配置项（daily_cap, allow_regression, scenario_type 等）
   document.querySelectorAll('[data-affection-meta]').forEach(el => {
     const metaKey = el.getAttribute('data-affection-meta');
     if (el.tagName === 'SELECT') {
       const val = el.value;
       if (val === 'true') obj[metaKey] = true;
       else if (val === 'false') obj[metaKey] = false;
+      else if (val && val !== '') obj[metaKey] = val; // scenario_type 等字符串类型
       // 空值不写入，使用系统默认
     } else if (el.type === 'number') {
       const raw = String(el.value || '').trim();
@@ -480,8 +491,10 @@ function renderEditPanel(c) {
     <div class="char-id">ID: ${c.id} &nbsp;|&nbsp; 类型: ${c.card_type || '?'} &nbsp;|&nbsp; 来源: ${escHtml(c.source_path || '未知')}</div>
     ${buildEditGuideHtml(c)}`;
 
-  // 固定字段分区
+  // 固定字段分区（根据 card_type 过滤）
+  const cardType = c.card_type || 'intimate';
   for (const section of FIXED_SECTIONS) {
+    if (section.cardTypes !== 'both' && section.cardTypes !== cardType) continue;
     html += `<div class="section-title">${section.title}</div>`;
     for (const field of section.fields) {
       const meta = FIXED_FIELD_META[field];
@@ -500,10 +513,13 @@ function renderEditPanel(c) {
     html += makeFieldHtml(field, meta.label, meta.desc, 'readonly_textarea', c[field] ?? '', meta);
   }
 
-  // runtime_layers 字段
+  // runtime_layers 字段（根据 card_type 过滤）
   const rlFields = [];
-  // 核心字段始终显示（即使为空），方便用户配置
-  const CORE_RL_FIELDS = ['base_profile', 'examples', 'personality', 'scenario', 'world_rules'];
+  // 核心字段根据类型区分
+  const CORE_RL_FIELDS = cardType === 'scenario'
+    ? ['base_profile', 'examples', 'scenario', 'alternate_greetings', 'world_rules']
+    : ['base_profile', 'examples', 'personality', 'world_rules'];
+
   // 按预定顺序先加有数据的
   for (const rlKey of RL_DISPLAY_ORDER) {
     const fullKey = `rl__${rlKey}`;
@@ -531,10 +547,12 @@ function renderEditPanel(c) {
       const fullKey = `rl__${rlKey}`;
       const val = c[fullKey] ?? '';
       const meta = RL_FIELD_META[rlKey];
+      // 根据 cardTypes 过滤字段
+      if (meta?.cardTypes && meta.cardTypes !== 'both' && meta.cardTypes !== cardType) continue;
       const label = meta?.label || rlKey;
       const desc = meta?.desc || `runtime_layers.${rlKey}`;
       const rows = meta?.rows || 6;
-      if (!val && !meta) continue; // 空且无元信息的跳过
+      if (!val && !meta) continue;
       AdminState.currentRlFields.push(rlKey);
       html += makeFieldHtml(fullKey, label, desc, 'textarea', val, { rows });
     }

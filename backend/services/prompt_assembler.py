@@ -231,9 +231,25 @@ TOTAL_SYSTEM_MAX_CHARS = _TOTAL_SYSTEM_MAX_CHARS
 expand_bundle_macros = _expand_bundle_macros
 
 
-# 模式构建器（通过 prompt_builder 创建，传入 _SCENARIO_DEFAULT_SYSTEM_PROMPT）
+# 模式构建器（通过 prompt_builder 创建）
+# scenario 模式需要根据 character 动态选择 System Prompt，所以创建一个包装函数
 def _make_mode_builder(mode: str) -> Callable[..., list[dict[str, str]]]:
-    return _pb_make_mode_builder(mode, _SCENARIO_DEFAULT_SYSTEM_PROMPT if mode == "scenario" else "")
+    if mode == "scenario":
+        def scenario_builder(
+            runtime_bundle: dict[str, Any],
+            character: Any,
+            recent_messages: list[dict[str, str]],
+            memory_summary: str,
+            recent_message_window: int,
+            budget: "TokenBudget | None" = None,
+        ) -> list[dict[str, str]]:
+            # 根据角色的 scenario_type 动态选择 System Prompt
+            scenario_prompt = _get_scenario_system_prompt(character)
+            builder = _pb_make_mode_builder(mode, scenario_prompt)
+            return builder(runtime_bundle, character, recent_messages, memory_summary, recent_message_window, budget)
+        return scenario_builder
+    else:
+        return _pb_make_mode_builder(mode, "")
 
 def _get_scenario_system_prompt(character: Any) -> str:
     """根据角色卡的 scenario_type 返回对应的 System Prompt"""
@@ -378,31 +394,33 @@ def build_layered_chat_messages(
     # 对 bundle 内所有文本做一次宏展开（{{char}} → 角色名，{{user}} → 用户名）
     runtime_bundle = _expand_bundle_macros(runtime_bundle, char_name=char_name, user_name=user_name)
 
-    # ── 人生档案注入 ──────────────────────────────────────────────────────
+    # ── 人生档案注入（仅对话陪伴类型）──────────────────────────────────────
     # 将角色的人生档案（life_profile_json）注入到 world_info_after
     # 优先级：状态快照 > 人生档案 > 情感锚点 > 普通世界书
-    life_profile = parse_json_object(_get_field(character, "life_profile_json", "{}"), fallback={})
-    if life_profile and any(life_profile.values()):
-        profile_lines = ["【角色人生档案】"]
-        if life_profile.get("basic_info"):
-            profile_lines.append(life_profile["basic_info"])
-        if life_profile.get("childhood"):
-            profile_lines.append(f"\n童年经历：\n{life_profile['childhood']}")
-        if life_profile.get("family"):
-            profile_lines.append(f"\n家庭背景：\n{life_profile['family']}")
-        if life_profile.get("work"):
-            profile_lines.append(f"\n工作经历：\n{life_profile['work']}")
-        if life_profile.get("personality"):
-            profile_lines.append(f"\n性格特点：\n{life_profile['personality']}")
-        if life_profile.get("habits"):
-            profile_lines.append(f"\n生活习惯：\n{life_profile['habits']}")
-        if life_profile.get("important_events"):
-            profile_lines.append(f"\n重要经历：\n{life_profile['important_events']}")
+    # 剧情沙盒不使用人生档案，避免污染剧情 prompt
+    if card_type == "intimate":
+        life_profile = parse_json_object(_get_field(character, "life_profile_json", "{}"), fallback={})
+        if life_profile and any(life_profile.values()):
+            profile_lines = ["【角色人生档案】"]
+            if life_profile.get("basic_info"):
+                profile_lines.append(life_profile["basic_info"])
+            if life_profile.get("childhood"):
+                profile_lines.append(f"\n童年经历：\n{life_profile['childhood']}")
+            if life_profile.get("family"):
+                profile_lines.append(f"\n家庭背景：\n{life_profile['family']}")
+            if life_profile.get("work"):
+                profile_lines.append(f"\n工作经历：\n{life_profile['work']}")
+            if life_profile.get("personality"):
+                profile_lines.append(f"\n性格特点：\n{life_profile['personality']}")
+            if life_profile.get("habits"):
+                profile_lines.append(f"\n生活习惯：\n{life_profile['habits']}")
+            if life_profile.get("important_events"):
+                profile_lines.append(f"\n重要经历：\n{life_profile['important_events']}")
 
-        profile_text = "\n".join(profile_lines)
-        # 注入到 world_info_after，优先级仅次于状态快照
-        existing_after = runtime_bundle.get("world_info_after") or ""
-        runtime_bundle["world_info_after"] = (profile_text + "\n\n" + existing_after).strip() if existing_after else profile_text
+            profile_text = "\n".join(profile_lines)
+            # 注入到 world_info_after，优先级仅次于状态快照
+            existing_after = runtime_bundle.get("world_info_after") or ""
+            runtime_bundle["world_info_after"] = (profile_text + "\n\n" + existing_after).strip() if existing_after else profile_text
 
     # ── World Info 动态触发 ──────────────────────────────────────────────
     # 用最新用户消息 + 最近几条对话作为匹配上下文

@@ -315,16 +315,8 @@ def _build_mode_messages(
 
     primary = runtime_bundle.get("primary_system_prompt") or _get_field(character, "system_prompt", "")
     if not primary.strip() and mode == "scenario":
-        # 根据 scenario_type 选择对应的 System Prompt
-        try:
-            from utils.json_utils import parse_json_object
-            rules_json = _get_field(character, "affection_rules_json", {})
-            if isinstance(rules_json, str):
-                rules_json = parse_json_object(rules_json, fallback={})
-            scenario_type = rules_json.get("scenario_type", "adventure")
-            primary = _scenario_default_system_prompt if scenario_type == "adventure" else _scenario_default_system_prompt
-        except Exception:
-            primary = _scenario_default_system_prompt
+        # scenario 模式的默认 System Prompt 由 _make_mode_builder 传入
+        primary = _scenario_default_system_prompt
     system_text = _build_single_system_prompt(primary, layer_pairs, budget=budget)
     if system_text:
         messages.append({"role": "system", "content": system_text})
