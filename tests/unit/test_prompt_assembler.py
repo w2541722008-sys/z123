@@ -271,10 +271,12 @@ class TestRuntimeLayerHelpers:
 
     def test_select_mode_builder_prefers_card_type_over_asset_type(self):
         builder = _select_mode_builder("scenario", "character")
-        assert builder.__name__ == "_build_scenario_mode_messages"
+        # scenario builder 现在是动态包装函数，名称为 scenario_builder
+        assert builder.__name__ in ("_build_scenario_mode_messages", "scenario_builder")
 
         builder = _select_mode_builder("intimate", "scenario")
-        assert builder.__name__ == "_build_scenario_mode_messages"
+        # intimate + scenario 组合也返回 scenario builder（因为 asset_type=scenario）
+        assert builder.__name__ in ("_build_scenario_mode_messages", "scenario_builder")
 
         builder = _select_mode_builder("intimate", "unknown")
         assert builder.__name__ == "_build_hybrid_mode_messages"
