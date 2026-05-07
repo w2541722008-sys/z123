@@ -54,6 +54,11 @@ _EVENT_NAME_MIGRATION: dict[str, str] = {
     "puzzle_solved": "problem_resolved",
     "ally_lost": "relationship_lost",
     "clue_missed": "opportunity_missed",
+    # Prompt 旧事件名兼容（prompt_assembler 曾使用这些名称，已修正但对齐旧数据）
+    "chat": "light_chat",
+    "deep_talk": "deep_conversation",
+    "intimate": "intimate_moment",
+    "cold": "ignore",
 }
 
 _AFFECTION_DIMINISHING_RETURNS: list[float] = [1.0, 0.6, 0.3, 0.0]

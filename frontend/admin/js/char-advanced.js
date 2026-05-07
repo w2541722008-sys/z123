@@ -300,7 +300,7 @@ function renderGreetings() {
   if (AdminState.currentGreetingFilter !== 'all') greetings = greetings.filter(g => g.story_phase === AdminState.currentGreetingFilter);
   if (!greetings.length) { container.innerHTML = '<div class="no-results">该阶段暂无开场白</div>'; return; }
   const phaseNames = getPhaseLabels();
-  const moodEmojis = { neutral: '😐', happy: '😊', sad: '😢', angry: '😠', flirty: '😉' };
+  const moodEmojis = { neutral: '😐', happy: '😊', warm: '🥰', melting: '💗', cold: '🧊', angry: '😠', sad: '😢', shy: '😳', surprised: '😲' };
   container.innerHTML = greetings.map(g => `<div class="item-card ${g.is_active ? '' : 'inactive'}">
     <div class="item-header"><div class="item-badges">
       <span class="item-badge phase-${g.story_phase}">${getPhaseEmoji(g.story_phase)} ${phaseNames[g.story_phase]||g.story_phase}</span>

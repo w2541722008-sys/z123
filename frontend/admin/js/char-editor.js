@@ -38,6 +38,7 @@ const FIXED_FIELD_META = {
   import_locked:      { label: '导入锁定', desc: '1=展示字段已锁定不被重导入覆盖', type: 'select', options: [['1','🔒 已锁定'],['0','🔓 未锁定']] },
   affection_enabled:  { label: '好感度系统', desc: '是否启用好感度追踪', type: 'select', options: [['1','❤️ 启用'],['0','🚫 禁用']] },
   affection_rules_json: { label: '好感度规则 JSON', desc: 'JSON 对象字符串，写入 affection_rules_json 列', type: 'textarea', rows: 8 },
+  phase_behaviors_json: { label: '🎭 阶段行为定制', desc: 'JSON 对象，为每个关系阶段定制行为倾向。如 {"stranger":"对新顾客热情推荐","friend":"主动分享烦恼"}', type: 'phase_behaviors' },
   life_profile_json: { label: '👤 人生档案', desc: '角色的完整人生背景（童年、家庭、工作等），AI每轮都能看到', type: 'life_profile' },
 };
 
@@ -73,6 +74,7 @@ const FIXED_SECTIONS = [
   { title: '⚙️ 系统与广场', fields: ['system_prompt', 'description', 'is_visible', 'home_priority', 'sort_order', 'card_type', 'required_plan', 'import_locked', 'affection_enabled'], cardTypes: 'both' },
   { title: '👤 人生档案', fields: ['life_profile_json'], cardTypes: 'intimate' },
   { title: '❤️ 好感度', fields: ['affection_rules_json'], cardTypes: 'both' },
+  { title: '🎭 阶段行为', fields: ['phase_behaviors_json'], cardTypes: 'both' },
 ];
 
 const READONLY_SECTION_FIELDS = ['asset_type', 'embedded_format', 'mock_reply_style', 'import_diagnostics'];
@@ -159,8 +161,10 @@ function makeFieldHtml(fieldId, label, desc, type, val, extraOpts) {
   } else if (type === 'readonly_textarea') {
     const rows = extraOpts?.rows || 4;
     inputHtml = `<textarea readonly rows="${rows}" style="opacity:.92;cursor:default;width:100%;background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#9ca3af;padding:10px 12px;font-size:13px;line-height:1.5;resize:vertical;">${escHtml(String(val ?? ''))}</textarea>`;
-  } else if (type === 'life_profile') {
+  } else   if (type === 'life_profile') {
     return renderLifeProfileEditor(val);
+  } else if (type === 'phase_behaviors') {
+    return renderPhaseBehaviorsEditor(val);
   } else {
     inputHtml = `<input type="text" id="field-${fieldId}" value="${escHtml(String(val ?? ''))}" />`;
   }
@@ -415,6 +419,53 @@ function validateAffectionRulesEditor() {
 
   status.className = 'affection-status ok';
   status.textContent = `✅ 当前已配置 ${filledCount} 项自定义好感度规则。`;
+}
+
+// ============================================================
+// 阶段行为定制编辑器
+// ============================================================
+function renderPhaseBehaviorsEditor(jsonStr) {
+  const parsed = safeParseJSON(jsonStr || '{}');
+  const ct = (AdminState.currentCharData && AdminState.currentCharData.card_type) || 'intimate';
+  const labels = PHASE_LABEL_MAPS?.[ct] || { stranger: '陌生人', acquaintance: '熟人', friend: '朋友', lover: '恋人' };
+  const placeholders = {
+    stranger: '例如：对新顾客热情推荐试吃，聊甜品话题，但不主动聊私事',
+    acquaintance: '例如：开始记住对方口味偏好，偶尔分享工作趣事',
+    friend: '例如：把对方当特别的人，主动分享烦恼和梦想，偶尔撒娇',
+    lover: '例如：直接表达想念和爱意，用亲昵称呼，偶尔吃醋',
+  };
+  const rows = Object.entries(labels).map(([key, label]) => `
+    <div class="life-profile-field">
+      <label>${escHtml(label)}（${escHtml(key)}）</label>
+      <textarea id="phase-behavior-${escHtml(key)}" rows="3" placeholder="${escHtml(placeholders[key] || '描述该阶段的行为倾向')}" oninput="syncPhaseBehaviorsEditor()">${escHtml(parsed[key] || '')}</textarea>
+    </div>
+  `).join('');
+  return `
+    <div class="field-group">
+      <div class="field-label">🎭 阶段行为定制 <span class="field-hint">为每个关系阶段定义独特的行为倾向，替代系统默认文案</span></div>
+      <div class="life-profile-editor">
+        ${rows}
+        <div class="life-profile-note">
+          💡 提示：<br />
+          - 留空表示使用系统默认行为倾向<br />
+          - 每个阶段建议控制在 100 字以内，过长的行为规则会分散 AI 注意力<br />
+          - 重点描述该阶段角色的核心互动模式，而非面面俱到
+        </div>
+      </div>
+      <textarea id="field-phase_behaviors_json" style="display:none;">${escHtml(jsonStr || '{}')}</textarea>
+    </div>
+  `;
+}
+
+function syncPhaseBehaviorsEditor() {
+  const target = document.getElementById('field-phase_behaviors_json');
+  if (!target) return;
+  const obj = {};
+  ['stranger', 'acquaintance', 'friend', 'lover'].forEach(phase => {
+    const val = document.getElementById(`phase-behavior-${phase}`)?.value?.trim() || '';
+    if (val) obj[phase] = val;
+  });
+  target.value = JSON.stringify(obj, null, 2);
 }
 
 // ============================================================

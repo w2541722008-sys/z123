@@ -224,6 +224,27 @@ def admin_update_character(
         if invalid_fields:
             raise HTTPException(status_code=400, detail=f"非法更新字段: {invalid_fields}")
 
+        # 校验 affection_rules_json 格式（必须是扁平键值对，禁止嵌套格式）
+        if "affection_rules_json" in safe_direct:
+            rules_raw = safe_direct["affection_rules_json"]
+            if rules_raw and str(rules_raw).strip():
+                try:
+                    rules = json.loads(str(rules_raw)) if isinstance(rules_raw, str) else rules_raw
+                    if not isinstance(rules, dict):
+                        raise HTTPException(status_code=400, detail="affection_rules_json 必须是 JSON 对象")
+                    for k, v in rules.items():
+                        if k in ("enabled", "daily_cap", "allow_regression", "show_bar", "scenario_type"):
+                            continue  # 元数据键允许非 int 值
+                        if isinstance(v, (list, dict)):
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"affection_rules_json 格式错误：'{k}' 的值不能是数组或对象。"
+                                       f"正确格式为扁平键值对，如 {{\"deep_conversation\": 4, \"light_chat\": 1}}，"
+                                       f"不要使用嵌套的 events/milestones 格式。"
+                            )
+                except json.JSONDecodeError:
+                    raise HTTPException(status_code=400, detail="affection_rules_json 不是合法的 JSON")
+
         set_clause = ", ".join(f"{k} = %s" for k in safe_direct)
         char_repo.update_character_fields(conn, character_id, safe_direct)
 
