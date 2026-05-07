@@ -21,7 +21,7 @@ from core.schemas import BillingCreateOrderPayload
 from repositories import billing_repository as billing_repo
 from services.billing_order_service import close_expired_pending_orders
 from services.cache_service import invalidate_user
-from services.plan_service import SVIP_PLAN, VIP_PLAN, plan_display_name
+from core.plan_constants import SVIP_PLAN, VIP_PLAN, plan_display_name
 
 router = APIRouter()
 

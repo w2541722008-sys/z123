@@ -216,7 +216,7 @@ AI 只判断"发生了什么事"，不判断"加多少分"：
 
 目前需要手动通过 SQL 或 Python 脚本写入，后续可在 `cli/card_analyze.py` 里自动从 `character_book` 词条提取。
 
-**示例（SQLite 直接写）**：
+**示例（PostgreSQL 直接写）**：
 ```sql
 UPDATE characters
 SET affection_rules_json = '{"first_hug": 10, "pet_name": 4, "enabled": true}'
@@ -256,7 +256,7 @@ WHERE name = '陈序';
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `affection_enabled` | INTEGER（0/1） | 是否启用好感度，默认 1；world 卡建议设 0 |
+| `affection_enabled` | INTEGER（0/1） | 是否启用好感度，默认 1 |
 | `affection_rules_json` | JSONB（经 002 迁移） | 角色卡自定义加减分规则，空时使用全局底座 |
 
 ---

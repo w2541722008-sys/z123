@@ -6,7 +6,7 @@ from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
 from core.schemas import MemoryCategoryPayload, MemoryEntryPayload
 
-from .characters_common import _assert_memory_category_owned
+from ._helpers import _assert_memory_category_owned
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
@@ -22,7 +22,8 @@ def list_memories(character_id: str, conn: ConnType = Depends(get_db_dep)) -> li
     rows = conn.execute(
         """
         SELECT id, keywords, trigger_logic, content, category_id, position,
-               priority, is_active, comment, created_at, updated_at
+               priority, is_active, comment, selective, constant, sticky, cooldown,
+               created_at, updated_at
         FROM character_memories
         WHERE character_id = %s
         ORDER BY priority ASC, id ASC
@@ -41,6 +42,10 @@ def list_memories(character_id: str, conn: ConnType = Depends(get_db_dep)) -> li
             "priority": row["priority"],
             "is_active": bool(row["is_active"]),
             "comment": row["comment"] or "",
+            "selective": bool(row["selective"]),
+            "constant": bool(row["constant"]),
+            "sticky": row["sticky"],
+            "cooldown": row["cooldown"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -66,8 +71,8 @@ def create_memory(
         """
         INSERT INTO character_memories
         (character_id, keywords, trigger_logic, content, category_id, position,
-         priority, is_active, comment)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+         priority, is_active, comment, selective, constant, sticky, cooldown)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -80,6 +85,10 @@ def create_memory(
             body.priority,
             body.is_active,
             body.comment,
+            body.selective,
+            body.constant,
+            body.sticky,
+            body.cooldown,
         ),
     )
     new_id = cur.fetchone()["id"]
@@ -114,6 +123,10 @@ def update_memory(
             priority = %s,
             is_active = %s,
             comment = %s,
+            selective = %s,
+            constant = %s,
+            sticky = %s,
+            cooldown = %s,
             updated_at = now()
         WHERE id = %s
         """,
@@ -126,6 +139,10 @@ def update_memory(
             body.priority,
             body.is_active,
             body.comment,
+            body.selective,
+            body.constant,
+            body.sticky,
+            body.cooldown,
             memory_id,
         ),
     )

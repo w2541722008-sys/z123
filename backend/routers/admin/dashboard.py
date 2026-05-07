@@ -16,7 +16,7 @@ from services.health_service import check_media_health
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
-from ._shared import _ADMIN_EDITABLE_FIELDS, _normalize_pagination, _transaction, _write_audit_log
+from ._helpers import _ADMIN_EDITABLE_FIELDS, _normalize_pagination, _transaction, _write_audit_log
 
 
 def _parse_audit_detail(raw: Any) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 -- AI男友项目完整数据库（PostgreSQL / Supabase）
--- 用途：云端正式部署时建表
+-- ⚠️ 归档文件：本文件仅供参考，权威 Schema 以 Alembic 迁移（backend/alembic/versions/）为准
 -- 最后更新：2026-05-03（text→timestamptz/jsonb 迁移后）
+-- 注意：本文件可能不包含 004-008 迁移的变更，请以 Alembic 为准
 
 create extension if not exists pgcrypto;
 
@@ -38,6 +39,7 @@ create table if not exists password_reset_codes (
   code       text not null,
   expires_at timestamptz not null,
   used       int  not null default 0,   -- 0=未使用 1=已使用
+  attempt_count int not null default 0, -- 验证尝试次数（003 迁移）
   created_at timestamptz not null default now()
 );
 
@@ -58,8 +60,8 @@ create table if not exists characters (
   tags                jsonb not null default '[]'::jsonb,
   opening_message     text,
   system_prompt       text not null default '',
-  asset_type          text not null default 'hybrid',  -- 'character'|'hybrid'|'scenario'|'world'|'system'
-  card_type           text not null default 'intimate', -- 'intimate'|'scenario'|'world'|'divination'
+  asset_type          text not null default 'hybrid',  -- 'character'|'hybrid'|'scenario'|'system'
+  card_type           text not null default 'intimate', -- 'intimate'|'scenario'
   required_plan       text not null default 'guest',   -- 'guest'|'free'|'vip'|'svip'
   is_visible          int  not null default 1,          -- 1=展示 0=隐藏
   is_public           int  not null default 1,
@@ -294,6 +296,7 @@ create table if not exists story_events (
   title                 text   not null,
   description           text   not null default '',
   trigger_score         int    not null default 0,         -- 触发所需好感度
+  trigger_custom_key    text   not null default '',        -- 逗号分隔的custom_vars键名，需全部存在且非空才触发
   unlocked_memory_ids   text   not null default '',        -- 逗号分隔的记忆ID
   unlocked_greeting_ids text   not null default '',        -- 逗号分隔的开场白ID
   unlocked_storyline_id bigint references character_storylines(id) on delete set null,

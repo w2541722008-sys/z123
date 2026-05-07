@@ -1,8 +1,6 @@
 /**
  * state.js - 全局共享状态
- * 
- * 各模块之间共享的可变状态集中管理。
- * 每个模块通过 AdminState 读写状态，避免到处散落 let 变量。
+ * 重构版：新增世界书/剧情标签相关状态
  */
 const AdminState = (() => {
   // ---- 角色相关 ----
@@ -13,20 +11,20 @@ const AdminState = (() => {
   let _allCharsCache = [];
 
   // ---- 高级配置相关 ----
-  let _currentAdvancedTab = 'memories';
+  let _currentCharTab = 'overview';
   let _advancedData = { memories: [], categories: [], greetings: [], storylines: [], postRules: [], events: [] };
   let _currentGreetingFilter = 'all';
 
+  // ---- 记忆筛选 ----
+  let _memorySearchQuery = '';
+  let _memoryFilterCategory = 'all';
+  let _memoryFilterStatus = 'all';
+  let _memoryFilterMode = 'all';
+
   // ---- 会员管理相关 ----
   let _membershipData = {
-    users: [],
-    orders: [],
-    usersTotal: 0,
-    ordersTotal: 0,
-    usersPage: 1,
-    ordersPage: 1,
-    usersLimit: 20,
-    ordersLimit: 20,
+    users: [], orders: [], usersTotal: 0, ordersTotal: 0,
+    usersPage: 1, ordersPage: 1, usersLimit: 20, ordersLimit: 20,
     selectedUserIds: new Set(),
   };
 
@@ -36,11 +34,16 @@ const AdminState = (() => {
   // ---- 编辑面板 ----
   let _currentRlFields = [];
 
-  // ---- 待删除用户（临时状态） ----
+  // ---- 待删除用户 ----
   let _pendingDeleteUserId = null;
 
+  // ---- 系统标签 ----
+  let _currentSystemTab = null;
+
+  // ---- 自定义确认弹窗 ----
+  let _confirmResolver = null;
+
   return {
-    // 角色相关
     get currentCharId() { return _currentCharId; },
     set currentCharId(v) { _currentCharId = v; },
     get currentCharData() { return _currentCharData; },
@@ -52,27 +55,33 @@ const AdminState = (() => {
     get allCharsCache() { return _allCharsCache; },
     set allCharsCache(v) { _allCharsCache = v; },
 
-    // 高级配置
-    get currentAdvancedTab() { return _currentAdvancedTab; },
-    set currentAdvancedTab(v) { _currentAdvancedTab = v; },
+    get currentCharTab() { return _currentCharTab; },
+    set currentCharTab(v) { _currentCharTab = v; },
     get advancedData() { return _advancedData; },
     set advancedData(v) { _advancedData = v; },
     get currentGreetingFilter() { return _currentGreetingFilter; },
     set currentGreetingFilter(v) { _currentGreetingFilter = v; },
 
-    // 会员管理
-    get membershipData() { return _membershipData; },
+    get memorySearchQuery() { return _memorySearchQuery; },
+    set memorySearchQuery(v) { _memorySearchQuery = v; },
+    get memoryFilterCategory() { return _memoryFilterCategory; },
+    set memoryFilterCategory(v) { _memoryFilterCategory = v; },
+    get memoryFilterStatus() { return _memoryFilterStatus; },
+    set memoryFilterStatus(v) { _memoryFilterStatus = v; },
+    get memoryFilterMode() { return _memoryFilterMode; },
+    set memoryFilterMode(v) { _memoryFilterMode = v; },
 
-    // 操作日志
+    get membershipData() { return _membershipData; },
     get auditPage() { return _auditPage; },
     set auditPage(v) { _auditPage = v; },
-
-    // 编辑面板
     get currentRlFields() { return _currentRlFields; },
     set currentRlFields(v) { _currentRlFields = v; },
-
-    // 临时删除状态
     get pendingDeleteUserId() { return _pendingDeleteUserId; },
     set pendingDeleteUserId(v) { _pendingDeleteUserId = v; },
+
+    get currentSystemTab() { return _currentSystemTab; },
+    set currentSystemTab(v) { _currentSystemTab = v; },
+    get confirmResolver() { return _confirmResolver; },
+    set confirmResolver(v) { _confirmResolver = v; },
   };
 })();

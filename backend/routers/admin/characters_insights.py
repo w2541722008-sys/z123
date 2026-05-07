@@ -11,7 +11,7 @@ from core.schemas import KeywordTestPayload
 from services.prompt_assembler import build_message_preview
 from utils.json_utils import parse_json_object
 
-from .characters_common import _split_csv_ids
+from ._helpers import _split_csv_ids
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
@@ -156,7 +156,7 @@ def admin_character_config_summary(character_id: str, conn: ConnType = Depends(g
         bool(str(runtime_layers.get("examples") or "").strip()),
         active_counts["memory_count"] > 0,
         active_counts["greeting_count"] > 0,
-        (row["card_type"] == "world") or greeting_phase_coverage >= 2,
+        greeting_phase_coverage >= 2,
         (not row["affection_enabled"]) or _affection_rules_use_default(row["affection_rules_json"]) or bool(parse_json_object(row["affection_rules_json"], fallback={})),
         counts["storyline_count"] == 0 or bool(default_storyline_id_row),
         counts["story_event_count"] == 0 or empty_unlock_event_count == 0,

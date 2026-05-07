@@ -20,7 +20,7 @@ class Mood(str, Enum):
     SURPRISED = "surprised"  # 惊讶
 
 
-# 心情中文标签映射（唯一权威定义）
+# 心情中文标签映射（唯一权威定义）— 对话陪伴
 MOOD_LABELS: dict[str, str] = {
     Mood.NEUTRAL.value: "平静",
     Mood.HAPPY.value: "开心",
@@ -32,3 +32,17 @@ MOOD_LABELS: dict[str, str] = {
     Mood.SHY.value: "害羞",
     Mood.SURPRISED.value: "惊讶",
 }
+
+# 心情中文标签映射 — 剧情沙盒（同一枚举值，不同展示语义）
+SCENARIO_MOOD_LABELS: dict[str, str] = {
+    Mood.NEUTRAL.value: "平静",
+    Mood.HAPPY.value: "振奋",
+    Mood.WARM.value: "安宁",
+    Mood.MELTING.value: "沉浸",
+    Mood.COLD.value: "萧瑟",
+    Mood.ANGRY.value: "敌意",
+    Mood.SAD.value: "低落",
+    Mood.SHY.value: "警惕",
+    Mood.SURPRISED.value: "震惊",
+}
+

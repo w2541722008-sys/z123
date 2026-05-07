@@ -14,7 +14,8 @@
        - 不同事件冷却时间不同（如 gift 24小时，flirt 20分钟）
 
     2. Daily Cap（日上限机制）：
-       - 每日好感度涨幅上限 15 点
+       - 每日好感度涨幅上限默认 15 点
+       - 可通过角色卡 affection_rules_json 的 daily_cap 字段自定义（0=不限制）
        - 达到上限后，正向加分归零
        - 负向扣分不受影响（防止恶意刷分）
 
@@ -33,176 +34,42 @@
 
 from __future__ import annotations
 
-# 标准库导入
 import json
 import logging
 from datetime import date, datetime, timezone
 from typing import Any
 
-# 本地模块导入
 from core.config import utc_now
 from constants import Mood, StoryPhase
 from core.database import ConnType
 from services.cache_service import cache_get, cache_set
 from services.story_event_service import check_and_trigger_story_events
 from utils.json_utils import parse_json_object
+from services.character_affection import (
+    _AFFECTION_BASE_RULES,
+    _AFFECTION_COOLDOWN_SECONDS,
+    _AFFECTION_DIMINISHING_RETURNS,
+    _DAILY_AFFECTION_CAP_DEFAULT,
+    _PHASE_THRESHOLDS,
+    _PHASE_GAIN_MULTIPLIER,
+    _AFFECTION_DELTA_MAX,
+    _EVENT_NAME_MIGRATION,
+    _get_affection_rules,
+    _get_daily_cap,
+    is_affection_enabled,
+    _calculate_affection_change,
+    _update_anti_abuse_counters,
+    _auto_advance_story_phase,
+)
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# 全局配置常量
-# ============================================================
-
-# 全局底座事件规则（角色卡可覆盖）
-# 正向事件：增加好感度，负向事件：减少好感度
-_AFFECTION_BASE_RULES: dict[str, int] = {
-    # === 正向事件 ===
-    "deep_conversation": 4,   # 深度交流
-    "light_chat": 1,          # 闲聊
-    "compliment": 2,          # 赞美
-    "gift": 6,                # 送礼物
-    "help": 3,                # 帮助
-    "shared_secret": 5,       # 分享秘密
-    "first_meeting": 3,       # 初次见面
-    "comfort": 3,             # 安慰
-    "flirt": 2,               # 调情
-    "date": 5,                # 约会
-    "first_hug": 7,           # 第一次拥抱
-    "kiss": 8,                # 亲吻
-    "confession": 10,         # 表白
-    # === 负向事件 ===
-    "argument": -5,           # 争吵
-    "rude": -3,               # 粗鲁
-    "ignore": -2,             # 忽视
-    "lie": -4,                # 撒谎
-    "betray": -8,             # 背叛
-    "insult": -6,             # 侮辱
-}
-
-# 事件冷却时间（秒）
-# 防止短时间内重复刷同一事件
-_AFFECTION_COOLDOWN_SECONDS: dict[str, int] = {
-    "deep_conversation": 3600,     # 1小时
-    "light_chat": 300,             # 5分钟
-    "compliment": 1800,            # 30分钟
-    "gift": 86400,                 # 24小时
-    "help": 3600,                  # 1小时
-    "shared_secret": 7200,         # 2小时
-    "first_meeting": 604800,       # 7天（一次性事件）
-    "comfort": 1800,               # 30分钟
-    "flirt": 1200,                 # 20分钟
-    "date": 43200,                 # 12小时
-    "first_hug": 604800,           # 7天（一次性事件）
-    "kiss": 604800,                # 7天（一次性事件）
-    "confession": 604800,          # 7天（一次性事件）
-}
-
-# 边际递减系数
-# 第1次 100%，第2次 60%，第3次 30%，第4次+ 0%
-_AFFECTION_DIMINISHING_RETURNS: list[float] = [1.0, 0.6, 0.3, 0.0]
-
-# 单日好感度上限
-_DAILY_AFFECTION_CAP = 15
-
-# 剧情阶段阈值（好感度达到阈值自动推进）
-_PHASE_THRESHOLDS: dict[str, int] = {
-    "acquaintance": 20,   # 熟人
-    "friend": 50,         # 朋友
-    "lover": 80,          # 恋人
-}
-
-# 阶段涨幅系数（越后期越难涨）
-# 陌生人 100%，熟人 80%，朋友 60%，恋人 40%
-_PHASE_GAIN_MULTIPLIER: dict[str, float] = {
-    "stranger": 1.0,
-    "acquaintance": 0.8,
-    "friend": 0.6,
-    "lover": 0.4,
-}
-
-# 有效阶段列表（从 StoryPhase 枚举派生）
 _VALID_STORY_PHASES = tuple(phase.value for phase in StoryPhase)
-
-# 有效心情列表（从 Mood 枚举派生）
 _VALID_MOODS = tuple(mood.value for mood in Mood)
 
-# 单次好感度变化上限（防止极端情况）
-_AFFECTION_DELTA_MAX = 10
 
-
-# ============================================================
-# 工具函数
-# ============================================================
 def _get_today_date() -> str:
-    """返回 UTC 日期字符串 YYYY-MM-DD（与数据库字段保持一致）。"""
     return datetime.now(timezone.utc).date().isoformat()
-
-
-def _get_affection_rules(conn: ConnType, character_id: str) -> dict[str, int]:
-    """读取角色卡自定义规则，与全局底座合并（角色卡覆盖同名 key）。结果缓存 300s。"""
-    cache_key = f"affection_rules:{character_id}"
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return dict(cached)
-
-    row = conn.execute(
-        "SELECT affection_rules_json, affection_enabled FROM characters WHERE id = %s",
-        (character_id,),
-    ).fetchone()
-    if not row:
-        result = dict(_AFFECTION_BASE_RULES)
-        cache_set(cache_key, result, ttl=300)
-        return result
-
-    merged = dict(_AFFECTION_BASE_RULES)
-    card_rules = parse_json_object(row["affection_rules_json"] or "{}", fallback={})
-    
-    for k, v in card_rules.items():
-        if k == "enabled":
-            continue
-        try:
-            raw_val = int(v)
-        except (ValueError, TypeError):
-            continue
-
-        if k in _AFFECTION_BASE_RULES:
-            base_original = _AFFECTION_BASE_RULES[k]
-            if base_original >= 0:
-                max_allowed = min(base_original * 2, 15)
-                raw_val = max(0, min(raw_val, max_allowed))
-            else:
-                min_allowed = max(base_original * 2, -15)
-                raw_val = min(0, max(raw_val, min_allowed))
-        else:
-            raw_val = max(-10, min(raw_val, 10))
-
-        merged[k] = raw_val
-
-    cache_set(cache_key, merged, ttl=300)
-    return merged
-
-
-def is_affection_enabled(conn: ConnType, character_id: str) -> bool:
-    """判断该角色卡是否启用好感度系统。"""
-    row = conn.execute(
-        "SELECT affection_enabled, affection_rules_json, card_type FROM characters WHERE id = %s",
-        (character_id,),
-    ).fetchone()
-    if not row:
-        return True
-
-    card_type = (row["card_type"] or "intimate").strip()
-    if card_type == "world":
-        return False
-
-    if int(row["affection_enabled"] or 1) == 0:
-        return False
-
-    card_rules = parse_json_object(row["affection_rules_json"] or "{}", fallback={})
-    if "enabled" in card_rules:
-        return bool(card_rules["enabled"])
-
-    return True
 
 
 # ============================================================
@@ -330,171 +197,6 @@ def upsert_character_state(
 
 
 # ============================================================
-# 好感度计算（三防机制）
-# ============================================================
-def _calculate_affection_change(
-    event: str,
-    rules: dict[str, int],
-    current_state: dict[str, Any],
-) -> tuple[int, str]:
-    """
-    计算单个事件对好感度的实际影响，应用三防机制。
-
-    三防机制详解：
-        1. 冷却检测：同类事件在冷却期内触发，加分归零
-        2. 日上限检测：今日涨幅已达上限，正向加分归零
-        3. 边际递减：同类事件多次触发，按衰减系数折减
-
-    负向事件特殊处理：
-        - 负向事件不受三防限制（防止恶意刷分）
-        - 但受阶段系数影响（关系越好，负向影响越大）
-        - 陌生人 80%，熟人 100%，朋友 120%，恋人 150%
-
-    Args:
-        event: 事件名称
-        rules: 好感度规则字典
-        current_state: 当前状态字典
-
-    Returns:
-        tuple: (实际变化量, 计算原因说明)
-
-    计算步骤：
-        1. 获取基础变化量
-        2. 如果是负向事件，应用阶段系数，返回结果
-        3. 如果是正向事件，依次应用三防机制
-        4. 计算最终变化量
-    """
-    # 步骤 1：获取基础变化量
-    base_change = rules.get(event, 0)
-    if base_change == 0:
-        return 0, f"event={event} not in rules or base_change=0"
-
-    # 步骤 2：负向事件处理（不受三防限制）
-    if base_change < 0:
-        phase = current_state.get("story_phase", "stranger")
-        # 负向事件阶段系数：关系越好，伤害越大
-        negative_multiplier = {
-            "stranger": 0.8,
-            "acquaintance": 1.0,
-            "friend": 1.2,
-            "lover": 1.5,
-        }.get(phase, 1.0)
-        actual = int(base_change * negative_multiplier)
-        actual = max(actual, -_AFFECTION_DELTA_MAX)  # 限制单次最大跌幅
-        return actual, f"negative event, phase={phase}, multiplier={negative_multiplier}"
-
-    # 步骤 3：正向事件 - 三防机制
-
-    # ① 冷却检测
-    cooldown_secs = _AFFECTION_COOLDOWN_SECONDS.get(event, 600)
-    last_ts_map = current_state.get("_last_event_timestamps", {})
-    last_ts = last_ts_map.get(event)
-    if last_ts:
-        try:
-            last_dt = datetime.fromisoformat(last_ts)
-            elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
-            if elapsed < cooldown_secs:
-                remaining = int(cooldown_secs - elapsed)
-                return 0, f"cooldown: event={event}, remaining={remaining}s"
-        except (ValueError, TypeError):
-            pass  # 时间格式错误，忽略冷却检测
-
-    # ② 今日上限检测
-    daily_gained = current_state.get("_daily_affection_gained", 0)
-    if daily_gained >= _DAILY_AFFECTION_CAP:
-        return 0, f"daily_cap: already gained {daily_gained}/{_DAILY_AFFECTION_CAP} today"
-
-    # ③ 边际递减
-    daily_counts = current_state.get("_daily_event_counts", {})
-    trigger_count = int(daily_counts.get(event, 0))
-    if trigger_count < len(_AFFECTION_DIMINISHING_RETURNS):
-        diminish_rate = _AFFECTION_DIMINISHING_RETURNS[trigger_count]
-    else:
-        diminish_rate = 0.0
-
-    # ④ 阶段系数
-    phase = current_state.get("story_phase", "stranger")
-    phase_multiplier = _PHASE_GAIN_MULTIPLIER.get(phase, 1.0)
-
-    # ⑤ 计算最终变化量
-    raw = base_change * diminish_rate * phase_multiplier
-    actual = max(0, min(int(round(raw)), base_change))
-
-    # ⑥ 日上限兜底（确保不超过今日剩余额度）
-    remaining_cap = max(0, _DAILY_AFFECTION_CAP - daily_gained)
-    actual = min(actual, remaining_cap)
-
-    reason = (
-        f"event={event}, base={base_change}, diminish={diminish_rate:.1f}, "
-        f"phase={phase}×{phase_multiplier}, actual={actual}"
-    )
-    return actual, reason
-
-
-def _update_anti_abuse_counters(
-    current_state: dict[str, Any],
-    event: str,
-    actual_change: int,
-) -> dict[str, Any]:
-    """更新三防计数器。"""
-    last_ts_map = dict(current_state.get("_last_event_timestamps", {}))
-    last_ts_map[event] = utc_now().isoformat()
-
-    daily_counts = dict(current_state.get("_daily_event_counts", {}))
-    daily_gained = current_state.get("_daily_affection_gained", 0)
-
-    if actual_change > 0:
-        daily_counts[event] = int(daily_counts.get(event, 0)) + 1
-        daily_gained = daily_gained + actual_change
-
-    updated = dict(current_state)
-    updated["_last_event_timestamps"] = last_ts_map
-    updated["_daily_event_counts"] = daily_counts
-    updated["_daily_affection_gained"] = daily_gained
-    return updated
-
-
-def _auto_advance_story_phase(affection: int, current_phase: str) -> str:
-    """
-    根据好感度阈值自动推进剧情阶段（单向，只升不降）。
-
-    阶段推进规则：
-        - stranger（陌生人）→ acquaintance（熟人）：好感度 >= 20
-        - acquaintance（熟人）→ friend（朋友）：好感度 >= 50
-        - friend（朋友）→ lover（恋人）：好感度 >= 80
-
-    重要特性：
-        - 单向推进：阶段只升不降，即使好感度下降也不会回退
-        - 自动触发：好感度达到阈值时自动推进，无需手动操作
-
-    Args:
-        affection: 当前好感度值（0-100）
-        current_phase: 当前阶段
-
-    Returns:
-        新的阶段名称
-
-    示例：
-        >>> _auto_advance_story_phase(30, "stranger")
-        'acquaintance'
-        >>> _auto_advance_story_phase(45, "acquaintance")
-        'acquaintance'  # 未达到 50，保持原阶段
-    """
-    phases_order = list(_VALID_STORY_PHASES)
-    current_idx = phases_order.index(current_phase) if current_phase in phases_order else 0
-
-    # 找出当前好感度能达到的最高阶段
-    best_idx = current_idx
-    for phase_name, threshold in _PHASE_THRESHOLDS.items():
-        if affection >= threshold:
-            candidate_idx = phases_order.index(phase_name) if phase_name in phases_order else 0
-            if candidate_idx > best_idx:
-                best_idx = candidate_idx
-
-    return phases_order[best_idx]
-
-
-# ============================================================
 # 状态增量应用
 # ============================================================
 
@@ -505,6 +207,7 @@ _STATE_UPDATE_ALLOWED_FIELDS = {
     "event",          # 触发的好感度事件名称
     "story_phase",    # 剧情阶段
     "mood",           # 心情状态
+    "moment",         # 本轮共同时刻（情感锚点），简短文字描述
     "custom",         # 自定义变量字典
 }
 
@@ -515,7 +218,13 @@ _CUSTOM_VARS_BLACKLIST = {
     "_daily_affection_gained",  # 日好感度获得（内部使用）
     "_last_event_timestamps",  # 事件时间戳（内部使用）
     "_daily_reset_date",  # 日重置日期（内部使用）
+    "_shared_moments",  # 情感锚点列表（系统管理，不允许AI直接修改）
+    "_pending_events",  # 待处理剧情事件（系统管理，注入后自动清空）
+    "_silent_rounds",  # 沉默轮数计数（系统管理，AI上报后自动归零）
 }
+
+# 情感锚点 FIFO 上限
+_SHARED_MOMENTS_MAX = 15
 
 
 def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
@@ -565,6 +274,11 @@ def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
             # 心情：必须是有效值
             if isinstance(value, str) and value.strip().lower() in _VALID_MOODS:
                 sanitized[key] = value.strip().lower()
+        
+        elif key == "moment":
+            # 情感锚点：简短文字，限制长度
+            if isinstance(value, str) and value.strip():
+                sanitized[key] = value.strip()[:30]
         
         elif key == "custom":
             # 自定义变量：必须是字典，且过滤黑名单键
@@ -626,7 +340,8 @@ def apply_state_delta(
         if "event" in delta:
             event_name = str(delta["event"]).strip().lower()
             rules = _get_affection_rules(conn, character_id)
-            affection_change, _ = _calculate_affection_change(event_name, rules, current)
+            daily_cap = _get_daily_cap(conn, character_id)
+            affection_change, _ = _calculate_affection_change(event_name, rules, current, daily_cap=daily_cap)
             current = _update_anti_abuse_counters(current, event_name, affection_change)
         elif "affection" in delta:
             raw = str(delta["affection"]).strip()
@@ -650,13 +365,33 @@ def apply_state_delta(
         if val in _VALID_STORY_PHASES:
             story_phase = val
     else:
-        story_phase = _auto_advance_story_phase(affection, story_phase)
+        # 检查是否允许阶段回退（从角色卡的 affection_rules_json 中读取）
+        allow_regression = False
+        try:
+            rules_row = conn.execute(
+                "SELECT affection_rules_json FROM characters WHERE id = %s",
+                (character_id,),
+            ).fetchone()
+            if rules_row and rules_row["affection_rules_json"]:
+                rules_json = parse_json_object(rules_row["affection_rules_json"], fallback={})
+                allow_regression = bool(rules_json.get("allow_regression", False))
+        except Exception:
+            pass
+        story_phase = _auto_advance_story_phase(affection, story_phase, allow_regression=allow_regression)
 
     # 心情
     if "mood" in delta:
         val = str(delta["mood"]).strip().lower()
         if val in _VALID_MOODS:
             mood = val
+
+    # 情感锚点：moment → 追加到 custom_vars._shared_moments（FIFO）
+    if "moment" in delta and delta["moment"]:
+        moments = list(custom_vars.get("_shared_moments") or [])
+        moments.append(str(delta["moment"]))
+        if len(moments) > _SHARED_MOMENTS_MAX:
+            moments = moments[-_SHARED_MOMENTS_MAX:]
+        custom_vars["_shared_moments"] = moments
 
     # 自定义变量
     if "custom" in delta and isinstance(delta["custom"], dict):
@@ -676,10 +411,87 @@ def apply_state_delta(
             else:
                 custom_vars[k] = v
 
+    # 沉默轮数检测：AI 有上报事件则归零，无上报则 +1
+    has_state_update = "event" in delta or "affection" in delta
+    silent_rounds = int(custom_vars.get("_silent_rounds") or 0)
+    if has_state_update:
+        custom_vars["_silent_rounds"] = 0
+    else:
+        custom_vars["_silent_rounds"] = silent_rounds + 1
+
+    # 剧情线 AI 驱动切换：当 AI 通过 custom.current_storyline_id 切换剧情线时，
+    # 同步更新 user_story_progress 表，确保后置规则等逻辑感知到切换
+    new_storyline_id = None
+    if "custom" in delta and isinstance(delta["custom"], dict):
+        raw_sid = delta["custom"].get("current_storyline_id")
+        if raw_sid is not None:
+            try:
+                new_storyline_id = int(raw_sid)
+            except (ValueError, TypeError):
+                pass
+    if new_storyline_id is not None:
+        try:
+            # 校验剧情线ID是否属于当前角色且已激活，防止AI幻觉写入无效ID
+            valid_row = conn.execute(
+                "SELECT id FROM character_storylines WHERE id = %s AND character_id = %s AND is_active = TRUE",
+                (new_storyline_id, character_id),
+            ).fetchone()
+            if valid_row:
+                conn.execute(
+                    """
+                    INSERT INTO user_story_progress (user_id, character_id, triggered_event_ids, current_storyline_id)
+                    VALUES (%s, %s, '', %s)
+                    ON CONFLICT(user_id, character_id) DO UPDATE SET
+                        current_storyline_id = excluded.current_storyline_id,
+                        last_updated = now()
+                    """,
+                    (user_id, character_id, new_storyline_id),
+                )
+            else:
+                logger.warning("剧情线ID无效或不属于当前角色: storyline_id=%s, character_id=%s", new_storyline_id, character_id)
+        except Exception as e:
+            logger.warning("剧情线切换失败: %s", e)
+
     # 检查并触发剧情事件（在写库之前，基于新的好感度）
     triggered_events = check_and_trigger_story_events(
-        conn, user_id, character_id, affection, story_phase, commit=False
+        conn, user_id, character_id, affection, story_phase,
+        custom_vars=custom_vars, commit=False,
     )
+
+    # 检测剧情线切换并通知用户
+    old_storyline_id = current.get("storyline_id")
+    if new_storyline_id and new_storyline_id != old_storyline_id:
+        try:
+            sl_row = conn.execute(
+                "SELECT name FROM character_storylines WHERE id = %s",
+                (new_storyline_id,)
+            ).fetchone()
+            if sl_row and sl_row["name"]:
+                if not triggered_events:
+                    triggered_events = []
+                triggered_events.append({
+                    "type": "storyline_changed",
+                    "title": f"进入【{sl_row['name']}】",
+                    "description": ""
+                })
+                # 标记需要刷新开场白
+                custom_vars["_force_refresh_greeting"] = True
+        except Exception:
+            pass
+
+    # 将触发的剧情事件内容存入 custom_vars._pending_events（下一轮注入到 prompt）
+    if triggered_events:
+        pending = [
+            {"title": e.get("title", ""), "event_content": e.get("event_content", "")}
+            for e in triggered_events
+            if e.get("event_content")
+        ]
+        if pending:
+            custom_vars["_pending_events"] = pending
+    else:
+        # AI 已成功回复，清空上一轮已消费的待处理事件
+        # （如果本轮触发了新事件，上面的 pending 已设置；否则清除旧事件）
+        custom_vars.pop("_pending_events", None)
 
     # 写库
     upsert_character_state(

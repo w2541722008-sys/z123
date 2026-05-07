@@ -33,12 +33,10 @@
      document.getElementById('detail-sign').textContent = signText;
 
      // ── 卡类型徽章 ──────────────────────────────────────────────────
-     const TYPE_META = {
-       intimate:   { icon: '💞', label: '对话陪伴', btnText: '开始聊天 →' },
-       scenario:   { icon: '🎭', label: '剧情沙盒', btnText: '进入剧情 →' },
-       world:      { icon: '🌐', label: '世界探索', btnText: '进入世界 →' },
-       divination: { icon: '🔮', label: '占卜形象', btnText: '开始占卜 →' },
-     };
+    const TYPE_META = {
+      intimate:   { icon: '💞', label: '对话陪伴', btnText: '开始聊天 →' },
+      scenario:   { icon: '🎭', label: '剧情沙盒', btnText: '进入剧情 →' },
+    };
      const cardType = char.card_type || 'intimate';
      const typeMeta = TYPE_META[cardType] || TYPE_META.intimate;
 

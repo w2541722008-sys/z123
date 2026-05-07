@@ -10,10 +10,19 @@ function openCreateCharModal() {
   document.getElementById('new-char-opening').value = '';
   document.getElementById('new-char-tags').value = '';
   document.getElementById('new-char-type').value = 'intimate';
+  document.getElementById('new-char-scenario-type').value = 'adventure';
   document.getElementById('new-char-required-plan').value = 'guest';
   document.getElementById('new-char-priority').value = '10';
   document.getElementById('new-char-visible').checked = true;
+  document.getElementById('scenario-type-group').style.display = 'none';
   document.getElementById('create-char-modal').style.display = 'flex';
+
+  // 监听卡类型变化
+  const typeSelect = document.getElementById('new-char-type');
+  typeSelect.onchange = function() {
+    const scenarioGroup = document.getElementById('scenario-type-group');
+    scenarioGroup.style.display = this.value === 'scenario' ? '' : 'none';
+  };
 }
 
 function closeCreateCharModal() {
@@ -55,6 +64,13 @@ async function createCharacter() {
 
   const tags = tagsStr ? JSON.stringify(tagsStr.split(',').map(t => t.trim()).filter(t => t)) : '[]';
 
+  // 构建 affection_rules_json（包含 scenario_type）
+  const affectionRules = {};
+  if (cardType === 'scenario') {
+    const scenarioType = document.getElementById('new-char-scenario-type').value;
+    affectionRules.scenario_type = scenarioType;
+  }
+
   const data = {
     id,
     name,
@@ -70,6 +86,7 @@ async function createCharacter() {
     required_plan: requiredPlan,
     home_priority: priority,
     is_visible: isVisible,
+    affection_rules_json: JSON.stringify(affectionRules),
   };
 
   try {
@@ -106,6 +123,11 @@ async function saveChar() {
         if (field === 'affection_rules_json') {
           syncAffectionRulesEditor();
           updates[field] = validateJsonString(el.value, '好感度规则');
+          continue;
+        }
+        if (field === 'life_profile_json') {
+          syncLifeProfileEditor();
+          updates[field] = validateJsonString(el.value, '人生档案');
           continue;
         }
         let val = el.value;
@@ -158,7 +180,8 @@ async function deleteCurrentCharacter() {
   const confirmMsg =
     `确定要删除角色「${characterName}」吗？\n\n` +
     `会同时删除该角色的记忆、开场白、剧情线、剧情事件以及关联聊天记录，此操作不可撤销。`;
-  if (!confirm(confirmMsg)) return;
+  const confirmed = await showConfirm(confirmMsg, '删除角色');
+  if (!confirmed) return;
 
   try {
     await AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}`, { method: 'DELETE' });

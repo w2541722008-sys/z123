@@ -40,6 +40,20 @@ PLAN_MODEL_PROFILES = {
     SVIP_PLAN: "svip",
 }
 
+# 各档位每日 token 预算（可通过环境变量覆盖）
+import os as _os
+
+def _int_env(key: str, default: int) -> int:
+    try:
+        return int(_os.environ.get(key, default))
+    except (ValueError, TypeError):
+        return default
+
+FREE_DAILY_TOKEN_LIMIT  = _int_env("FREE_DAILY_TOKEN_LIMIT",  180000)
+GUEST_DAILY_TOKEN_LIMIT = _int_env("GUEST_DAILY_TOKEN_LIMIT",  40000)
+VIP_DAILY_TOKEN_LIMIT   = _int_env("VIP_DAILY_TOKEN_LIMIT",   450000)
+SVIP_DAILY_TOKEN_LIMIT  = _int_env("SVIP_DAILY_TOKEN_LIMIT",  900000)
+
 
 # ── 纯数据转换函数 ────────────────────────────────────────────
 

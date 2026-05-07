@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from services.stream_filter import normalize_reply_text, parse_state_update_tag, sanitize_stream_chunk
+from utils.stream_filter import normalize_reply_text, parse_state_update_tag, sanitize_stream_chunk
 
 
 # ── normalize_reply_text ─────────────────────────────

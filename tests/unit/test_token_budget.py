@@ -73,9 +73,9 @@ class TestBudgetAllocation:
         b = TokenBudget()
         assert b.single_layer_max_chars() == int(b.system_max_chars() * 0.30)
 
-    def test_primary_system_max_is_15_pct_of_system(self):
+    def test_primary_system_max_is_25_pct_of_system(self):
         b = TokenBudget()
-        assert b.primary_system_max_chars() == int(b.system_max_chars() * 0.15)
+        assert b.primary_system_max_chars() == int(b.system_max_chars() * 0.25)
 
     def test_wi_max_chars_is_25_pct(self):
         b = TokenBudget()

@@ -7,9 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.auth import CurrentUser, get_admin_user, get_current_user
 from core.database import ConnType, get_db_dep
 from core.schemas import GreetingPayload, StorylinePayload
+from utils.json_utils import to_json_string
 
-from ._shared import _write_audit_log
-from .characters_common import _assert_storyline_owned
+from ._helpers import _write_audit_log, _assert_storyline_owned
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
@@ -69,8 +69,8 @@ def create_greeting(
         """
         INSERT INTO character_greetings
         (character_id, story_phase, mood, content, storyline_id,
-         priority, is_active)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+         priority, is_active, comment)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -81,6 +81,7 @@ def create_greeting(
             body.storyline_id,
             body.priority,
             body.is_active,
+            body.comment,
         ),
     )
     new_id = cur.fetchone()["id"]
@@ -113,6 +114,7 @@ def update_greeting(
             storyline_id = %s,
             priority = %s,
             is_active = %s,
+            comment = %s,
             updated_at = now()
         WHERE id = %s
         """,
@@ -123,6 +125,7 @@ def update_greeting(
             body.storyline_id,
             body.priority,
             body.is_active,
+            body.comment,
             greeting_id,
         ),
     )
@@ -163,7 +166,8 @@ def list_storylines(character_id: str, conn: ConnType = Depends(get_db_dep)) -> 
 
     rows = conn.execute(
         """
-        SELECT id, name, description, unlock_score, is_default,
+        SELECT id, storyline_id, title, name, description, unlock_score,
+               unlock_condition, stages, is_default,
                is_active, sort_order, created_at, updated_at
         FROM character_storylines
         WHERE character_id = %s
@@ -175,9 +179,13 @@ def list_storylines(character_id: str, conn: ConnType = Depends(get_db_dep)) -> 
     return [
         {
             "id": row["id"],
-            "name": row["name"],
+            "storyline_id": row["storyline_id"] or "",
+            "title": row["title"] or "",
+            "name": row["name"] or "",
             "description": row["description"] or "",
             "unlock_score": row["unlock_score"],
+            "unlock_condition": row["unlock_condition"] or "",
+            "stages": row["stages"] if isinstance(row.get("stages"), list) else [],
             "is_default": bool(row["is_default"]),
             "is_active": bool(row["is_active"]),
             "sort_order": row["sort_order"],
@@ -202,23 +210,28 @@ def create_storyline(
 
     if body.is_default:
         conn.execute(
-            "UPDATE character_storylines SET is_default = FALSE WHERE character_id = %s",
+            "UPDATE character_storylines SET is_default = 0 WHERE character_id = %s",
             (character_id,),
         )
 
     cur = conn.execute(
         """
         INSERT INTO character_storylines
-        (character_id, name, description,
-         unlock_score, is_default, is_active, sort_order)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        (character_id, storyline_id, title, name, description,
+         unlock_score, unlock_condition, stages,
+         is_default, is_active, sort_order)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
             character_id,
+            body.storyline_id,
+            body.title,
             body.name,
             body.description,
             body.unlock_score,
+            body.unlock_condition,
+            to_json_string(body.stages),
             body.is_default,
             body.is_active,
             body.sort_order,
@@ -245,7 +258,7 @@ def update_storyline(
 
     if body.is_default:
         conn.execute(
-            """UPDATE character_storylines SET is_default = FALSE
+            """UPDATE character_storylines SET is_default = 0
                WHERE character_id = %s AND id != %s""",
             (character_id, storyline_id),
         )
@@ -253,9 +266,13 @@ def update_storyline(
     conn.execute(
         """
         UPDATE character_storylines SET
+            storyline_id = %s,
+            title = %s,
             name = %s,
             description = %s,
             unlock_score = %s,
+            unlock_condition = %s,
+            stages = %s,
             is_default = %s,
             is_active = %s,
             sort_order = %s,
@@ -263,9 +280,13 @@ def update_storyline(
         WHERE id = %s
         """,
         (
+            body.storyline_id,
+            body.title,
             body.name,
             body.description,
             body.unlock_score,
+            body.unlock_condition,
+            to_json_string(body.stages),
             body.is_default,
             body.is_active,
             body.sort_order,

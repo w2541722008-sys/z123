@@ -12,7 +12,7 @@ from repositories import character_repository as char_repo
 from services.cache_service import cache_delete, invalidate_character, invalidate_character_affection_rules, invalidate_character_list_all
 from utils.json_utils import parse_json_list, parse_json_object, to_json_string
 
-from ._shared import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
+from ._helpers import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
 
 router = APIRouter(tags=["admin"])
 
@@ -83,7 +83,7 @@ def admin_create_character(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="tags格式错误，必须是有效的JSON")
 
-        valid_card_types = ["intimate", "friend", "mentor", "entertainment"]
+        valid_card_types = ["intimate", "scenario"]
         valid_plans = ["guest", "free", "vip", "svip"]
         if card_type not in valid_card_types:
             raise HTTPException(status_code=400, detail=f"card_type必须是以下之一: {', '.join(valid_card_types)}")
@@ -99,9 +99,9 @@ def admin_create_character(
                 char_id, name, abbr, subtitle, avatar_url, cover_url, description,
                 system_prompt, opening_message, tags,
                 card_type, required_plan, home_priority, is_visible, home_priority,  # sort_order=home_priority
-                "温柔、体贴、会关心人", "character", "manual", "",
-                "json", "", "{}",
-                "[]", 0, 1, "{}"
+                "[]", "character", "manual", "",
+                "json", None, "{}",
+                "[]", 0, 0, "{}"
             ),
         )
 
@@ -167,6 +167,7 @@ def admin_get_character(character_id: str, conn: ConnType = Depends(get_db_dep))
         "mock_reply_style": to_json_string(row["mock_reply_style"], default_on_error='[]'),
         "import_diagnostics": to_json_string(row["import_diagnostics"], default_on_error='[]'),
         "runtime_layers": runtime_layers_str,
+        "phase_behaviors_json": to_json_string(row.get("phase_behaviors_json"), default_on_error='{}'),
     }
 
 

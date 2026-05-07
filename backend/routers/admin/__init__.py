@@ -10,8 +10,8 @@
 
 from fastapi import APIRouter
 
-from ._shared import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
-from .characters import router as characters_router
+from ._helpers import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
+from ._router import router as characters_router
 from .users import router as users_router
 from .orders import router as orders_router
 from .dashboard import router as dashboard_router

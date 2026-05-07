@@ -1,8 +1,7 @@
 function renderCharacterOverview(summary) {
-  const container = document.getElementById('char-overview');
+  const container = document.getElementById('tab-overview');
   if (!summary) {
-    container.style.display = 'none';
-    container.innerHTML = '';
+    container.innerHTML = '<div class="empty-state"><div class="icon">👈</div><div>从左侧选择一个角色开始</div></div>';
     return;
   }
 
@@ -71,7 +70,6 @@ function renderCharacterOverview(summary) {
       </div>
     </div>
   `;
-  container.style.display = '';
 }
 
 async function loadCharacterSummary() {
@@ -82,13 +80,12 @@ async function loadCharacterSummary() {
     renderCharacterOverview(summary);
   } catch (e) {
     AdminState.currentCharSummary = null;
-    document.getElementById('char-overview').innerHTML = `
+    document.getElementById('tab-overview').innerHTML = `
       <div class="health-card" style="grid-column:1/-1">
         <div class="health-title">🩺 配置健康检查</div>
         <div class="health-item warn">加载角色总览失败：${escHtml(e.message)}</div>
       </div>
     `;
-    document.getElementById('char-overview').style.display = '';
   }
 }
 
@@ -96,6 +93,12 @@ function parseAffectionRules(raw) {
   const text = String(raw || '').trim();
   if (!text) return null;
   try { return JSON.parse(text); } catch (e) { return null; }
+}
+
+function getMetricName() {
+  const ct = AdminState.currentCharData?.card_type || 'intimate';
+  const map = { intimate: '好感度', scenario: '沉浸度' };
+  return map[ct] || '好感度';
 }
 
 function hasUsableAffectionRules(raw) {
@@ -124,7 +127,7 @@ function buildExtraWarnings(summary) {
   const hasAffectionRules = hasUsableAffectionRules(AdminState.currentCharData?.affection_rules_json);
 
   if (affectionEnabled && !hasAffectionRules) {
-    extra.push('已启用好感度系统，但好感度规则还是空的。');
+    extra.push(`已启用${getMetricName()}系统，但${getMetricName()}规则还是空的。`);
   }
   if (activeMemories > 0 && activeMemories < 3) {
     extra.push('当前启用中的记忆条目偏少，建议至少保留 3 条高频记忆。');
@@ -165,7 +168,6 @@ function buildChecklist(summary) {
   const phaseCoverage = stats.greeting_phase_coverage ?? phases.size;
   const emptyUnlockEvents = stats.empty_unlock_events ?? events.filter(e => !(splitCsvIds(e.unlocked_memory_ids).length || splitCsvIds(e.unlocked_greeting_ids).length || e.unlocked_storyline_id)).length;
   const emptyEventContentEvents = stats.empty_event_content_events ?? events.filter(e => !String(e.event_content || '').trim()).length;
-  const isWorldCard = (AdminState.currentCharData?.card_type || 'intimate') === 'world';
   const affectionEnabled = AdminState.currentCharData?.affection_enabled === 1 || AdminState.currentCharData?.affection_enabled === '1';
   const hasAffectionRules = hasUsableAffectionRules(AdminState.currentCharData?.affection_rules_json);
 
@@ -185,13 +187,11 @@ function buildChecklist(summary) {
         : `当前只有 ${activeMemories || 0} 条启用中的记忆（总数 ${stats.memories || 0}），建议至少准备 3 条常用触发内容。`
     },
     {
-      ok: isWorldCard || phaseCoverage >= 2,
+      ok: phaseCoverage >= 2,
       title: '开场白阶段覆盖',
-      text: isWorldCard
-        ? '世界探索型角色对多阶段开场白要求较低。'
-        : (phaseCoverage >= 2
+      text: phaseCoverage >= 2
             ? `已覆盖 ${phaseCoverage} 个关系阶段。`
-            : `当前只有 ${activeGreetings || 0} 条启用中的开场白，建议至少覆盖"陌生人 + 熟人"两档。`)
+            : `当前只有 ${activeGreetings || 0} 条启用中的开场白，建议至少覆盖前两个阶段。`
     },
     {
       ok: activeStorylines === 0 || Boolean(summary.default_storyline_id),
@@ -220,12 +220,12 @@ function buildChecklist(summary) {
     },
     {
       ok: !affectionEnabled || hasAffectionRules,
-      title: '好感度规则',
+      title: getMetricName() + '规则',
       text: !affectionEnabled
-        ? '当前角色未启用好感度系统。'
+        ? '当前角色未启用' + getMetricName() + '系统。'
         : (hasAffectionRules
-            ? '好感度系统已启用，且已有有效规则配置。'
-            : '好感度已启用，但规则还是空的。')
+            ? getMetricName() + '系统已启用，且已有有效规则配置。'
+            : getMetricName() + '已启用，但规则还是空的。系统会使用默认规则。')
     }
   ];
 }

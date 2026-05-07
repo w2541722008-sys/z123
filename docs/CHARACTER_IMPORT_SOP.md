@@ -2,7 +2,7 @@
 
 > **文档用途**：本文件是新增角色的完整操作指南。
 >
-> **最后更新**：2026-05-01 v2.0
+> **最后更新**：2026-05-06 v2.1
 > **状态**：正式版
 
 ---
@@ -44,8 +44,8 @@
 | `opening_message` | TEXT | ✅ | 默认开场白（第一条剧情线的开场），完整展示，不截断 |
 | `system_prompt` | TEXT | ✅ | 主系统提示（一句话定性，如"你是陈序，..."） |
 | `sort_order` | INTEGER | — | 排序序号，数字越小越靠前，默认 0 |
-| `asset_type` | TEXT | ✅ | 资产类型：`character`/`hybrid`/`world`/`scenario`/`system` |
-| `card_type` | TEXT | ✅ | 产品卡类型（见第三章）：`intimate`/`scenario`/`world` |
+| `asset_type` | TEXT | ✅ | 资产类型：`character`/`hybrid`/`scenario`/`system` |
+| `card_type` | TEXT | ✅ | 产品卡类型（见第三章）：`intimate`/`scenario` |
 | `runtime_cache_json` | JSONB（经 002 迁移） | ✅ | **核心字段**：运行时分层数据（见第二章，最重要的字段） |
 | `is_visible` | INTEGER | ✅ | 是否对外可见：`1`=可见，`0`=隐藏（测试用） |
 | `affection_enabled` | INTEGER | — | 是否启用好感度：`1`=启用（默认），`0`=禁用（world 卡建议设 0） |
@@ -315,7 +315,7 @@ print("写入完成")
 6. examples（可选，500-3000字）：3-5 组示例对话，展示角色的理想互动风格
 7. opening_message（100-500字）：第一条开场白，角色主动开口的台词，有代入感
 8. alternate_greetings（可选，列表）：如果有多条剧情线，列出其余开场白
-9. card_type：从 intimate/scenario/world 三种中选一种
+9. card_type：从 intimate/scenario 两种中选一种
 10. subtitle（30-60字）：展示给用户的一句话简介
 11. tags（JSON 数组）：3-6个标签，如 ["腹黑", "现代都市", "霸道总裁"]
 
@@ -370,7 +370,7 @@ print("写入完成")
 - [ ] 多剧情线（如有）：切换剧情线后，开场白和场景正确变化
 
 ### 系统配置
-- [ ] `card_type` 设置正确（intimate/scenario/world）
+- [ ] `card_type` 设置正确（intimate/scenario）
 - [ ] `home_priority` 设置正确（1-4 = 精选展示，999 = 不在前台）
 - [ ] `is_visible` = 1
 

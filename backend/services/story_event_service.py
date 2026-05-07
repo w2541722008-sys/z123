@@ -23,12 +23,13 @@ def check_and_trigger_story_events(
     current_affection: int,
     current_phase: str,
     *,
+    custom_vars: dict[str, Any] | None = None,
     commit: bool = True,
 ) -> list[dict[str, Any]]:
     """
     检查并触发剧情事件。
 
-    当用户好感度达到事件触发阈值时，自动触发对应的剧情事件，
+    当用户好感度达到事件触发阈值且自定义变量条件满足时，自动触发对应的剧情事件，
     解锁相关的记忆、开场白、剧情线等内容。
 
     Args:
@@ -37,17 +38,19 @@ def check_and_trigger_story_events(
         character_id: 角色ID
         current_affection: 当前好感度
         current_phase: 当前关系阶段
+        custom_vars: 当前自定义变量（用于 trigger_custom_key 条件检查）
 
     Returns:
         触发的事件列表，每个事件包含标题、描述、解锁内容等
     """
     triggered: list[dict[str, Any]] = []
+    _custom_vars = custom_vars or {}
 
     try:
         # 1. 获取该角色所有启用的剧情事件
         events = conn.execute(
             """
-            SELECT id, title, description, trigger_score,
+            SELECT id, title, description, trigger_score, trigger_custom_key,
                    unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
                    event_content, is_active
             FROM story_events
@@ -89,6 +92,18 @@ def check_and_trigger_story_events(
             # 好感度未达到触发阈值，跳过
             if current_affection < event["trigger_score"]:
                 continue
+
+            # 自定义变量条件检查：trigger_custom_key 中的所有键必须存在于 custom_vars 且非空
+            trigger_keys_str = (event.get("trigger_custom_key") or "").strip()
+            if trigger_keys_str:
+                required_keys = [k.strip() for k in trigger_keys_str.split(",") if k.strip()]
+                if required_keys:
+                    all_keys_present = all(
+                        k in _custom_vars and _custom_vars[k] not in (None, "", 0, False)
+                        for k in required_keys
+                    )
+                    if not all_keys_present:
+                        continue
 
             # 触发事件
             new_triggered_ids.append(str(event_id))

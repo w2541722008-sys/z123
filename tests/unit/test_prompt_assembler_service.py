@@ -18,7 +18,6 @@ from services.prompt_assembler import (
     _append_post_history_then_user,
     _select_mode_builder,
     _build_character_mode_messages,
-    _build_system_mode_messages,
     _build_scenario_mode_messages,
     _build_hybrid_mode_messages,
 )
@@ -106,24 +105,24 @@ class TestRelatedAssetsText:
     def test_with_assets(self):
         bundle = {
             "related_assets": [
-                {"asset_type": "world", "name": "Magic World"},
                 {"asset_type": "scenario", "name": "Quest"},
+                {"asset_type": "character", "name": "Alice"},
             ]
         }
         result = _related_assets_text(bundle)
-        assert "Magic World" in result
         assert "Quest" in result
+        assert "Alice" in result
         assert "关联资产" in result
 
     def test_asset_without_name_skipped(self):
         bundle = {
             "related_assets": [
-                {"asset_type": "world"},
-                {"asset_type": "scenario", "name": "Quest"},
+                {"asset_type": "scenario"},
+                {"asset_type": "character", "name": "Alice"},
             ]
         }
         result = _related_assets_text(bundle)
-        assert "Quest" in result
+        assert "Alice" in result
 
 
 # ============================================================
@@ -244,20 +243,6 @@ class TestModeSections:
         assert "【角色底稿】" in titles
         assert "【性格与表达风格】" in titles
 
-    def test_system_mode(self):
-        bundle = {
-            "base_profile": "desc",
-            "examples": "",
-            "world_rules": "",
-            "scenario": "",
-            "personality": "",
-            "alternate_greetings": [],
-            "related_assets": [],
-        }
-        sections = _mode_sections(bundle, {}, "system")
-        titles = [s[0] for s in sections if s[0]]
-        assert "【核心系统设定】" in titles
-
     def test_scenario_mode(self):
         bundle = {
             "base_profile": "desc",
@@ -292,57 +277,43 @@ class TestModeSections:
 # _append_post_history_then_user
 # ============================================================
 class TestAppendPostHistoryThenUser:
-    def test_with_rules_and_user_msg(self):
+    def test_with_user_msg(self):
         messages = []
         _append_post_history_then_user(
             messages,
-            post_history_rules="be polite",
+            last_user_message={"role": "user", "content": "hello"},
+        )
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        assert "hello" in messages[0]["content"]
+
+    def test_no_user_msg(self):
+        messages = []
+        _append_post_history_then_user(
+            messages,
+            last_user_message=None,
+        )
+        assert len(messages) == 0
+
+    def test_user_msg_merges_with_previous_user(self):
+        messages = [{"role": "user", "content": "previous"}]
+        _append_post_history_then_user(
+            messages,
+            last_user_message={"role": "user", "content": "hello"},
+        )
+        assert len(messages) == 1
+        assert "previous" in messages[0]["content"]
+        assert "hello" in messages[0]["content"]
+
+    def test_user_msg_after_assistant(self):
+        messages = [{"role": "assistant", "content": "hi"}]
+        _append_post_history_then_user(
+            messages,
             last_user_message={"role": "user", "content": "hello"},
         )
         assert len(messages) == 2
-        assert "be polite" in messages[0]["content"]
+        assert messages[1]["role"] == "user"
         assert messages[1]["content"] == "hello"
-
-    def test_rules_only(self):
-        messages = []
-        _append_post_history_then_user(
-            messages,
-            post_history_rules="be polite",
-            last_user_message=None,
-        )
-        assert len(messages) == 1
-
-    def test_user_msg_only(self):
-        messages = []
-        _append_post_history_then_user(
-            messages,
-            post_history_rules="",
-            last_user_message={"role": "user", "content": "hello"},
-        )
-        assert len(messages) == 1
-        assert messages[0]["content"] == "hello"
-
-    def test_rules_truncation(self):
-        messages = []
-        long_rules = "x" * 20000
-        _append_post_history_then_user(
-            messages,
-            post_history_rules=long_rules,
-            last_user_message=None,
-        )
-        assert len(messages[0]["content"]) < len(long_rules) + 20
-
-    def test_with_budget(self):
-        from services.token_budget import TokenBudget
-        budget = TokenBudget(context_tokens=4096, output_reserve=512)
-        messages = []
-        _append_post_history_then_user(
-            messages,
-            post_history_rules="be polite",
-            last_user_message=None,
-            budget=budget,
-        )
-        assert len(messages) == 1
 
 
 # ============================================================
@@ -353,10 +324,6 @@ class TestSelectModeBuilder:
         builder = _select_mode_builder("scenario", "character")
         assert builder is _build_scenario_mode_messages
 
-    def test_world_card_type(self):
-        builder = _select_mode_builder("world", "character")
-        assert builder is _build_system_mode_messages
-
     def test_character_asset_type(self):
         builder = _select_mode_builder("intimate", "character")
         assert builder is _build_character_mode_messages
@@ -364,14 +331,6 @@ class TestSelectModeBuilder:
     def test_scenario_asset_type(self):
         builder = _select_mode_builder("intimate", "scenario")
         assert builder is _build_scenario_mode_messages
-
-    def test_world_asset_type(self):
-        builder = _select_mode_builder("intimate", "world")
-        assert builder is _build_system_mode_messages
-
-    def test_system_asset_type(self):
-        builder = _select_mode_builder("intimate", "system")
-        assert builder is _build_system_mode_messages
 
     def test_hybrid_default(self):
         builder = _select_mode_builder("intimate", "hybrid")

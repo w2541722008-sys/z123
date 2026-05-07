@@ -91,11 +91,11 @@
         <div class="chat-topbar-right" onclick="ChatMenu.toggle()" title="更多">···</div>
       </div>
 
-      <!-- 关系状态栏（好感度 + 阶段 + 心情，AI 每轮自动更新） -->
+      <!-- 关系状态栏（好感度/沉浸度 + 阶段 + 心情，AI 每轮自动更新） -->
       <div id="chat-state-bar" class="chat-state-bar" style="display:none">
         <div class="state-bar-inner">
           <div class="state-affection">
-            <span class="state-label">好感度</span>
+            <span id="state-affection-label" class="state-label">好感度</span>
             <div class="affection-bar-wrap">
               <div class="affection-bar-bg">
                 <div id="affection-bar-fill" class="affection-bar-fill" style="width:30%"></div>

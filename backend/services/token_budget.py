@@ -75,8 +75,8 @@ class TokenBudget:
         return int(self.system_max_chars() * 0.30)
 
     def primary_system_max_chars(self) -> int:
-        """primary_system_prompt 单独最大字符数（system 预算的 15%）。"""
-        return int(self.system_max_chars() * 0.15)
+        """primary_system_prompt 单独最大字符数（system 预算的 25%）。"""
+        return int(self.system_max_chars() * 0.25)
 
     def wi_max_chars(self) -> int:
         """World Info 词条总注入量上限（全局可用 token 的 25%）。"""

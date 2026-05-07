@@ -11,8 +11,15 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from utils.card_text import expand_macros
+from utils.card_text import expand_macros, pick_section_text, split_structured_sections
 from utils.json_utils import parse_json_object
+
+
+# 从 description 中提取 personality 的关键词列表
+_PERSONALITY_KEYWORDS = [
+    "性格", "personality", "个性", "特质", "特征", "traits",
+    "性格特点", "temperament", "品格", "性情",
+]
 
 
 def _get_field(source: Any, key: str, default: Any = "") -> Any:
@@ -78,8 +85,7 @@ def build_runtime_bundle(character: Any, related_assets: list[Any] | None = None
     """把主角色与关联资产合成为一份统一运行时视图。
 
     当前策略：
-    - 主资产决定主模式（character / hybrid / world / scenario ...）
-    - world/system 资产补充世界规则与系统约束
+    - 主资产决定主模式（character / hybrid / scenario）
     - scenario 资产补充剧情场景、示例和推进约束
     - 额外 character/hybrid 资产只作为补充资料，不反客为主
     """
@@ -120,14 +126,6 @@ def build_runtime_bundle(character: Any, related_assets: list[Any] | None = None
             }
         )
 
-        if asset_type in {"world", "system"}:
-            bundle["world_rules"] = _merge_text(bundle["world_rules"], asset_layers.get("base_profile"), asset_layers.get("world_rules"))
-            bundle["scenario"] = _merge_text(bundle["scenario"], asset_layers.get("scenario"))
-            bundle["post_history_rules"] = _merge_text(bundle["post_history_rules"], asset_layers.get("post_history_rules"))
-            bundle["examples"] = _merge_text(bundle["examples"], asset_layers.get("examples"))
-            bundle["alternate_greetings"] = _merge_alternate_greetings(bundle["alternate_greetings"], asset_layers.get("alternate_greetings"))
-            continue
-
         if asset_type == "scenario":
             bundle["scenario"] = _merge_text(bundle["scenario"], asset_layers.get("base_profile"), asset_layers.get("scenario"))
             bundle["examples"] = _merge_text(bundle["examples"], asset_layers.get("examples"))
@@ -142,6 +140,14 @@ def build_runtime_bundle(character: Any, related_assets: list[Any] | None = None
         bundle["examples"] = _merge_text(bundle["examples"], asset_layers.get("examples"))
         bundle["post_history_rules"] = _merge_text(bundle["post_history_rules"], asset_layers.get("post_history_rules"))
         bundle["alternate_greetings"] = _merge_alternate_greetings(bundle["alternate_greetings"], asset_layers.get("alternate_greetings"))
+
+    # P1: 当 personality 仍为空时，尝试从 base_profile (description) 中提取性格相关段落
+    # 大量 SillyTavern 卡把性格写在 description 中而非独立 personality 字段
+    if not bundle["personality"].strip() and bundle["base_profile"].strip():
+        sections = split_structured_sections(bundle["base_profile"])
+        extracted = pick_section_text(sections, _PERSONALITY_KEYWORDS)
+        if extracted:
+            bundle["personality"] = extracted
 
     return bundle
 

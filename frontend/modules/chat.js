@@ -73,52 +73,117 @@
      }
    }
 
-   /* ── 关系状态栏渲染 ─────────────────────────────────────────── */
-   const PHASE_LABELS = {
-     stranger: '陌生人', acquaintance: '普通朋友', friend: '好友', lover: '恋人',
-   };
-   const MOOD_LABELS = {
-     neutral: '平静', happy: '开心', warm: '温柔', melting: '心动',
-     cold: '冷淡', angry: '生气', sad: '难过', shy: '害羞', surprised: '惊讶',
-   };
-   const MOOD_CLASSES = Object.keys(MOOD_LABELS);
+  /* ── 关系状态栏渲染 ─────────────────────────────────────────── */
+  // 标签映射：对话陪伴 vs 剧情沙盒共用同一套枚举值，但展示语义不同
+  const INTIMATE_PHASE_LABELS = {
+    stranger: '陌生人', acquaintance: '普通朋友', friend: '好友', lover: '恋人',
+  };
+  const SCENARIO_PHASE_LABELS = {
+    stranger: '初入', acquaintance: '探索', friend: '深入', lover: '终章',
+  };
+  const INTIMATE_MOOD_LABELS = {
+    neutral: '平静', happy: '开心', warm: '温柔', melting: '心动',
+    cold: '冷淡', angry: '生气', sad: '难过', shy: '害羞', surprised: '惊讶',
+  };
+  const SCENARIO_MOOD_LABELS = {
+    neutral: '平静', happy: '振奋', warm: '安宁', melting: '沉浸',
+    cold: '萧瑟', angry: '敌意', sad: '低落', shy: '警惕', surprised: '震惊',
+  };
+  const MOOD_CLASSES = Object.keys(INTIMATE_MOOD_LABELS);
 
-   function renderStateBar(state) {
-     const barEl = document.getElementById('chat-state-bar');
-     if (!barEl || !state) return;
+  function _getLabels() {
+    const ct = (currentChar && currentChar.card_type) || 'intimate';
+    return ct === 'scenario'
+      ? { phase: SCENARIO_PHASE_LABELS, mood: SCENARIO_MOOD_LABELS, affectionName: '沉浸度' }
+      : { phase: INTIMATE_PHASE_LABELS, mood: INTIMATE_MOOD_LABELS, affectionName: '好感度' };
+  }
 
-     const affection = Math.max(0, Math.min(100, state.affection || 0));
-     const phase = state.story_phase || 'stranger';
-     const mood = state.mood || 'neutral';
+  function _isStateBarHidden() {
+    // 由角色卡配置的 show_bar 控制，默认显示
+    // 优先从最新渲染的状态数据读取，否则从角色卡读取
+    if (_lastState && _lastState.show_bar === false) return true;
+    if (currentChar) {
+      try {
+        const rules = JSON.parse(currentChar.affection_rules_json || '{}');
+        return rules.show_bar === false;
+      } catch (_) {}
+    }
+    return false;
+  }
 
-     // 好感度条
-     const fill = document.getElementById('affection-bar-fill');
-     if (fill) {
-       fill.style.width = affection + '%';
-       fill.classList.toggle('full', affection >= 100);
-     }
-     const valEl = document.getElementById('affection-value');
-     if (valEl) valEl.textContent = affection;
+  let _lastState = null;
 
-     // 阶段 pill
-     const phaseEl = document.getElementById('state-phase');
-     if (phaseEl) phaseEl.textContent = PHASE_LABELS[phase] || phase;
+  function renderStateBar(state) {
+    const barEl = document.getElementById('chat-state-bar');
+    if (!barEl || !state) return;
 
-     // 心情 pill（更新颜色 class）
-     const moodEl = document.getElementById('state-mood');
-     if (moodEl) {
-       moodEl.textContent = MOOD_LABELS[mood] || mood;
-       MOOD_CLASSES.forEach(m => moodEl.classList.remove('mood-' + m));
-       if (mood !== 'neutral') moodEl.classList.add('mood-' + mood);
-     }
+    _lastState = state;
 
-     barEl.style.display = '';
-   }
+    // 角色卡配置了隐藏状态栏 → 整栏不显示
+    if (_isStateBarHidden()) {
+      barEl.style.display = 'none';
+      return;
+    }
+
+    const affection = Math.max(0, Math.min(100, state.affection || 0));
+    const phase = state.story_phase || 'stranger';
+    const mood = state.mood || 'neutral';
+    const labels = _getLabels();
+
+    // 标签文本（对话陪伴→好感度，剧情沙盒→沉浸度）
+    const labelEl = document.getElementById('state-affection-label');
+    if (labelEl) labelEl.textContent = labels.affectionName;
+
+    // 好感度/沉浸度条
+    const fill = document.getElementById('affection-bar-fill');
+    if (fill) {
+      fill.style.width = affection + '%';
+      fill.classList.toggle('full', affection >= 100);
+    }
+    const valEl = document.getElementById('affection-value');
+    if (valEl) valEl.textContent = affection;
+
+    // 阶段 pill
+    const phaseEl = document.getElementById('state-phase');
+    if (phaseEl) phaseEl.textContent = labels.phase[phase] || phase;
+
+    // 心情 pill（更新颜色 class）
+    const moodEl = document.getElementById('state-mood');
+    if (moodEl) {
+      moodEl.textContent = labels.mood[mood] || mood;
+      MOOD_CLASSES.forEach(m => moodEl.classList.remove('mood-' + m));
+      if (mood !== 'neutral') moodEl.classList.add('mood-' + mood);
+    }
+
+    // 剧情线 pill（如果有当前剧情线名称）
+    let storylineEl = document.getElementById('state-storyline');
+    const storylineName = state.storyline_name || '';
+    if (storylineName) {
+      if (!storylineEl) {
+        storylineEl = document.createElement('span');
+        storylineEl.id = 'state-storyline';
+        storylineEl.className = 'state-pill storyline-pill';
+        // 插入到心情 pill 之后
+        if (moodEl && moodEl.parentNode) {
+          moodEl.parentNode.insertBefore(storylineEl, moodEl.nextSibling);
+        }
+      }
+      storylineEl.textContent = '📖 ' + storylineName;
+    } else if (storylineEl) {
+      storylineEl.remove();
+    }
+
+    barEl.style.display = '';
+  }
 
    async function loadCharacterState(characterId) {
      try {
        const result = await API.getCharacterState(characterId);
-       renderStateBar(result?.state);
+       if (result?.state) {
+         // 把 show_bar 合并到 state 中，供 renderStateBar 判断显隐
+         result.state.show_bar = result.show_bar;
+         renderStateBar(result.state);
+       }
      } catch (_) {
        // 未登录或接口出错时静默忽略，不影响正常聊天
      }
@@ -127,9 +192,10 @@
   /* ── 角色状态面板由 chat-status-panel.js 提供（ChatStatusPanel） ── */
 
    async function enterChat(char) {
-     currentChar = normalizeCharacter(char);
-     history = [];
-     _lastMsgTimestamp = 0;
+    currentChar = normalizeCharacter(char);
+    history = [];
+    _lastMsgTimestamp = 0;
+    _shownEventIds.clear();
      AppState.setLastCharacterId(currentChar.id);
      updateChatHeader(currentChar);
      document.getElementById('chat-messages').innerHTML = '';
@@ -148,6 +214,13 @@
        } else {
          appendMsg('assistant', `你好，我是${currentChar.display_name || currentChar.name}。`);
        }
+       // 游客模式展示模拟状态栏（不持久化）
+       renderStateBar({
+         affection: 0,
+         story_phase: 'stranger',
+         mood: 'neutral',
+         show_bar: true,
+       });
        refreshGuestQuota();
        return;
      }
@@ -615,10 +688,57 @@ function appendBubbleContent(row, bubble, isAi, messageId) {
     setActionButtonsVisible(originalButtons?.actions, true);
   }
 
+  // 已展示过的剧情事件ID集合，避免重复提示
+  const _shownEventIds = new Set();
+
   function syncCharacterState(payload) {
     if (payload?.character_state) {
       renderStateBar(payload.character_state);
     }
+    // 剧情事件通知：触发的事件以顶部滑入提示条展示
+    const events = payload?.character_state?.triggered_events || payload?.triggered_events || [];
+    if (events.length > 0) {
+      for (const ev of events) {
+        const evId = ev.id;
+        if (evId && _shownEventIds.has(evId)) continue;
+        if (evId) _shownEventIds.add(evId);
+        showStoryEventToast(ev);
+      }
+    }
+  }
+
+  /** 剧情事件解锁提示条（顶部滑入，点击展开详情） */
+  function showStoryEventToast(eventData) {
+    const container = document.getElementById('chat-messages');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = 'story-event-toast';
+    const title = eventData.title || '剧情解锁';
+    const desc = eventData.description || '';
+    toast.innerHTML = `
+      <div class="event-title">🎬 ${escapeHtml(title)}</div>
+      ${desc ? `<div class="event-desc">${escapeHtml(desc)}</div>` : ''}
+    `;
+    if (eventData.unlocked) {
+      toast.style.cursor = 'pointer';
+      toast.onclick = () => showEventDetail(eventData);
+    }
+    container.parentElement.insertBefore(toast, container);
+    setTimeout(() => toast.classList.add('show'), 10);
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 400);
+    }, 4000);
+  }
+
+  function showEventDetail(eventData) {
+    const unlocked = eventData.unlocked || {};
+    const parts = [];
+    if (unlocked.memories?.length) parts.push(`解锁记忆 ${unlocked.memories.length} 条`);
+    if (unlocked.greetings?.length) parts.push(`解锁开场白 ${unlocked.greetings.length} 个`);
+    if (unlocked.storyline_id) parts.push('解锁新剧情线');
+    const content = eventData.event_content || parts.join('、') || '剧情已解锁';
+    UI.toast(`${eventData.title}\n\n${content}`, 'info', 5000);
   }
 
   function removeRowIfPresent(rowEl) {

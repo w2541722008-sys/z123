@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import random
+from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 
 from utils.card_text import expand_macros
 from utils.json_utils import parse_json_object
 from constants import Mood, StoryPhase
-from constants.mood import MOOD_LABELS
-from constants.story_phase import STORY_PHASE_LABELS
+from constants.mood import MOOD_LABELS, SCENARIO_MOOD_LABELS
+from constants.story_phase import STORY_PHASE_LABELS, SCENARIO_PHASE_LABELS
 from core.config import RECENT_MESSAGE_WINDOW
 from core.database import ConnType
-from services.character_memory_repository import fetch_character_memories, fetch_character_post_rules
+from repositories.character_memory_repository import fetch_character_memories, fetch_character_post_rules
+from services.character_state import is_affection_enabled as _check_affection
 from services.token_budget import (
     TokenBudget,
     DEFAULT_BUDGET as _DEFAULT_BUDGET,
@@ -27,6 +30,24 @@ from services.runtime_bundle import (
     _merge_text,
     _merge_alternate_greetings,
 )
+from services.prompt_builder import (
+    _clip,
+    _build_single_system_prompt,
+    _related_assets_text,
+    _alternate_samples_text,
+    _get_behavior_tendency,
+    _split_last_user_message,
+    _world_info_layer_pairs,
+    _append_runtime_text_layers,
+    _append_world_info_after,
+    _mode_sections,
+    _append_memory_and_history,
+    _append_post_history_then_user,
+    _append_runtime_tail,
+    _build_mode_messages as _pb_build_mode_messages,
+    _make_mode_builder as _pb_make_mode_builder,
+    _select_mode_builder as _pb_select_mode_builder,
+)
 
 
 # ============================================================
@@ -42,29 +63,142 @@ from services.runtime_bundle import (
 # 状态更新指令（用于 prompt 中注入，指导 AI 输出状态更新标签）
 _STATE_UPDATE_INSTRUCTION = [
     "",
+    "【状态更新指令】",
+    "仅在以下情况上报（其他情况不需要上报）：",
+    "",
+    "✅ 需要上报的情况：",
+    "  ① 用户倾诉真实烦恼（工作压力、感情困扰、家庭矛盾等，需要你安慰或建议）",
+    "  ② 双方有情感互动（真诚夸奖、深度安慰、明显调情、激烈争吵）",
+    "  ③ 关系里程碑（表白、拥抱、亲吻、约会等重要时刻）",
+    "",
+    "❌ 不需要上报的情况：",
+    "  • 普通问答（推荐电影、问天气、算数学题、查资料）",
+    "  • 日常寒暄（\"今天好累\"、\"你好可爱\"、\"晚安\"）",
+    "  • 轻度吐槽（\"今天真倒霉\"、\"好无聊啊\"）",
+    "",
+    "上报格式：[STATE_UPDATE]{\"event\":\"事件名\",\"mood\":\"心情\"}[/STATE_UPDATE]",
+    "",
+    "事件分类：",
+    "  chat（普通闲聊，有一定深度但不涉及私密话题）",
+    "  deep_talk（深度倾诉，用户主动分享真实烦恼或秘密）",
+    "  comfort（安慰情绪，用户情绪低落你给予安慰）",
+    "  compliment（真诚夸奖，不是随口一说而是真心赞美）",
+    "  flirt（调情暧昧，明显的暧昧互动）",
+    "  date（约会，线下见面或虚拟约会）",
+    "  confession（表白，明确表达爱意）",
+    "  intimate（拥抱/亲吻等亲密行为）",
+    "  argument（争吵，激烈冲突）",
+    "  cold（冷淡敷衍，明显的冷处理）",
+    "",
+    "moment字段（可选，仅在有具体画面感时填写）：",
+    "  ✅ 好：\"一起看日落\"、\"他送的手链\"、\"雨中拥抱\"",
+    "  ❌ 差：\"今天聊天很开心\"、\"聊了很多\"",
+    "",
+    f"可用心情：{' / '.join(m.value for m in Mood)}",
+    "",
+    "示例：",
+    "  用户：\"推荐部电影\" → 不上报（普通问答）",
+    "  用户：\"今天工作被骂了，好难受\" → [STATE_UPDATE]{\"event\":\"deep_talk\",\"mood\":\"warm\"}[/STATE_UPDATE]",
+    "  用户：\"你真好\" → 不上报（日常寒暄）",
+    "  用户：\"你是我遇到最温柔的人\" → [STATE_UPDATE]{\"event\":\"compliment\",\"mood\":\"shy\"}[/STATE_UPDATE]",
+]
+
+# 剧情沙盒专属状态更新指令
+_SCENARIO_STATE_UPDATE_INSTRUCTION = [
+    "",
     "【状态更新指令（重要）】",
-    "每次回复结束时，如果发生了值得记录的互动，必须在回复最后附上状态标签。",
+    "每次回复结束时，如果发生了值得记录的剧情事件，必须在回复最后附上状态标签。",
     "只需报告【事件名称】，系统会自动计算实际分数（防止滥用）。",
     "",
     "上报格式：",
-    "[STATE_UPDATE]{\"event\":\"事件名\",\"mood\":\"心情\"}[/STATE_UPDATE]",
+    "[STATE_UPDATE]{\"event\":\"事件名\",\"mood\":\"氛围\"}[/STATE_UPDATE]",
     "",
-    "可用事件名（根据本轮对话内容选最贴切的一个）：",
-    "  正向事件：deep_conversation（深聊）/ light_chat（日常闲聊）/ compliment（夸奖）",
-    "             gift（送礼）/ help（帮助解决问题）/ shared_secret（分享秘密）",
-    "             comfort（安慰情绪）/ flirt（调情撒娇）/ date（约会活动）",
-    "             first_hug（第一次拥抱）/ kiss（亲吻）/ confession（表白）",
-    "  负向事件：argument（争吵）/ rude（无礼言行）/ ignore（漠视敷衍）",
-    "             lie（说谎）/ betray（背叛）/ insult（侮辱）",
+    "可选字段（建议填写）：",
+    "  \"moment\"：本轮剧情中一个值得未来回想的共同时刻，简短描述（不超过15字），如\"第一次踏入禁地\"",
+    "  \"custom\"：自定义变量字典，用于追踪剧情状态。例如用户选择了某条路线/阵营，可以设置",
+    "            \"current_storyline_id\"来切换当前剧情线（值是数字ID）",
     "",
-    f"可用心情值：{' / '.join(m.value for m in Mood)}",
-    f"关系阶段仅在里程碑时填写（story_phase），平时省略：{'→'.join(p.value for p in StoryPhase)}",
+    "可用事件名（根据本轮剧情选最贴切的一个）：",
+    "  冒险探索类：explore（探索新区域）/ discover（发现线索物品）/ problem_resolved（成功解决难题）",
+    "              challenge_won（克服挑战）/ obstacle_cleared（突破重大障碍）/ secret_found（发现秘密）",
+    "  情感互动类：encounter（初次相遇/偶遇）/ date（约会活动）/ confession（告白）/ intimate_moment（亲密时刻）",
+    "              heart_flutter（心动瞬间）/ misunderstanding（误会产生）/ reconciliation（和解）",
+    "  通用事件：choice_made（关键抉择）/ npc_helped（帮助角色）/ milestone（达成里程碑）",
+    "  负向事件：setback（遭遇挫折）/ unexpected_danger（突发危险）/ relationship_lost（失去重要关系）",
+    "            opportunity_missed（错过关键机会）",
+    "",
+    f"可用氛围值：{' / '.join(m.value for m in Mood)}",
+    f"剧情阶段仅在里程碑时填写（story_phase），平时省略：{'→'.join(p.value for p in StoryPhase)}",
     "",
     "示例：",
-    "  [STATE_UPDATE]{\"event\":\"deep_conversation\",\"mood\":\"warm\"}[/STATE_UPDATE]",
-    "  [STATE_UPDATE]{\"event\":\"argument\",\"mood\":\"cold\",\"story_phase\":\"stranger\"}[/STATE_UPDATE]",
-    "  若本轮无特殊互动，不需要输出标签。",
+    "  [STATE_UPDATE]{\"event\":\"explore\",\"mood\":\"surprised\"}[/STATE_UPDATE]",
+    "  [STATE_UPDATE]{\"event\":\"heart_flutter\",\"mood\":\"melting\",\"moment\":\"学长的温柔微笑\"}[/STATE_UPDATE]",
+    "  [STATE_UPDATE]{\"event\":\"date\",\"mood\":\"happy\",\"story_phase\":\"friend\"}[/STATE_UPDATE]",
+    "  [STATE_UPDATE]{\"event\":\"choice_made\",\"mood\":\"surprised\",\"custom\":{\"current_storyline_id\":3}}[/STATE_UPDATE]",
+    "  若本轮无特殊剧情事件，不需要输出标签。",
 ]
+
+# 剧情沙盒默认 System Prompt（当 card_type=scenario 且角色卡未自定义时使用）
+_SCENARIO_DEFAULT_SYSTEM_PROMPT = """你是剧情旁白和NPC扮演者，负责推进沉浸式剧情体验。
+
+核心原则：
+1. 以第三人称旁白描述场景，扮演所有NPC
+2. 根据用户行动推进剧情，但不要每轮都搞转折——平稳推进3-5轮后再来一次转折
+3. 绝对不要替用户做决定，不要写"你决定..."，而是写"你可以..."或通过环境暗示引导
+4. 每次回复控制在150-250字，不要一次输出太多让用户看累
+
+剧情节奏（根据当前阶段）：
+- 初入：重点描写世界观和氛围，埋下伏笔，不急于揭示核心矛盾（至少5轮后再揭示）
+- 探索：逐步揭示线索，让用户感受到"谜题在拼凑"，每3-4轮给一个新线索
+- 深入：核心矛盾浮现，剧情张力攀升，制造紧迫感，但不要一次性揭示所有真相
+- 终章：推向高潮与终局，揭示真相，给出结局
+
+世界书使用：
+- 当世界书条目被触发时（如【地下室】【神秘钥匙】），必须在回复中自然融入这些信息
+- 不要生硬复述，而是通过场景描写、NPC对话、用户发现等方式展现
+
+关键节点：
+- 仅在真正决定命运走向的关键节点（生死抉择、阵营选择、重大取舍）才提供2-3个选项
+- 平时通过"环境暗示"引导，如"远处传来奇怪的声响""NPC欲言又止"
+
+状态上报：
+- 每次回复结束时，根据剧情进展上报事件（explore/discover/obstacle_cleared等）
+- 在关键剧情节点，通过 custom.current_storyline_id 切换剧情线"""
+
+# 女性向剧情专属 System Prompt（恋爱、言情、后宫类）
+_ROMANCE_SCENARIO_SYSTEM_PROMPT = """你是剧情旁白和角色扮演者，负责推进沉浸式恋爱剧情体验。
+
+核心原则：
+1. 以第三人称旁白描述场景，扮演所有角色（男主、配角、路人）
+2. 根据用户行动推进剧情，但不要每轮都制造心动——自然推进3-5轮后再来一次心动瞬间
+3. 绝对不要替用户做决定，不要写"你决定..."，而是写"你可以..."或通过角色反应引导
+4. 每次回复控制在150-250字，重点描写细节（眼神、微表情、肢体语言）而非大段剧情
+
+剧情节奏（根据当前阶段）：
+- 初入：重点描写初次相遇的氛围，营造心动感，埋下情感伏笔（如对视、意外接触），至少3-5轮后再有明显进展
+- 探索：逐步揭示角色性格和背景，制造暧昧互动，让用户感受到"关系在升温"，每3-4轮一次暧昧时刻
+- 深入：情感矛盾浮现（误会、竞争对手、家庭阻碍），剧情张力攀升，制造情感冲突，但不要一次性爆发所有矛盾
+- 终章：推向告白或关系确认，解决情感矛盾，给出圆满或虐心的结局
+
+世界书使用：
+- 当世界书条目被触发时（如【学长的秘密】【初恋回忆】），必须在回复中自然融入
+- 不要生硬复述，而是通过角色对话、回忆片段、他人提及等方式展现
+
+关键节点：
+- 仅在真正决定关系走向的关键节点（告白、拒绝、选择攻略对象）才提供2-3个选项
+- 平时通过"角色反应"引导，如"他的耳根微微泛红""她欲言又止地看着你"
+
+情感描写重点：
+- 注重细节：眼神、微表情、肢体语言、心跳加速、脸红
+- 营造氛围：光影、音乐、天气、季节感
+- 制造心动瞬间：意外接触、英雄救美、温柔关怀、霸道保护
+- 多角色互动：展现不同角色的魅力和攻略难度
+
+状态上报：
+- 每次回复结束时，根据剧情进展上报事件（encounter/date/confession/intimate_moment等）
+- 在关键剧情节点，通过 custom.current_storyline_id 切换剧情线（如切换攻略对象）"""
+
+
 
 
 
@@ -97,370 +231,40 @@ TOTAL_SYSTEM_MAX_CHARS = _TOTAL_SYSTEM_MAX_CHARS
 expand_bundle_macros = _expand_bundle_macros
 
 
-def _clip(text: str, max_chars: int, label: str = "") -> str:
-    """截断超长文本并加提示。"""
-    text = text.strip()
-    if len(text) > max_chars:
-        text = text[:max_chars].rstrip() + "\n…（内容已截断）"
-    return text
-
-
-def _build_single_system_prompt(
-    primary_system: str,
-    layers: list[tuple[str, str]],
-    total_max: int = _TOTAL_SYSTEM_MAX_CHARS,
-    budget: "TokenBudget | None" = None,
-) -> str:
-    """把主系统提示 + 各分层内容合并成一条 system message。
-
-    说明：
-    - MiniMax API（以及部分其他 API）只允许 messages 里有一条 role=system 的条目。
-    - 我们原来按层各自 append system，会产生多条 system，导致 400 bad request。
-    - 这里统一做合并：主 prompt 在前，各层用标题+内容追加，最后整体截断。
-
-    参数：
-        budget — TokenBudget 实例（可选）。传入时，total_max / 单层上限均从 budget 派生，
-                 忽略 total_max 参数默认值。不传则行为与原先完全一致（向下兼容）。
-    """
-    if budget is not None:
-        # 从 budget 派生各上限，忽略调用方传入的 total_max 默认值
-        effective_total_max   = budget.system_max_chars()
-        effective_primary_max = budget.primary_system_max_chars()
-        effective_layer_max   = budget.single_layer_max_chars()
-    else:
-        effective_total_max   = total_max
-        effective_primary_max = _PRIMARY_SYSTEM_MAX_CHARS
-        effective_layer_max   = _LAYER_MAX_CHARS
-
-    parts: list[str] = []
-    if primary_system.strip():
-        parts.append(_clip(primary_system, effective_primary_max))
-    for title, content in layers:
-        text = _clip(content, effective_layer_max) if content.strip() else ""
-        if text:
-            parts.append(f"{title}\n{text}" if title else text)
-    combined = "\n\n".join(parts)
-    if len(combined) > effective_total_max:
-        combined = combined[:effective_total_max].rstrip() + "\n…（内容已截断）"
-    return combined
-
-
-def _related_assets_text(runtime_bundle: dict[str, Any]) -> str:
-    """把关联资产列表格式化为可嵌入 system 的文本，不存在则返回空串。"""
-    related_assets = runtime_bundle.get("related_assets") or []
-    if not related_assets:
-        return ""
-    lines = [f"- {item['asset_type']}: {item['name']}" for item in related_assets if item.get("name")]
-    return "【当前已激活的关联资产】\n" + "\n".join(lines) if lines else ""
-
-
-def _alternate_samples_text(alternates: Any) -> str:
-    """把备用开场列表格式化为可嵌入 system 的文本。"""
-    if not isinstance(alternates, list) or not alternates:
-        return ""
-    sample = "\n\n".join(str(item).strip() for item in alternates[:2] if str(item).strip())
-    return f"【可用开场/剧情片段参考】\n{sample}" if sample else ""
-
-
-def _split_last_user_message(
-    recent_messages: list[dict[str, str]],
-) -> tuple[list[dict[str, str]], dict[str, str] | None]:
-    """把最近消息里的最后一条用户消息剥出来，单独返回。
-
-    目的：让 post_history_instructions 可以插在「历史末尾、当前用户消息之前」，
-    与 SillyTavern 的注入行为保持一致。
-    如果最后一条不是 user 消息（理论上不应该发生，但做兜底），则不拆分。
-    """
-    if recent_messages and recent_messages[-1].get("role") == "user":
-        return list(recent_messages[:-1]), recent_messages[-1]
-    return list(recent_messages), None
-
-
-
-def _world_info_layer_pairs(runtime_bundle: dict[str, Any]) -> tuple[list[tuple[str, str]], str, str]:
-    wi_before = (runtime_bundle.get("world_info_before") or "").strip()
-    wi_after = (runtime_bundle.get("world_info_after") or "").strip()
-    layer_pairs: list[tuple[str, str]] = []
-    if wi_before:
-        layer_pairs.append(("【世界信息-前置】", wi_before))
-    return layer_pairs, wi_before, wi_after
-
-
-
-def _append_runtime_text_layers(
-    layer_pairs: list[tuple[str, str]],
-    sections: list[tuple[str, str]],
-) -> list[tuple[str, str]]:
-    for title, content in sections:
-        if title and not content:
-            if title.strip():
-                layer_pairs.append(("", title))
-        elif content:
-            layer_pairs.append((title, content))
-    return layer_pairs
-
-
-
-def _append_runtime_tail(
-    messages: list[dict[str, str]],
-    *,
-    memory_summary: str,
-    history: list[dict[str, str]],
-    recent_message_window: int,
-    depth_prompt: dict | None,
-    post_history_rules: str,
-    last_user_msg: dict[str, str] | None,
-    budget: "TokenBudget | None" = None,
-) -> list[dict[str, str]]:
-    _append_memory_and_history(
-        messages,
-        memory_summary,
-        history,
-        recent_message_window,
-        depth_prompt=depth_prompt,
-        budget=budget,
-    )
-    _append_post_history_then_user(messages, post_history_rules, last_user_msg, budget=budget)
-    return messages
-
-
-
-def _append_world_info_after(layer_pairs: list[tuple[str, str]], wi_after: str) -> list[tuple[str, str]]:
-    if wi_after:
-        layer_pairs.append(("【世界信息-后置】", wi_after))
-    return layer_pairs
-
-
-
-def _mode_sections(runtime_bundle: dict[str, Any], character: Any, mode: str) -> list[tuple[str, str]]:
-    base_profile = runtime_bundle.get("base_profile") or _get_field(character, "description", "")
-    examples = runtime_bundle.get("examples") or ""
-    world_rules = runtime_bundle.get("world_rules") or ""
-    scenario = runtime_bundle.get("scenario") or ""
-    personality = runtime_bundle.get("personality") or ""
-    alternate_text = _alternate_samples_text(runtime_bundle.get("alternate_greetings") or [])
-    related_text = _related_assets_text(runtime_bundle)
-
-    if mode == "character":
-        sections = [
-            (related_text, ""),
-            ("【角色底稿】", base_profile),
-            ("【性格与表达风格】", personality),
-            ("【当前关系与场景】", scenario),
-            ("【世界规则/补充设定】", world_rules),
-            ("【示例对话风格参考】", examples),
-            ("【备用开场参考】", alternate_text),
-        ]
-    elif mode == "system":
-        sections = []
-        if related_text:
-            sections.append(("", related_text))
-        sections.extend([
-            ("【核心系统设定】", base_profile),
-            ("【世界规则/补充设定】", world_rules),
-            ("【当前剧情场景】", scenario),
-            ("【示例对话风格参考】", examples),
-        ])
-        if alternate_text:
-            sections.append(("", alternate_text))
-    elif mode == "scenario":
-        sections = []
-        if related_text:
-            sections.append(("", related_text))
-        sections.extend([
-            ("【剧情入口/背景】", base_profile),
-            ("【当前剧情场景】", scenario),
-            ("【世界规则/补充设定】", world_rules),
-            ("【示例对话风格参考】", examples),
-        ])
-        if alternate_text:
-            sections.append(("", alternate_text))
-    else:
-        sections = []
-        if related_text:
-            sections.append(("", related_text))
-        sections.extend([
-            ("【角色底稿】", base_profile),
-            ("【性格与表达风格】", personality),
-            ("【当前关系与剧情场景】", scenario),
-            ("【世界规则/补充设定】", world_rules),
-            ("【示例对话风格参考】", examples),
-        ])
-        if alternate_text:
-            sections.append(("", alternate_text))
-    return sections
-
-
-
-def _build_mode_messages(
-    runtime_bundle: dict[str, Any],
-    character: Any,
-    recent_messages: list[dict[str, str]],
-    memory_summary: str,
-    recent_message_window: int,
-    *,
-    mode: str,
-    budget: "TokenBudget | None" = None,
-) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
-    depth_prompt = runtime_bundle.get("depth_prompt")
-    history, last_user_msg = _split_last_user_message(recent_messages)
-
-    layer_pairs, _, wi_after = _world_info_layer_pairs(runtime_bundle)
-    layer_pairs = _append_runtime_text_layers(
-        layer_pairs,
-        _mode_sections(runtime_bundle, character, mode),
-    )
-    layer_pairs = _append_world_info_after(layer_pairs, wi_after)
-
-    primary = runtime_bundle.get("primary_system_prompt") or _get_field(character, "system_prompt", "")
-    system_text = _build_single_system_prompt(primary, layer_pairs, budget=budget)
-    if system_text:
-        messages.append({"role": "system", "content": system_text})
-
-    return _append_runtime_tail(
-        messages,
-        memory_summary=memory_summary,
-        history=history,
-        recent_message_window=recent_message_window,
-        depth_prompt=depth_prompt,
-        post_history_rules=runtime_bundle.get("post_history_rules") or "",
-        last_user_msg=last_user_msg,
-        budget=budget,
-    )
-
-
-
-def _append_memory_and_history(
-    messages: list[dict[str, str]],
-    memory_summary: str,
-    recent_messages: list[dict[str, str]],
-    recent_message_window: int,
-    depth_prompt: dict | None = None,
-    budget: "TokenBudget | None" = None,
-) -> None:
-    """把长期记忆摘要 + 最近历史消息追加到 messages。
-
-    升级策略（Token 预算贪心）：
-    - 若传入 budget，则用 token 预算（而非固定条数）决定保留多少历史。
-      从最新消息往前贪心填充，预算耗尽即停，保留"最近且有价值"的对话。
-    - 不传 budget 时行为与原先完全一致（向下兼容）。
-
-    注意：memory_summary 用 user role 包装（而不是 assistant），
-    避免模型将记忆内容误认为是"自己之前说过的话"。
-    明确标注这是"关于用户的信息"，让模型正确理解上下文。
-    """
-    # ── 1. 长期记忆摘要 ─────────────────────────────────────────
-    if memory_summary:
-        mem_text = memory_summary
-        if budget is not None:
-            mem_text = _clip(mem_text, budget.memory_max_chars())
-        # 使用 user role 包装记忆摘要，避免模型混淆主语
-        # 明确标注这是"关于用户的信息"，让模型正确理解上下文
-        messages.append({
-            "role": "user",
-            "content": f"【系统提示：以下是关于用户的长期记忆，请结合这些背景信息进行回复】\n\n{mem_text}"
-        })
-
-    # ── 2. 历史消息：决定保留窗口 ──────────────────────────────
-    # 先按 recent_message_window 取候选集（兜底，保证不超过窗口设置）
-    candidate = recent_messages[-recent_message_window:]
-
-    if budget is not None:
-        # Token 预算贪心：从新到旧逆序遍历，用完预算截止
-        history_budget_chars = budget.history_max_chars()
-        used_chars = 0
-        kept: list[dict[str, str]] = []
-        for msg in reversed(candidate):
-            content = msg.get("content", "")
-            msg_chars = len(content) + 8   # +8 模拟 role 标签开销
-            if used_chars + msg_chars > history_budget_chars and kept:
-                # 预算用完，且至少已保留 1 条（保证不空手）
-                break
-            kept.append(msg)
-            used_chars += msg_chars
-        window = list(reversed(kept))  # 恢复时间顺序
-    else:
-        window = list(candidate)
-
-    # ── 3. 处理 depth_prompt 深度插入 ─────────────────────────
-    if depth_prompt and isinstance(depth_prompt, dict):
-        dp_text = (depth_prompt.get("prompt") or "").strip()
-        dp_depth = depth_prompt.get("depth") or 0
-        # depth_prompt 的 role 如果是 system 改为 user，避免多条 system
-        dp_role = depth_prompt.get("role") or "user"
-        if dp_role == "system":
-            dp_role = "user"
-
-        if dp_text and isinstance(dp_depth, int) and dp_depth > 0 and len(window) > 0:
-            insert_pos = max(0, len(window) - dp_depth)
-            window = list(window[:insert_pos]) + [{"role": dp_role, "content": dp_text}] + list(window[insert_pos:])
-
-    messages.extend(window)
-
-
-def _append_post_history_then_user(
-    messages: list[dict[str, str]],
-    post_history_rules: str,
-    last_user_message: dict[str, str] | None,
-    budget: "TokenBudget | None" = None,
-) -> None:
-    """先追加 post_history_rules（以 user 角色注入），再追加当前用户消息（如果有）。
-
-    使用 user role 而非 system role，以兼容只允许单条 system 的 API（如 MiniMax）。
-
-    升级：传入 budget 时，post_history_rules 的截断上限来自 budget.reserve_max_chars()，
-    而非硬编码的 _LAYER_MAX_CHARS，确保关键指令不被过度压缩。
-    """
-    if post_history_rules:
-        text = post_history_rules.strip()
-        if text:
-            max_chars = budget.reserve_max_chars() if budget is not None else _LAYER_MAX_CHARS
-            if len(text) > max_chars:
-                text = text[:max_chars].rstrip() + "\n…（内容已截断）"
-            messages.append({"role": "user", "content": f"【回复规则提醒】{text}"})
-    if last_user_message:
-        messages.append(last_user_message)
-
-
+# 模式构建器（通过 prompt_builder 创建，传入 _SCENARIO_DEFAULT_SYSTEM_PROMPT）
 def _make_mode_builder(mode: str) -> Callable[..., list[dict[str, str]]]:
-    """工厂：为指定 mode 创建构建函数，消除 4 个仅 mode 参数不同的重复函数。"""
-    def builder(
-        runtime_bundle: dict[str, Any],
-        character: Any,
-        recent_messages: list[dict[str, str]],
-        memory_summary: str,
-        recent_message_window: int,
-        budget: "TokenBudget | None" = None,
-    ) -> list[dict[str, str]]:
-        return _build_mode_messages(
-            runtime_bundle, character, recent_messages, memory_summary,
-            recent_message_window, mode=mode, budget=budget,
-        )
-    builder.__name__ = f"_build_{mode}_mode_messages"
-    return builder
+    return _pb_make_mode_builder(mode, _SCENARIO_DEFAULT_SYSTEM_PROMPT if mode == "scenario" else "")
+
+def _get_scenario_system_prompt(character: Any) -> str:
+    """根据角色卡的 scenario_type 返回对应的 System Prompt"""
+    # 从 affection_rules_json 中读取 scenario_type
+    try:
+        rules_json = _get_field(character, "affection_rules_json", {})
+        if isinstance(rules_json, str):
+            from utils.json_utils import parse_json_object
+            rules_json = parse_json_object(rules_json, fallback={})
+        scenario_type = rules_json.get("scenario_type", "adventure")
+
+        if scenario_type == "romance":
+            return _ROMANCE_SCENARIO_SYSTEM_PROMPT
+        else:
+            return _SCENARIO_DEFAULT_SYSTEM_PROMPT
+    except Exception:
+        return _SCENARIO_DEFAULT_SYSTEM_PROMPT
 
 
-# 模式构建器：每种 mode 仅调用 _build_mode_messages 时传入不同 mode 参数
 _build_character_mode_messages = _make_mode_builder("character")
-_build_system_mode_messages = _make_mode_builder("system")
 _build_scenario_mode_messages = _make_mode_builder("scenario")
 _build_hybrid_mode_messages = _make_mode_builder("hybrid")
 
 
-
 def _select_mode_builder(card_type: str, asset_type: str) -> Callable[..., list[dict[str, str]]]:
-    if card_type == "scenario":
-        return _build_scenario_mode_messages
-    if card_type == "world":
-        return _build_system_mode_messages
-    if asset_type == "character":
-        return _build_character_mode_messages
-    if asset_type == "scenario":
-        return _build_scenario_mode_messages
-    if asset_type in {"world", "system"}:
-        return _build_system_mode_messages
-    return _build_hybrid_mode_messages
+    return _pb_select_mode_builder(
+        card_type, asset_type,
+        character_builder=_build_character_mode_messages,
+        scenario_builder=_build_scenario_mode_messages,
+        hybrid_builder=_build_hybrid_mode_messages,
+    )
 
 
 
@@ -546,16 +350,16 @@ def build_layered_chat_messages(
     character_state: dict | None = None,
     budget: "TokenBudget | None" = None,
     conn: ConnType | None = None,
+    last_chat_time: str | None = None,
+    user_id: int | str | None = None,
 ) -> list[dict[str, str]]:
     """按资产类型 + 产品卡类型把主资产、关联资产、长期记忆和最近消息装配成最终 messages。
 
     两层路由：
-    ① asset_type（导卡层）: character / hybrid / scenario / world / system
-    ② card_type（产品层）: intimate(对话陪伴) / scenario(剧情沙盒) / world(世界探索) / divination(占卜形象)
+    ① asset_type（导卡层）: character / hybrid / scenario
+    ② card_type（产品层）: intimate(对话陪伴) / scenario(剧情沙盒)
        当 card_type 有明确产品语义时，优先按 card_type 覆盖 builder 选择：
          - card_type=scenario    → 强制走 _build_scenario_mode_messages（旁白/NPC/分支剧情）
-         - card_type=world       → 强制走 _build_system_mode_messages（纯知识库注入，无角色）
-         - card_type=divination  → 同 intimate，走 asset_type 原路由
          - card_type=intimate    → 按 asset_type 原路由（保持现有行为）
 
     user_name：当前用户的显示名（用于替换 {{user}} 宏），可选。
@@ -574,10 +378,36 @@ def build_layered_chat_messages(
     # 对 bundle 内所有文本做一次宏展开（{{char}} → 角色名，{{user}} → 用户名）
     runtime_bundle = _expand_bundle_macros(runtime_bundle, char_name=char_name, user_name=user_name)
 
+    # ── 人生档案注入 ──────────────────────────────────────────────────────
+    # 将角色的人生档案（life_profile_json）注入到 world_info_after
+    # 优先级：状态快照 > 人生档案 > 情感锚点 > 普通世界书
+    life_profile = parse_json_object(_get_field(character, "life_profile_json", "{}"), fallback={})
+    if life_profile and any(life_profile.values()):
+        profile_lines = ["【角色人生档案】"]
+        if life_profile.get("basic_info"):
+            profile_lines.append(life_profile["basic_info"])
+        if life_profile.get("childhood"):
+            profile_lines.append(f"\n童年经历：\n{life_profile['childhood']}")
+        if life_profile.get("family"):
+            profile_lines.append(f"\n家庭背景：\n{life_profile['family']}")
+        if life_profile.get("work"):
+            profile_lines.append(f"\n工作经历：\n{life_profile['work']}")
+        if life_profile.get("personality"):
+            profile_lines.append(f"\n性格特点：\n{life_profile['personality']}")
+        if life_profile.get("habits"):
+            profile_lines.append(f"\n生活习惯：\n{life_profile['habits']}")
+        if life_profile.get("important_events"):
+            profile_lines.append(f"\n重要经历：\n{life_profile['important_events']}")
+
+        profile_text = "\n".join(profile_lines)
+        # 注入到 world_info_after，优先级仅次于状态快照
+        existing_after = runtime_bundle.get("world_info_after") or ""
+        runtime_bundle["world_info_after"] = (profile_text + "\n\n" + existing_after).strip() if existing_after else profile_text
+
     # ── World Info 动态触发 ──────────────────────────────────────────────
     # 用最新用户消息 + 最近几条对话作为匹配上下文
     # 触发到的词条追加到 world_info_before / world_info_after
-    
+
     # 构建用于关键词匹配的上下文文本（最近消息末尾几条）
     ctx_messages = recent_messages[-(RECENT_MESSAGE_WINDOW):] if recent_messages else []
     ctx_text = " ".join(
@@ -587,15 +417,31 @@ def build_layered_chat_messages(
     # 1. 从数据库查询记忆条目（新的角色配置系统）
     char_id = _get_field(character, "id", "")
     _b = _budget or _DEFAULT_BUDGET
+    # sticky/cooldown 状态从 character_state 的 custom_vars 中读取
+    _custom_vars = (character_state or {}).get("custom_vars") or {}
+    _wi_sticky = _custom_vars.get("_wi_sticky") or {}
+    _wi_cooldown = _custom_vars.get("_wi_cooldown") or {}
     if conn is not None:
-        db_before, db_after = fetch_character_memories(
+        # 获取当前剧情线 ID
+        current_storyline_id = (character_state or {}).get("storyline_id")
+        db_before, db_after, new_sticky, new_cooldown = fetch_character_memories(
             conn, char_id, ctx_text,
             max_triggered=_wi_max_triggered(_budget),
             max_per_entry=_wi_max_chars_per_entry(_budget),
             wi_max=_b.wi_max_chars(),
+            sticky_state=_wi_sticky,
+            cooldown_state=_wi_cooldown,
+            current_storyline_id=current_storyline_id,
         )
     else:
         db_before, db_after = [], []
+        new_sticky, new_cooldown = {}, {}
+    # 将新的 sticky/cooldown 状态写回 character_state 的 custom_vars（引用传递，调用方可感知）
+    if character_state is not None:
+        cv = dict(character_state.get("custom_vars") or {})
+        cv["_wi_sticky"] = new_sticky
+        cv["_wi_cooldown"] = new_cooldown
+        character_state["custom_vars"] = cv
     
     # 2. 从角色卡解析的 conditional_entries（兼容旧的角色卡导入）
     conditional_entries = runtime_bundle.get("conditional_entries") or []
@@ -617,7 +463,7 @@ def build_layered_chat_messages(
         返回 (合并后的文本, 实际使用的字符数)
         """
         parts = [existing] if existing else []
-        used = 0
+        used = len(existing) if existing else 0  # 已有内容也计入预算
         for item in new_items:
             item_chars = len(item)
             if used + item_chars > remaining_budget:
@@ -627,12 +473,16 @@ def build_layered_chat_messages(
         return "\n\n".join(parts).strip(), used
 
     # 先处理角色卡的 World Info（优先）
-    # 注意：必须按顺序追加并获取实际使用量，而不是预先计算
+    # P8: 当数据库有匹配条目时，为 DB WI 保底 30% 的 wi_max 预算
+    # 避免角色卡 WI 用完全部预算导致数据库动态知识被完全排挤
+    db_reserve_ratio = 0.3
+    has_db_entries = bool(db_before or db_after)
+    card_wi_budget = int(wi_max * (1 - db_reserve_ratio)) if has_db_entries else wi_max
     
     # 处理 card_before
     if card_before:
         merged_before, card_before_used = _safe_wi_append(
-            runtime_bundle.get("world_info_before") or "", card_before, wi_max
+            runtime_bundle.get("world_info_before") or "", card_before, card_wi_budget
         )
         runtime_bundle["world_info_before"] = merged_before
     else:
@@ -641,7 +491,7 @@ def build_layered_chat_messages(
     # 处理 card_after
     if card_after:
         merged_after, card_after_used = _safe_wi_append(
-            runtime_bundle.get("world_info_after") or "", card_after, wi_max
+            runtime_bundle.get("world_info_after") or "", card_after, card_wi_budget
         )
         runtime_bundle["world_info_after"] = merged_after
     else:
@@ -687,25 +537,120 @@ def build_layered_chat_messages(
     # ── 关系状态快照注入 ──────────────────────────────────────────────────
     # 将当前好感度/阶段/心情以紧凑文本注入到 world_info_after（放在设定末尾，
     # 让 AI 每轮都能看到"当前关系快照"，并据此决定是否输出 [STATE_UPDATE]）。
-    if character_state:
+    # 禁用好感度的角色卡不注入状态快照和 STATE_UPDATE 指令，
+    # 节省 token 并避免 AI 输出无用标签。
+    _affection_enabled = True
+    if conn is not None and character_state:
+        _affection_enabled = _check_affection(conn, char_id)
+
+    if character_state and _affection_enabled:
         affection = character_state.get("affection", 30)
         phase = character_state.get("story_phase", "stranger")
         mood = character_state.get("mood", "neutral")
-        phase_label = STORY_PHASE_LABELS.get(phase, phase)
-        mood_label = MOOD_LABELS.get(mood, mood)
         custom_vars = character_state.get("custom_vars") or {}
 
-        state_lines = [
-            "【当前关系状态（每轮自动更新）】",
-            f"- 好感度：{affection}/100",
-            f"- 关系阶段：{phase_label}（{phase}）",
-            f"- 当前心情：{mood_label}（{mood}）",
-        ]
+        # 读取角色卡自定义阶段行为
+        phase_behaviors = parse_json_object(_get_field(character, "phase_behaviors_json", ""), fallback={})
+
+        # 根据 card_type 选择标签映射和 STATE_UPDATE 指令
+        if card_type == "scenario":
+            phase_label = SCENARIO_PHASE_LABELS.get(phase, phase)
+            mood_label = SCENARIO_MOOD_LABELS.get(mood, mood)
+            update_instruction = _SCENARIO_STATE_UPDATE_INSTRUCTION
+            tendency = _get_behavior_tendency(phase, mood, card_type="scenario", phase_behaviors=phase_behaviors)
+            state_lines = [
+                "【当前剧情状态（每轮自动更新）】",
+                f"- 剧情沉浸度：{affection}/100",
+                f"- 剧情阶段：{phase_label}（{phase}）",
+                f"- 当前氛围：{mood_label}（{mood}）",
+            ]
+        else:
+            phase_label = STORY_PHASE_LABELS.get(phase, phase)
+            mood_label = MOOD_LABELS.get(mood, mood)
+            update_instruction = _STATE_UPDATE_INSTRUCTION
+            tendency = _get_behavior_tendency(phase, mood, phase_behaviors=phase_behaviors)
+            state_lines = [
+                "【当前关系状态（每轮自动更新）】",
+                f"- 好感度：{affection}/100",
+                f"- 关系阶段：{phase_label}（{phase}）",
+                f"- 当前心情：{mood_label}（{mood}）",
+            ]
+        if tendency:
+            state_lines.append(f"- 行为倾向：{tendency}")
+
+        # 当前剧情线名称显示（从 character_state 的 storyline_id 查询名称）
+        storyline_id = character_state.get("storyline_id") if character_state else None
+        if storyline_id and conn is not None:
+            try:
+                sl_row = conn.execute(
+                    "SELECT name FROM character_storylines WHERE id = %s",
+                    (storyline_id,),
+                ).fetchone()
+                if sl_row and sl_row["name"]:
+                    state_lines.append(f"- 当前剧情线：{sl_row['name']}")
+
+                # 剧情回顾：显示最近触发的 3 个剧情事件（仅 scenario 卡）
+                if card_type == "scenario" and user_id:
+                    try:
+                        progress_row = conn.execute(
+                            "SELECT triggered_event_ids FROM user_story_progress WHERE user_id = %s AND character_id = %s",
+                            (user_id, char_id)
+                        ).fetchone()
+                        if progress_row and progress_row["triggered_event_ids"]:
+                            event_ids = [int(x.strip()) for x in str(progress_row["triggered_event_ids"]).split(",") if x.strip().isdigit()]
+                            if event_ids:
+                                recent_ids = event_ids[-3:]  # 最近 3 个
+                                placeholders = ",".join(["%s"] * len(recent_ids))
+                                recent_events = conn.execute(
+                                    f"SELECT title FROM story_events WHERE id IN ({placeholders}) ORDER BY id DESC",
+                                    tuple(recent_ids)
+                                ).fetchall()
+                                if recent_events:
+                                    titles = [e["title"] for e in recent_events if e["title"]]
+                                    if titles:
+                                        state_lines.append(f"- 最近剧情：{' → '.join(titles)}")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # 时间感知（Step 5 优化版）
+        _tz_offset = 8  # UTC+8 中国时区
+        _now = datetime.now(timezone(timedelta(hours=_tz_offset)))
+        _h = _now.hour
+        if _h < 5: _time_desc = "深夜"
+        elif _h < 8: _time_desc = "清晨"
+        elif _h < 12: _time_desc = "上午"
+        elif _h < 14: _time_desc = "中午"
+        elif _h < 18: _time_desc = "下午"
+        elif _h < 20: _time_desc = "傍晚"
+        else: _time_desc = "晚上"
+        _date_desc = "周末" if _now.weekday() >= 5 else "工作日"
+        # 关键修改：时间作为背景信息，不鼓励AI主动提及
+        state_lines.append(f"- 当前时间：{_date_desc}{_time_desc}（背景信息，不要主动提及时间，除非用户话题涉及）")
+
+        # 自定义变量展示（Step 4：过滤内部变量）
         if custom_vars:
-            for k, v in list(custom_vars.items())[:5]:  # 最多显示5个自定义变量
+            for k, v in list(custom_vars.items())[:5]:
+                if k.startswith("_"):  # 跳过内部变量（_shared_moments, _wi_sticky 等）
+                    continue
                 state_lines.append(f"- {k}：{v}")
 
-        state_lines.extend(_STATE_UPDATE_INSTRUCTION)
+        # 注入待处理剧情事件（Optimization A：story_event 的 event_content 下一轮注入后清空）
+        pending_events = custom_vars.get("_pending_events") or []
+        if pending_events:
+            for pe in pending_events[:2]:  # 最多注入2个，避免占太多token
+                title = pe.get("title", "剧情事件")
+                content = pe.get("event_content", "")
+                if content:
+                    state_lines.append(f"- 【触发剧情事件：{title}】{content[:100]}")
+
+        # 沉默轮数提醒：连续3轮AI未上报事件时注入提醒（优化版）
+        silent_rounds = int(custom_vars.get("_silent_rounds") or 0)
+        if silent_rounds >= 3:
+            state_lines.append(f"- 💡 提示：已连续{silent_rounds}轮未记录互动，如本轮有值得记录的内容可补充上报")
+
+        state_lines.extend(update_instruction)
 
         state_snapshot = "\n".join(state_lines)
         # 状态快照字数保护：上限为 WI 预算的 15%，但保证至少 1000 字符
@@ -715,8 +660,55 @@ def build_layered_chat_messages(
             # 优先截断自定义变量部分，保留核心状态信息
             truncated_lines = state_lines[:6]  # 保留标题和核心状态（好感度、阶段、心情）
             truncated_lines.append("…（自定义变量已省略）")
-            truncated_lines.extend(_STATE_UPDATE_INSTRUCTION)  # 保留指令部分
+            truncated_lines.extend(update_instruction)  # 保留指令部分
             state_snapshot = "\n".join(truncated_lines)
+
+        # ── 情感锚点 & 主动回忆注入（Steps 3 & 8）──────────────────
+        shared_moments = list(custom_vars.get("_shared_moments") or [])
+        proactive_cared = False  # 标记是否已触发主动关心（避免和通用锚点重复）
+
+        # 主动回忆：久未聊天时注入背景提示（Step 8 优化版）
+        if shared_moments and last_chat_time:
+            try:
+                last_dt = datetime.fromisoformat(str(last_chat_time))
+                hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+                if hours_since >= 24:
+                    anchor = random.choice(shared_moments[-5:])
+                    if card_type == "scenario":
+                        proactive_text = (
+                            f"【剧情回响】距离上一次互动已过去较长时间（{int(hours_since)}小时）。回忆起「{anchor}」，"
+                            f"如果用户的问题与此相关，可以自然地引入这段经历。"
+                        )
+                    else:
+                        # 关键修改：不强制"好久不见"，而是作为背景信息让AI自主判断
+                        proactive_text = (
+                            f"【背景提示】你已经很久没和用户聊天了（{int(hours_since)}小时）。想起「{anchor}」，你有点想念对方。"
+                            f"但不要生硬地打断用户的问题——如果用户问了具体问题，先认真回答；"
+                            f"如果用户只是打招呼或闲聊，可以自然地表达想念，如\"好久不见，最近怎么样？\"或\"想起{anchor}，就想和你聊聊\"。"
+                        )
+                    existing_after = runtime_bundle.get("world_info_after") or ""
+                    runtime_bundle["world_info_after"] = (proactive_text + "\n\n" + existing_after).strip()
+                    proactive_cared = True
+            except (ValueError, TypeError):
+                pass
+
+        # 情感锚点：从共同时刻中随机选一条注入（Step 3 优化版）
+        if shared_moments and not proactive_cared:
+            candidates = shared_moments[-5:]  # 从最近5条中选，保证新鲜度
+            anchor = random.choice(candidates)
+            if card_type == "scenario":
+                anchor_text = (
+                    f"【共同回忆】{anchor}"
+                    f"（这段经历是你和用户之间的纽带，不需要刻意提及，但会影响你此刻的态度和情感色彩）"
+                )
+            else:
+                # 关键修改：情感锚点作为背景情绪，不鼓励主动提起
+                anchor_text = (
+                    f"【共同回忆】{anchor}"
+                    f"（这是你和用户的共同回忆，会影响你此刻的情感基调。只有当话题自然关联时才提起，不要为了提起而提起）"
+                )
+            existing_after = runtime_bundle.get("world_info_after") or ""
+            runtime_bundle["world_info_after"] = (anchor_text + "\n\n" + existing_after).strip()
         
         # 状态快照优先级最高：放在 world_info_after 的最前面
         # 这样即使 world_info_after 被截断，状态快照也能保留

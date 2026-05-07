@@ -16,11 +16,11 @@ from core.schemas import (
     AdminUserEditPayload,
     AdminBatchPlanPayload,
 )
-from services.plan_service import plan_display_name, serialize_plan_info
+from core.plan_constants import plan_display_name, serialize_plan_info
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
-from ._shared import (
+from ._helpers import (
     _ADMIN_EDITABLE_FIELDS,
     _build_where_clause,
     _count_with_where,

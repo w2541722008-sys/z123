@@ -32,6 +32,7 @@ class TestAdminMemories:
                 "id": 1, "keywords": "关键词", "trigger_logic": "any",
                 "content": "内容", "category_id": None, "position": "before",
                 "priority": 100, "is_active": 1, "comment": "",
+                "selective": 1, "constant": 0, "sticky": 0, "cooldown": 0,
                 "created_at": "2026-01-01T00:00:00+00:00",
                 "updated_at": "2026-01-01T00:00:00+00:00",
             }]),
@@ -194,7 +195,8 @@ class TestAdminStorylines:
         conn = FakeSequenceConn([
             FakeQueryResult(one={"id": "luna"}),
             FakeQueryResult(many=[{
-                "id": 1, "name": "主线", "description": "",
+                "id": 1, "storyline_id": "main", "title": "主线", "name": "主线",
+                "description": "", "unlock_condition": None, "stages": [],
                 "unlock_score": 0, "is_default": 1, "is_active": 1, "sort_order": 0,
                 "created_at": "2026-01-01T00:00:00+00:00",
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -280,6 +282,7 @@ class TestAdminStoryEvents:
             FakeQueryResult(one={"id": "luna"}),
             FakeQueryResult(many=[{
                 "id": 1, "title": "事件1", "description": "", "trigger_score": 50,
+                "trigger_custom_key": "",
                 "unlocked_memory_ids": "", "unlocked_greeting_ids": "",
                 "unlocked_storyline_id": None, "event_content": "",
                 "sort_order": 0, "is_active": 1,

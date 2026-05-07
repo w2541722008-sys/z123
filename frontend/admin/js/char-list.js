@@ -18,8 +18,9 @@ function renderCharListSidebar() {
     container.innerHTML = '<div class="empty-state"><div>无匹配角色</div></div>';
     return;
   }
+  const typeMap = { intimate: '💞对话陪伴', scenario: '🎭剧情沙盒' };
   container.innerHTML = chars.map(c => {
-    const typeBadge = { intimate: '💞对话陪伴', scenario: '🎭剧情沙盒', world: '🌐世界探索', divination: '🔮占卜形象' }[c.card_type] || c.card_type;
+    const typeBadge = typeMap[c.card_type] || c.card_type;
     const typeCls = `badge badge-${c.card_type || 'intimate'}`;
     const planBadge = c.required_plan && c.required_plan !== 'guest'
       ? `<span class="badge badge-${c.required_plan}">${formatPlanLabel(c.required_plan)}</span>`
@@ -33,7 +34,6 @@ function renderCharListSidebar() {
         <span class="${typeCls}">${typeBadge}</span>
         ${planBadge}
         ${visBadge}
-        <span style="color:#555">序${c.sort_order ?? 0} · 广场${c.home_priority ?? 0}</span>
       </div>
     </div>`;
   }).join('');
@@ -53,7 +53,7 @@ async function loadCharList() {
     }
     renderCharListSidebar();
   } catch (e) {
-    container.innerHTML = `<div class="empty-state" style="color:#f87171">加载失败：${escHtml(e.message)}</div>`;
+    container.innerHTML = `<div class="empty-state" style="color:var(--danger-light)">加载失败：${escHtml(e.message)}</div>`;
   }
 }
 
@@ -62,17 +62,14 @@ async function selectChar(charId) {
   document.querySelectorAll('.char-item').forEach(el => {
     el.classList.toggle('active', el.dataset.charId === String(charId));
   });
-  switchTab('edit');
-
+  document.getElementById('char-tabs').style.display = 'flex';
   const fab = document.getElementById('fab-save');
   const fabLabel = document.getElementById('fab-label');
   fab.style.display = 'flex';
   fabLabel.textContent = '保存';
-  fabLabel.style.color = '#c084fc';
-
-  const panel = document.getElementById('tab-edit');
-  panel.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><div>加载中...</div></div>';
-
+  switchCharTab('overview');
+  const overviewPanel = document.getElementById('tab-overview');
+  overviewPanel.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><div>加载中...</div></div>';
   try {
     const raw = await AdminAPI.apiFetch(`${AdminAPI.API}/character/${charId}`);
     const normalized = normalizeCharacterDetail(raw);
@@ -81,7 +78,7 @@ async function selectChar(charId) {
     loadCharacterSummary();
     loadPromptPreview();
   } catch (e) {
-    panel.innerHTML = `<div class="empty-state" style="color:#f87171">加载失败：${e.message}</div>`;
+    overviewPanel.innerHTML = `<div class="empty-state" style="color:var(--danger-light)">加载失败：${e.message}</div>`;
   }
 }
 
@@ -90,20 +87,16 @@ function clearCurrentCharacterSelection() {
   AdminState.currentCharData = null;
   AdminState.currentCharSummary = null;
   AdminState.currentPromptPreview = null;
-
   document.querySelectorAll('.char-item').forEach(el => el.classList.remove('active'));
-  document.getElementById('tab-edit').innerHTML = `
-    <div class="empty-state">
-      <div class="icon">👈</div>
-      <div>从左侧选择一个角色开始编辑</div>
-    </div>
-  `;
-  document.getElementById('advanced-empty').style.display = '';
-  document.getElementById('advanced-content').style.display = 'none';
+  document.getElementById('char-tabs').style.display = 'none';
+  CHAR_TABS.forEach(t => {
+    const el = document.getElementById(`tab-${t}`);
+    if (el) el.style.display = 'none';
+  });
+  document.getElementById('tab-overview').innerHTML = '<div class="empty-state"><div class="icon">👈</div><div>从左侧选择一个角色开始</div></div>';
+  document.getElementById('tab-overview').style.display = '';
   document.getElementById('prompt-preview-content').innerHTML = '<div class="preview-box muted">请先从左侧选择角色。</div>';
   renderCharacterOverview(null);
-
   const fab = document.getElementById('fab-save');
   if (fab) fab.style.display = 'none';
-  switchTab('edit');
 }

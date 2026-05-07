@@ -17,7 +17,7 @@ from services.character_state import get_character_state
 from services.chat_query import ensure_opening_message, get_character_or_404
 from utils.json_utils import parse_json_list, parse_json_object
 from services.cache_service import cache_get, cache_set
-from services.plan_service import (
+from core.plan_constants import (
     GUEST_PLAN,
     can_access_required_plan,
     normalize_required_plan,
@@ -91,7 +91,7 @@ def list_characters(user: CurrentUser | None = Depends(get_optional_user), conn:
 
     if cached_rows is None:
         cached_rows = char_repo.list_visible_characters(conn)
-        cache_set(cache_key, cached_rows, ttl=300)
+        cache_set(cache_key, cached_rows, ttl=3600)
 
     visible_rows = [
         row for row in cached_rows if can_access_required_plan(viewer_plan, row.get("required_plan", "guest"))
@@ -238,7 +238,20 @@ def get_character_state_api(
     _get_accessible_character(conn, character_id, user.effective_plan)
     state = get_character_state(conn, user.id, character_id)
     clean_state = {k: v for k, v in state.items() if not k.startswith("_")}
-    return {"state": clean_state}
+    # 从角色卡配置中提取 show_bar 偏好，供前端控制状态栏显隐
+    show_bar = True
+    try:
+        row = conn.execute(
+            "SELECT affection_rules_json FROM characters WHERE id = %s",
+            (character_id,),
+        ).fetchone()
+        if row and row["affection_rules_json"]:
+            rules = parse_json_object(row["affection_rules_json"], fallback={})
+            if "show_bar" in rules:
+                show_bar = bool(rules["show_bar"])
+    except Exception:
+        pass
+    return {"state": clean_state, "show_bar": show_bar}
 
 
 @router.post("/character/state/reset")

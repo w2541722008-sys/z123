@@ -1,31 +1,82 @@
-function switchTab(tab) {
-  document.querySelectorAll('.tab-btn').forEach(btn => {
+/**
+ * bootstrap.js - 启动绑定逻辑
+ * 重构版：5个角色标签 + 3个系统标签 + 顶栏导航 + ESC关闭弹窗
+ */
+
+// ============================================================
+// 标签切换
+// ============================================================
+const CHAR_TABS = ['overview', 'edit', 'worldinfo', 'story', 'preview'];
+const SYSTEM_TABS = ['dashboard', 'membership', 'auditlog'];
+
+function switchCharTab(tab) {
+  AdminState.currentCharTab = tab;
+  AdminState.currentSystemTab = null;
+
+  document.querySelectorAll('.char-tabs .tab-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
   });
-  document.getElementById('tab-edit').style.display = tab === 'edit' ? '' : 'none';
-  document.getElementById('tab-advanced').style.display = tab === 'advanced' ? '' : 'none';
-  document.getElementById('tab-preview').style.display = tab === 'preview' ? '' : 'none';
-  document.getElementById('tab-membership').style.display = tab === 'membership' ? '' : 'none';
-  document.getElementById('tab-dashboard').style.display = tab === 'dashboard' ? '' : 'none';
-  document.getElementById('tab-auditlog').style.display = tab === 'auditlog' ? '' : 'none';
+  document.querySelectorAll('.topbar-link').forEach(btn => btn.classList.remove('active'));
 
-  if (tab === 'advanced' && AdminState.currentCharId) {
-    loadAdvancedData();
-  }
-  if (tab === 'preview' && AdminState.currentCharId) {
-    loadPromptPreview();
-  }
-  if (tab === 'membership') {
-    loadMembershipData();
-  }
-  if (tab === 'dashboard') {
-    loadDashboard();
-  }
-  if (tab === 'auditlog') {
-    loadAuditLogs();
+  CHAR_TABS.forEach(t => {
+    const el = document.getElementById(`tab-${t}`);
+    if (el) el.style.display = t === tab ? '' : 'none';
+  });
+  SYSTEM_TABS.forEach(t => {
+    const el = document.getElementById(`tab-${t}`);
+    if (el) el.style.display = 'none';
+  });
+
+  if (tab === 'worldinfo' && AdminState.currentCharId) loadAdvancedData();
+  if (tab === 'story' && AdminState.currentCharId) loadAdvancedData();
+  if (tab === 'preview' && AdminState.currentCharId) loadPromptPreview();
+}
+
+function switchSystemTab(tab) {
+  AdminState.currentSystemTab = tab;
+
+  document.querySelectorAll('.topbar-link').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  document.querySelectorAll('.char-tabs .tab-btn').forEach(btn => btn.classList.remove('active'));
+
+  CHAR_TABS.forEach(t => {
+    const el = document.getElementById(`tab-${t}`);
+    if (el) el.style.display = 'none';
+  });
+  SYSTEM_TABS.forEach(t => {
+    const el = document.getElementById(`tab-${t}`);
+    if (el) el.style.display = t === tab ? '' : 'none';
+  });
+
+  if (tab === 'membership') loadMembershipData();
+  if (tab === 'dashboard') loadDashboard();
+  if (tab === 'auditlog') loadAuditLogs();
+}
+
+// ============================================================
+// 自定义确认弹窗
+// ============================================================
+function showConfirm(message, title = '确认操作') {
+  return new Promise((resolve) => {
+    document.getElementById('confirm-modal-title').textContent = title;
+    document.getElementById('confirm-modal-message').textContent = message;
+    document.getElementById('confirm-modal').style.display = 'flex';
+    AdminState.confirmResolver = resolve;
+  });
+}
+
+function closeConfirmModal(result = false) {
+  document.getElementById('confirm-modal').style.display = 'none';
+  if (AdminState.confirmResolver) {
+    AdminState.confirmResolver(result);
+    AdminState.confirmResolver = null;
   }
 }
 
+// ============================================================
+// 事件绑定
+// ============================================================
 function bindAdminDelegatedEvents(handlePrimaryAction) {
   document.addEventListener('click', (event) => {
     const actionTrigger = event.target.closest('[data-action]');
@@ -36,11 +87,11 @@ function bindAdminDelegatedEvents(handlePrimaryAction) {
         return;
       }
     }
-
-    const tabTrigger = event.target.closest('.tabs .tab-btn[data-tab]');
-    if (tabTrigger) {
+    const charTabTrigger = event.target.closest('.char-tabs .tab-btn[data-tab]');
+    if (charTabTrigger) {
       event.preventDefault();
-      switchTab(tabTrigger.dataset.tab);
+      switchCharTab(charTabTrigger.dataset.tab);
+      return;
     }
   });
 }
@@ -52,60 +103,84 @@ function bindAdminInputEvents() {
     el.addEventListener(eventName, handler);
   };
 
-  bind('char-filter-search', 'input', () => renderCharListSidebar());
+  bind('char-filter-search', 'input', debounce(() => renderCharListSidebar(), 200));
   bind('char-filter-visible', 'change', () => renderCharListSidebar());
   bind('char-filter-type', 'change', () => renderCharListSidebar());
-
-  bind('user-search', 'input', () => filterUsers());
+  bind('user-search', 'input', debounce(() => filterUsers(), 200));
   bind('user-plan-filter', 'change', () => filterUsers());
-
-  bind('order-search', 'input', () => debouncedFilterOrders());
+  bind('order-search', 'input', debounce(() => filterOrders(), 400));
   bind('order-status-filter', 'change', () => filterOrders());
-
   bind('audit-action-filter', 'change', () => loadAuditLogs());
+
+  // 记忆筛选
+  bind('memory-search', 'input', debounce(() => {
+    AdminState.memorySearchQuery = document.getElementById('memory-search')?.value?.trim().toLowerCase() || '';
+    renderMemories();
+  }, 200));
+  bind('memory-filter-category', 'change', () => {
+    AdminState.memoryFilterCategory = document.getElementById('memory-filter-category')?.value || 'all';
+    renderMemories();
+  });
+  bind('memory-filter-status', 'change', () => {
+    AdminState.memoryFilterStatus = document.getElementById('memory-filter-status')?.value || 'all';
+    renderMemories();
+  });
+  bind('memory-filter-mode', 'change', () => {
+    AdminState.memoryFilterMode = document.getElementById('memory-filter-mode')?.value || 'all';
+    renderMemories();
+  });
+
+  // 触发模式提示
+  bind('memory-trigger-mode', 'change', () => {
+    const mode = document.getElementById('memory-trigger-mode')?.value;
+    const hint = document.getElementById('memory-mode-hint');
+    if (!hint) return;
+    const hints = {
+      keyword: '关键词触发：用户消息包含关键词时才注入此条目。',
+      constant: '每轮常驻：不需要关键词匹配，每轮对话都会注入。Sticky/Cooldown不适用。',
+      always: '始终注入：无需关键词匹配。适合背景设定类内容。',
+    };
+    hint.textContent = hints[mode] || '';
+  });
+
+  // 确认弹窗确认按钮
+  const confirmOk = document.getElementById('confirm-modal-ok');
+  if (confirmOk) confirmOk.addEventListener('click', () => closeConfirmModal(true));
 }
 
 function bindFabSaveFallback(handlePrimaryAction) {
   const fab = document.getElementById('fab-save');
   if (!fab) return;
-  const triggerSave = (event) => {
-    if (event) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
+  fab.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
     handlePrimaryAction('save-char', fab);
-  };
+  });
+}
 
-  fab.addEventListener('click', triggerSave, true);
-  fab.addEventListener('pointerup', triggerSave, true);
-
-  const btn = fab.querySelector('button[data-action="save-char"]');
-  if (btn) {
-    btn.type = 'button';
-    btn.addEventListener('click', triggerSave, true);
-    btn.addEventListener('pointerup', triggerSave, true);
-  }
-
-  const label = document.getElementById('fab-label');
-  if (label) {
-    label.tabIndex = 0;
-    label.addEventListener('click', triggerSave, true);
-    label.addEventListener('pointerup', triggerSave, true);
-    label.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        triggerSave(event);
+function bindKeyboardShortcuts() {
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      const modals = document.querySelectorAll('.modal');
+      for (let i = modals.length - 1; i >= 0; i--) {
+        const m = modals[i];
+        if (m.style.display === 'flex') {
+          if (m.id === 'confirm-modal') { closeConfirmModal(false); }
+          else { m.style.display = 'none'; }
+          event.preventDefault();
+          return;
+        }
       }
-    });
-  }
+    }
+  });
 }
 
 function bootstrapAdminApp(handlePrimaryAction) {
   bindAdminDelegatedEvents(handlePrimaryAction);
   bindAdminInputEvents();
   bindFabSaveFallback(handlePrimaryAction);
+  bindKeyboardShortcuts();
   AdminAPI.bootstrapAdminPage().then(ok => {
-    if (ok) {
-      loadCharList();
-    }
+    if (ok) loadCharList();
   });
 }

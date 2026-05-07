@@ -37,6 +37,7 @@ const ADVANCED_GUIDE_META = {
 };
 
 const AFFECTION_BASE_RULES = [
+  // 对话陪伴事件
   ['deep_conversation', '深度聊天', 4],
   ['light_chat', '日常轻聊', 1],
   ['compliment', '夸奖赞美', 2],
@@ -56,4 +57,21 @@ const AFFECTION_BASE_RULES = [
   ['lie', '说谎被发现', -4],
   ['betray', '背叛', -8],
   ['insult', '侮辱攻击', -6],
+];
+
+// 剧情沙盒专属事件（与对话陪伴共享同一套分值体系，但语义不同）
+const SCENARIO_AFFECTION_RULES = [
+  ['explore', '探索新区域', 2],
+  ['discover', '发现线索/物品', 4],
+  ['puzzle_solved', '解谜成功', 5],
+  ['battle_won', '战斗胜利', 6],
+  ['boss_defeated', '击败首领', 10],
+  ['choice_made', '关键抉择', 3],
+  ['npc_helped', '帮助NPC', 3],
+  ['secret_found', '发现秘密', 7],
+  ['milestone', '达成里程碑', 8],
+  ['battle_lost', '战斗失败', -4],
+  ['trap_triggered', '触发陷阱', -3],
+  ['ally_lost', '失去盟友', -6],
+  ['clue_missed', '错过线索', -2],
 ];

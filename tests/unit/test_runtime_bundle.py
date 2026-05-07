@@ -168,23 +168,25 @@ class TestBuildRuntimeBundle:
         assert bundle["base_profile"] == "desc"
         assert bundle["related_assets"] == []
 
-    def test_with_world_asset(self):
+    def test_with_hybrid_asset(self):
+        """hybrid 资产走通用合并分支，base_profile 合并到 bundle.base_profile"""
         char = {
             "id": "c1",
             "name": "Main",
             "asset_type": "character",
             "runtime_cache_json": "",
         }
-        world_asset = {
-            "id": "w1",
-            "name": "World",
-            "asset_type": "world",
-            "runtime_cache_json": '{"asset_type":"world","base_profile":"world desc","world_rules":"rules"}',
+        hybrid_asset = {
+            "id": "h1",
+            "name": "Hybrid Asset",
+            "asset_type": "hybrid",
+            "runtime_cache_json": '{"asset_type":"hybrid","base_profile":"hybrid desc","world_rules":"rules"}',
         }
-        bundle = build_runtime_bundle(char, related_assets=[world_asset])
+        bundle = build_runtime_bundle(char, related_assets=[hybrid_asset])
         assert len(bundle["related_assets"]) == 1
-        assert bundle["related_assets"][0]["asset_type"] == "world"
-        assert "world desc" in bundle["world_rules"]
+        assert bundle["related_assets"][0]["asset_type"] == "hybrid"
+        assert "hybrid desc" in bundle["base_profile"]
+        assert "rules" in bundle["world_rules"]
 
     def test_with_scenario_asset(self):
         char = {

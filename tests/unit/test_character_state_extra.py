@@ -12,7 +12,7 @@ from services.character_state import (
     _reset_daily_fields_if_needed,
     _update_anti_abuse_counters,
     _AFFECTION_BASE_RULES,
-    _DAILY_AFFECTION_CAP,
+    _DAILY_AFFECTION_CAP_DEFAULT,
     _AFFECTION_DELTA_MAX,
 )
 
@@ -76,11 +76,38 @@ class TestCalculateAffectionChange:
     def test_daily_cap_blocks_positive(self):
         rules = self._default_rules()
         state = self._default_state(
-            _daily_affection_gained=_DAILY_AFFECTION_CAP
+            _daily_affection_gained=_DAILY_AFFECTION_CAP_DEFAULT
         )
         change, reason = _calculate_affection_change("deep_conversation", rules, state)
         assert change == 0
         assert "daily_cap" in reason
+
+    def test_daily_cap_zero_means_no_limit(self):
+        """daily_cap=0 时不限制每日好感涨幅（适合剧情沙盒）。"""
+        rules = self._default_rules()
+        state = self._default_state(
+            _daily_affection_gained=999,  # 已经涨了很多
+        )
+        # daily_cap=0 → 不限制，应该能正常加分
+        change, reason = _calculate_affection_change("deep_conversation", rules, state, daily_cap=0)
+        assert change > 0
+        # reason 中可能包含 daily_cap=0 作为调试信息，但不应包含 "daily_cap:" 拦截提示
+        assert "daily_cap:" not in reason
+
+    def test_daily_cap_custom_value(self):
+        """角色卡自定义 daily_cap 生效。"""
+        rules = self._default_rules()
+        state = self._default_state(
+            _daily_affection_gained=50,  # 已涨50
+        )
+        # daily_cap=100 → 还没到上限，应该能加分
+        change, reason = _calculate_affection_change("deep_conversation", rules, state, daily_cap=100)
+        assert change > 0
+
+        # daily_cap=50 → 刚好到上限，不应该加分
+        change2, reason2 = _calculate_affection_change("deep_conversation", rules, state, daily_cap=50)
+        assert change2 == 0
+        assert "daily_cap" in reason2
 
     def test_diminishing_returns(self):
         rules = self._default_rules()

@@ -20,7 +20,9 @@ from core.config import AI_CHAT_MAX_OUTPUT_TOKENS, logger
 from core.database import ConnType, get_conn
 from core.model_adapter import get_ai_config, request_chat_completion
 from services.prompt_assembler import build_layered_chat_messages
-from services.plan_service import GUEST_PLAN, get_plan_policy, plan_display_name
+from utils.json_utils import parse_json_object, to_json_string
+from core.plan_constants import GUEST_PLAN, plan_display_name
+from services.plan_service import get_plan_policy
 from services.character_state import apply_state_delta, get_character_state
 from services.usage_guard import (
     enforce_daily_budget,
@@ -29,7 +31,7 @@ from services.usage_guard import (
     get_daily_usage,
     log_ai_request,
 )
-from services.stream_filter import normalize_reply_text, parse_state_update_tag
+from utils.stream_filter import normalize_reply_text, parse_state_update_tag
 from services.chat_query import (
     get_character_or_404,
     ensure_opening_message,
@@ -37,6 +39,7 @@ from services.chat_query import (
     _load_recent_messages_and_summary,
     get_linked_assets,
     count_chat_messages,
+    get_last_chat_time,
 )
 
 
@@ -147,15 +150,22 @@ def build_reply_with_fallback(
     """
     # 读取当前关系状态
     character_state: dict[str, Any] | None = None
+    last_chat_time: str | None = None
     if conn is not None and user_id is not None:
         character_state = get_character_state(conn, user_id, character["id"])
+        last_chat_time = get_last_chat_time(conn, user_id, character["id"])
 
     messages = build_layered_chat_messages(
         character, recent_messages, memory_summary,
         related_assets=related_assets, user_name=user_name,
         character_state=character_state,
         conn=conn,
+        last_chat_time=last_chat_time,
+        user_id=user_id,
     )
+
+    if conn is not None and user_id is not None and character_state is not None:
+        _persist_wi_state(conn, user_id, character["id"], character_state)
     
     try:
         raw_reply = request_chat_completion(
@@ -318,6 +328,8 @@ def _build_guest_stream_messages(
         message_projection(item.role, item.content)
         for item in guest_history
     ]
+    # 将用户消息加入历史末尾，由 build_layered_chat_messages 统一走预算控制
+    fake_history.append({"role": "user", "content": clean_text})
     try:
         messages = build_layered_chat_messages(
             character=character,
@@ -327,7 +339,6 @@ def _build_guest_stream_messages(
             user_name="访客",
             character_state=None,
         )
-        messages.append({"role": "user", "content": clean_text})
     except Exception as exc:
         logger.warning("游客 prompt 构建失败，使用降级 prompt: %s", exc)
         messages = _build_guest_fallback_messages(character, clean_text)
@@ -508,6 +519,38 @@ def _log_failed_chat_request(
         log_conn.close()
 
 
+def _persist_wi_state(
+    conn: ConnType,
+    user_id: int | str,
+    character_id: str,
+    character_state: dict[str, Any],
+) -> None:
+    """将 WI sticky/cooldown 状态持久化到 character_states.custom_vars。"""
+    custom_vars = character_state.get("custom_vars") or {}
+    wi_sticky = custom_vars.get("_wi_sticky")
+    wi_cooldown = custom_vars.get("_wi_cooldown")
+    # _pending_events 不在此处持久化，由 apply_state_delta 统一管理
+    # 避免在 AI 调用前就清空，导致失败重试时事件丢失
+    if wi_sticky is None and wi_cooldown is None:
+        return
+    # 读取当前 DB 中的 custom_vars，合并状态后写回
+    row = conn.execute(
+        "SELECT custom_vars FROM character_states WHERE user_id = %s AND character_id = %s",
+        (user_id, character_id),
+    ).fetchone()
+    if not row:
+        return
+    db_custom_vars = parse_json_object(row["custom_vars"])
+    if wi_sticky is not None:
+        db_custom_vars["_wi_sticky"] = wi_sticky
+    if wi_cooldown is not None:
+        db_custom_vars["_wi_cooldown"] = wi_cooldown
+    conn.execute(
+        "UPDATE character_states SET custom_vars = %s WHERE user_id = %s AND character_id = %s",
+        (to_json_string(db_custom_vars), user_id, character_id),
+    )
+
+
 def _resolve_public_character_state(
     conn: ConnType,
     *,
@@ -521,11 +564,39 @@ def _resolve_public_character_state(
         raw_state = get_character_state(conn, user_id, character_id)
     if not raw_state:
         return {}
-    return {
+    result = {
         k: v
         for k, v in raw_state.items()
         if not str(k).startswith("_")
     }
+    # 暴露剧情事件给前端（Optimization B：去掉下划线前缀使前端可见）
+    if "_triggered_events" in raw_state:
+        result["triggered_events"] = raw_state["_triggered_events"]
+    # 从角色卡配置中提取 show_bar 偏好，供前端控制状态栏显隐
+    try:
+        rules_row = conn.execute(
+            "SELECT affection_rules_json FROM characters WHERE id = %s",
+            (character_id,),
+        ).fetchone()
+        if rules_row and rules_row["affection_rules_json"]:
+            rules = parse_json_object(rules_row["affection_rules_json"], fallback={})
+            if "show_bar" in rules:
+                result["show_bar"] = bool(rules["show_bar"])
+    except Exception:
+        pass
+    # 追加剧情线名称（前端状态栏展示用）
+    storyline_id = raw_state.get("storyline_id")
+    if storyline_id and conn is not None:
+        try:
+            sl_row = conn.execute(
+                "SELECT name FROM character_storylines WHERE id = %s",
+                (storyline_id,),
+            ).fetchone()
+            if sl_row and sl_row["name"]:
+                result["storyline_name"] = sl_row["name"]
+        except Exception:
+            pass
+    return result
 
 
 def _prepare_user_ai_budget(
@@ -556,6 +627,7 @@ def _build_user_stream_messages_and_budget(
     related_assets: list[Any],
 ) -> dict[str, Any]:
     character_state = get_character_state(conn, user.id, character_id)
+    last_chat_time = get_last_chat_time(conn, user.id, character_id)
     stream_messages = build_layered_chat_messages(
         character,
         prompt_messages,
@@ -564,7 +636,11 @@ def _build_user_stream_messages_and_budget(
         user_name=user.nickname,
         character_state=character_state,
         conn=conn,
+        last_chat_time=last_chat_time,
     )
+    # WI sticky/cooldown 状态已被 build_layered_chat_messages 写入 character_state.custom_vars
+    # 立即持久化到 DB，确保流式响应完成后状态不丢失
+    _persist_wi_state(conn, user.id, character_id, character_state)
     budget = _prepare_user_ai_budget(conn, user=user, stream_messages=stream_messages)
     return {
         "stream_messages": stream_messages,

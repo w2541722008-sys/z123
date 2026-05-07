@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from constants.mood import Mood
 from constants.story_phase import StoryPhase
@@ -323,12 +323,20 @@ class MemoryEntryPayload(_OptionalCategoryIdPayload, _PriorityActivePayload):
     comment: 备注
     is_active: 是否启用
     category_id: 可选，对应本角色的 memory_categories.id；不传或 null 表示不分类
+    selective: 选择性注入，1=仅关键词匹配时注入（默认），0=始终注入
+    constant: 常驻注入，1=不需要关键词匹配每轮都注入，0=需要匹配（默认）
+    sticky: 一旦触发后持续注入的轮数，0=不持续（默认）
+    cooldown: 触发后冷却轮数，0=无冷却（默认）
     """
     keywords: str = Field(min_length=1, max_length=500)
     trigger_logic: str = Field(default="any", pattern="^(any|all)$")
     content: str = Field(min_length=1, max_length=4000)
     position: str = Field(default="before", pattern="^(before|after)$")
     comment: str = Field(default="", max_length=200)
+    selective: int = Field(default=1, ge=0, le=1)
+    constant: int = Field(default=0, ge=0, le=1)
+    sticky: int = Field(default=0, ge=0, le=999)
+    cooldown: int = Field(default=0, ge=0, le=999)
 
 
 # ============================================================
@@ -344,6 +352,7 @@ class GreetingPayload(_OptionalStorylineIdPayload, _PriorityActivePayload):
     priority: 优先级
     storyline_id: 关联的剧情线ID（可选）
     is_active: 是否启用
+    comment: 管理员备注
     """
     content: str = Field(min_length=1, max_length=2000)
     story_phase: str = Field(
@@ -354,6 +363,7 @@ class GreetingPayload(_OptionalStorylineIdPayload, _PriorityActivePayload):
         default="neutral",
         pattern=_MOOD_PATTERN
     )
+    comment: str = Field(default="", max_length=200)
 
 
 # ============================================================
@@ -363,17 +373,39 @@ class StorylinePayload(_SortOrderActivePayload):
     """
     剧情线请求体。
 
-    name: 剧情线名称
+    storyline_id: 剧情线短标识（如 awakening_path），用于内部引用
+    title: 剧情线显示名称
+    name: 兼容字段，未传时自动取 title 的值
     description: 描述
     unlock_score: 解锁所需好感度
+    stages: 剧情阶段名称列表（如 ["觉醒","探索","深入","终章"]）
     sort_order: 排序
     is_default: 是否为默认剧情线
     is_active: 是否启用
     """
-    name: str = Field(min_length=1, max_length=100)
+    storyline_id: str = Field(default="", max_length=100)
+    title: str = Field(default="", max_length=100)
+    name: str = Field(default="", max_length=100)
     description: str = Field(default="", max_length=500)
     unlock_score: int = Field(default=0, ge=0)
+    unlock_condition: str | None = Field(default=None, max_length=500)
+    stages: list[str] = Field(default_factory=list)
     is_default: int = Field(default=0, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _fill_defaults(self) -> "StorylinePayload":
+        """title 和 name 互为 fallback，storyline_id 未设则自动生成。"""
+        if not self.title and self.name:
+            self.title = self.name
+        if not self.name and self.title:
+            self.name = self.title
+        if not self.title and not self.name:
+            raise ValueError("title 和 name 至少填一个")
+        if not self.storyline_id:
+            # 用 title 的拼音或简单标识，这里自动取 name 的下划线版本
+            import re
+            self.storyline_id = re.sub(r"[^a-zA-Z0-9_]", "", self.name.replace(" ", "_").lower()) or "auto"
+        return self
 
 
 # ============================================================
@@ -421,6 +453,7 @@ class StoryEventPayload(_OptionalUnlockedStorylineIdPayload, _SortOrderActivePay
     title: 事件标题
     description: 事件描述
     trigger_score: 触发所需好感度
+    trigger_custom_key: 逗号分隔的custom_vars键名，需全部存在且非空才触发（轻量复合条件）
     unlocked_memory_ids: 解锁的记忆ID列表，逗号分隔
     unlocked_greeting_ids: 解锁的开场白ID列表，逗号分隔
     unlocked_storyline_id: 解锁的剧情线ID
@@ -431,6 +464,7 @@ class StoryEventPayload(_OptionalUnlockedStorylineIdPayload, _SortOrderActivePay
     title: str = Field(default="", max_length=100)
     description: str = Field(default="", max_length=2000)
     trigger_score: int = Field(default=0, ge=0)
+    trigger_custom_key: str = Field(default="", max_length=500)
     unlocked_memory_ids: str = Field(default="", max_length=500)
     unlocked_greeting_ids: str = Field(default="", max_length=500)
     event_content: str = Field(default="", max_length=5000)

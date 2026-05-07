@@ -48,8 +48,21 @@ run_local_checks() {
   pushd "$LOCAL_DIR/backend" >/dev/null
 
   local failed=0
-  python3 -m pytest ../tests/ -q --ignore=../tests/integration || failed=1
+
+  # 1. 后端单元测试
+  echo "  → 后端单元测试..."
+  python3 -m pytest ../tests/unit/ -q || failed=1
+
+  # 2. 前端冒烟测试（新增）
+  echo "  → 前端冒烟测试..."
+  node ../tests/frontend_smoke.js || failed=1
+
+  # 3. 前端工具函数测试
+  echo "  → 前端工具函数测试..."
   node ../tests/test_frontend_utils.js || failed=1
+
+  # 4. Admin action 完整性检查
+  echo "  → Admin action 检查..."
   node ../tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json || failed=1
 
   popd >/dev/null

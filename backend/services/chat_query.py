@@ -17,7 +17,8 @@ from fastapi import HTTPException
 from core.config import logger
 from core.database import ConnType
 from services.cache_service import get_character, set_character
-from services.plan_service import ensure_plan_access, plan_display_name
+from core.plan_constants import plan_display_name
+from services.plan_service import ensure_plan_access
 from services.character_state import get_character_state
 from services.memory_service import get_recent_messages, get_summary_for_prompt
 
@@ -214,6 +215,17 @@ def count_chat_messages(conn: ConnType, user_id: int | str, character_id: str) -
         (user_id, character_id),
     ).fetchone()
     return int(row["total"]) if row else 0
+
+
+def get_last_chat_time(conn: ConnType, user_id: int | str, character_id: str) -> str | None:
+    """获取用户与角色最近一条 assistant 消息的 created_at 时间戳，用于判断久未聊天。"""
+    row = conn.execute(
+        """SELECT created_at FROM chat_messages
+           WHERE user_id = %s AND character_id = %s AND role = 'assistant'
+           ORDER BY id DESC LIMIT 1""",
+        (user_id, character_id),
+    ).fetchone()
+    return row["created_at"] if row else None
 
 
 def get_linked_assets(conn: ConnType, character_id: str) -> list[Any]:

@@ -221,7 +221,7 @@ async function batchUpdatePlan() {
   if (!ids.length) { toast('请先选择用户'); return; }
   const planType = document.getElementById('batch-plan-select')?.value || 'vip';
   const days = parseInt(document.getElementById('batch-days')?.value) || 30;
-  if (!confirm(`确定要将 ${ids.length} 位用户设置为 ${formatPlanLabel(planType)}（${days} 天）？`)) return;
+  if (!await showConfirm(`确定要将 ${ids.length} 位用户设置为 ${formatPlanLabel(planType)}（${days} 天）？`, '批量操作确认')) return;
   try {
     await AdminAPI.apiFetch(`${AdminAPI.API}/users/batch-plan`, {
       method: 'POST',
@@ -312,9 +312,9 @@ async function saveUserEdit() {
 // ============================================================
 // 删除用户
 // ============================================================
-function confirmDeleteUser(userId, email) {
+async function confirmDeleteUser(userId, email) {
   closeUserDetailModal();
-  if (!confirm(`确定要删除用户 ${email ? `「${email}」` : `#${userId}`} 吗？\n\n此操作会同时删除该用户的所有聊天记录、角色关系和订单数据，且不可撤销！`)) return;
+  if (!await showConfirm(`确定要删除用户 ${email ? `「${email}」` : `#${userId}`} 吗？\n\n此操作会同时删除该用户的所有聊天记录、角色关系和订单数据，且不可撤销！`, '删除用户确认')) return;
   AdminState.pendingDeleteUserId = userId;
   doDeleteUser();
 }

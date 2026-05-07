@@ -14,7 +14,7 @@
 - 后端：Python 3.10+、FastAPI、Uvicorn、httpx、psycopg2（ThreadedConnectionPool）
 - 数据库：PostgreSQL（Supabase）+ Alembic 迁移
 - 前端：原生 HTML/CSS/JavaScript（IIFE）
-- 测试：pytest（878 tests）+ Node.js 脚本
+- 测试：pytest（841 tests）+ Node.js 脚本
 
 ## 本地开发
 
@@ -39,11 +39,16 @@ pip install -r requirements.txt
 cd backend && python3 -m alembic upgrade head
 ```
 
-迁移说明：
+迁移说明（共 8 个，001-008）：
 
 - `001_initial_schema.py`：基线迁移，创建全部 18 张表
 - `002_text_to_timestamptz_jsonb.py`：类型修复（幂等可重跑）
 - `003_add_reset_code_attempt_count.py`：密码重试计数列（幂等）
+- `004_memory_enhanced_fields.py`：记忆增强字段
+- `005_remove_world_divination.py`：移除世界占卜功能
+- `006_add_phase_behaviors.py`：阶段行为配置
+- `007_add_trigger_custom_key.py`：剧情事件自定义键触发
+- `008_add_missing_columns.py`：补全缺失列
 
 ### 4) 启动后端
 

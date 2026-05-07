@@ -1,0 +1,90 @@
+#!/usr/bin/env node
+/**
+ * 前端冒烟测试 - 快速发现运行时错误
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+const PROJECT_DIR = path.join(__dirname, '..');
+const FRONTEND_DIR = path.join(PROJECT_DIR, 'frontend');
+const ADMIN_DIR = path.join(FRONTEND_DIR, 'admin');
+
+let errors = [];
+
+// 1. 语法检查
+console.log('🔍 检查 JS 语法...');
+function checkSyntax(dir) {
+  if (!fs.existsSync(dir)) return;
+  const files = fs.readdirSync(dir, { withFileTypes: true });
+  for (const file of files) {
+    const fullPath = path.join(dir, file.name);
+    if (file.isDirectory()) {
+      checkSyntax(fullPath);
+    } else if (file.name.endsWith('.js')) {
+      try {
+        execSync(`node --check "${fullPath}"`, { stdio: 'pipe' });
+      } catch (e) {
+        errors.push(`❌ 语法错误: ${fullPath.replace(PROJECT_DIR, '')}`);
+      }
+    }
+  }
+}
+checkSyntax(path.join(FRONTEND_DIR, 'modules'));
+checkSyntax(path.join(ADMIN_DIR, 'js'));
+
+// 2. 检查关键函数定义
+console.log('🔍 检查关键函数定义...');
+const REQUIRED_GLOBALS = {
+  'frontend/modules/utils.js': ['escapeHtml', 'formatTime'],
+  'frontend/modules/api.js': ['API'],
+  'frontend/admin/js/utils.js': ['escHtml'],
+  'frontend/admin/js/char-editor.js': ['safeParseJSON', 'renderEditPanel'],
+};
+
+for (const [file, funcs] of Object.entries(REQUIRED_GLOBALS)) {
+  const fullPath = path.join(PROJECT_DIR, file);
+  if (!fs.existsSync(fullPath)) {
+    errors.push(`❌ 文件不存在: ${file}`);
+    continue;
+  }
+  const content = fs.readFileSync(fullPath, 'utf8');
+  for (const func of funcs) {
+    const patterns = [
+      new RegExp(`function\\s+${func}\\s*\\(`),
+      new RegExp(`const\\s+${func}\\s*=`),
+      new RegExp(`${func}\\s*:\\s*function`),
+    ];
+    if (!patterns.some(p => p.test(content))) {
+      errors.push(`❌ 函数未定义: ${func} in ${file}`);
+    }
+  }
+}
+
+// 3. 检查 admin data-action 完整性
+console.log('🔍 检查 admin data-action...');
+const adminIndexPath = path.join(ADMIN_DIR, 'index.html');
+const actionsJsPath = path.join(ADMIN_DIR, 'js/actions.js');
+if (fs.existsSync(adminIndexPath) && fs.existsSync(actionsJsPath)) {
+  const adminIndexHtml = fs.readFileSync(adminIndexPath, 'utf8');
+  const actionsJs = fs.readFileSync(actionsJsPath, 'utf8');
+  const htmlActions = [...adminIndexHtml.matchAll(/data-action="([^"]+)"/g)].map(m => m[1]);
+  const jsActions = [...actionsJs.matchAll(/'([a-z0-9-]+)'\s*:/g)].map(m => m[1]);
+  for (const action of htmlActions) {
+    if (!jsActions.includes(action)) {
+      errors.push(`❌ data-action 无 handler: ${action}`);
+    }
+  }
+}
+
+// 输出结果
+console.log('\n' + '='.repeat(60));
+if (errors.length === 0) {
+  console.log('✅ 前端冒烟测试通过');
+  process.exit(0);
+} else {
+  console.log(`❌ 发现 ${errors.length} 个问题:\n`);
+  errors.forEach(e => console.log(e));
+  process.exit(1);
+}

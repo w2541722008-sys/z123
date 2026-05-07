@@ -9,14 +9,11 @@ const CHARACTER_ACTION_HANDLERS = {
   'remove-affection-custom-row': (trigger) => removeAffectionCustomRow(trigger),
   'reset-affection-rules': () => resetAffectionRulesEditor(),
   'select-char': (trigger) => {
-    if (trigger.dataset.charId) {
-      selectChar(trigger.dataset.charId);
-    }
+    if (trigger.dataset.charId) selectChar(trigger.dataset.charId);
   },
 };
 
 const ADVANCED_ACTION_HANDLERS = {
-  'switch-advanced-tab': (trigger) => switchAdvancedTab(trigger.dataset.tab || 'memories'),
   'open-memory-modal': () => openMemoryModal(),
   'close-memory-modal': () => closeMemoryModal(),
   'save-memory': () => saveMemory(),
@@ -51,6 +48,7 @@ const ADVANCED_ACTION_HANDLERS = {
   'test-keywords': () => testKeywords(),
   'load-prompt-preview': () => loadPromptPreview(),
   'copy-prompt-preview': () => copyPromptPreview(),
+  'close-confirm-modal': () => closeConfirmModal(false),
 };
 
 const MEMBERSHIP_ACTION_HANDLERS = {
@@ -74,6 +72,7 @@ const DASHBOARD_ACTION_HANDLERS = {
   'load-media-missing': (trigger) => loadMediaMissing((trigger?.dataset?.refresh || 'false') === 'true'),
   'load-audit-logs': () => loadAuditLogs(),
   'admin-reload': () => location.reload(),
+  'switch-system-tab': (trigger) => switchSystemTab(trigger.dataset.tab || 'dashboard'),
 };
 
 const ACTION_HANDLERS = {

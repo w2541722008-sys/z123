@@ -23,7 +23,8 @@ from services.chat_send import (
 )
 from services.chat_query import get_character_or_404
 from services.chat_retry import _prepare_regenerate_or_continue_request as _retry_prepare_request
-from services.plan_service import GUEST_PLAN, get_plan_policy
+from core.plan_constants import GUEST_PLAN
+from services.plan_service import get_plan_policy
 from services.rate_limit import get_request_client_ip
 
 from services.chat_stream_service import (

@@ -9,7 +9,7 @@ from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
 from core.schemas import PostRulePayload, StoryEventPayload
 
-from .characters_common import (
+from ._helpers import (
     _assert_story_event_unlock_refs_owned,
     _assert_storyline_owned,
 )
@@ -166,7 +166,7 @@ def list_story_events(character_id: str, conn: ConnType = Depends(get_db_dep)) -
 
     rows = conn.execute(
         """
-        SELECT id, title, description, trigger_score,
+        SELECT id, title, description, trigger_score, trigger_custom_key,
                unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
                event_content, sort_order, is_active, created_at, updated_at
         FROM story_events
@@ -182,6 +182,7 @@ def list_story_events(character_id: str, conn: ConnType = Depends(get_db_dep)) -
             "title": row["title"],
             "description": row["description"] or "",
             "trigger_score": row["trigger_score"],
+            "trigger_custom_key": row["trigger_custom_key"] or "",
             "unlocked_memory_ids": row["unlocked_memory_ids"] or "",
             "unlocked_greeting_ids": row["unlocked_greeting_ids"] or "",
             "unlocked_storyline_id": row["unlocked_storyline_id"],
@@ -219,10 +220,10 @@ def create_story_event(
     cur = conn.execute(
         """
         INSERT INTO story_events
-        (character_id, event_id, title, description, trigger_score,
+        (character_id, event_id, title, description, trigger_score, trigger_custom_key,
          unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
          event_content, sort_order, is_active)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -231,6 +232,7 @@ def create_story_event(
             body.title,
             body.description,
             body.trigger_score,
+            body.trigger_custom_key or "",
             body.unlocked_memory_ids or "",
             body.unlocked_greeting_ids or "",
             unlocked_sl_id,
@@ -273,6 +275,7 @@ def update_story_event(
             title = %s,
             description = %s,
             trigger_score = %s,
+            trigger_custom_key = %s,
             unlocked_memory_ids = %s,
             unlocked_greeting_ids = %s,
             unlocked_storyline_id = %s,
@@ -286,6 +289,7 @@ def update_story_event(
             body.title,
             body.description,
             body.trigger_score,
+            body.trigger_custom_key or "",
             body.unlocked_memory_ids or "",
             body.unlocked_greeting_ids or "",
             unlocked_sl_id,

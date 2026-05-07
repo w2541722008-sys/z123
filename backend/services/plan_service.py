@@ -10,33 +10,22 @@ from typing import Any
 
 from fastapi import HTTPException
 
-# 从 core 层 re-export 常量与纯函数（保持向后兼容）
-from core.plan_constants import (  # noqa: F401
-    CHARACTER_PLAN_VALUES,
-    FREE_PLAN,
+from core.plan_constants import (
     GUEST_PLAN,
-    PLAN_LABELS,
-    PLAN_LEVELS,
-    PLAN_MODEL_PROFILES,
     SVIP_PLAN,
-    USER_PLAN_VALUES,
     VIP_PLAN,
-    can_access_required_plan,
-    get_plan_level,
-    normalize_required_plan,
-    normalize_user_plan,
-    plan_display_name,
-    resolve_effective_plan,
-    serialize_plan_info,
-)
-
-from core.config import (
-    AI_CHAT_MAX_OUTPUT_TOKENS,
+    FREE_PLAN,
+    PLAN_MODEL_PROFILES,
     FREE_DAILY_TOKEN_LIMIT,
     GUEST_DAILY_TOKEN_LIMIT,
     SVIP_DAILY_TOKEN_LIMIT,
     VIP_DAILY_TOKEN_LIMIT,
+    can_access_required_plan,
+    normalize_required_plan,
+    plan_display_name,
 )
+
+from core.config import AI_CHAT_MAX_OUTPUT_TOKENS
 
 
 def ensure_plan_access(

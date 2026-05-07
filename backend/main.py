@@ -10,7 +10,7 @@ AI Friend 后端主入口
 
 架构分层：
     main.py          - 应用入口
-    core/            - 基础设施层（auth/config/database/schemas/model_adapter/prompt_assembler）
+    core/            - 基础设施层（auth/config/database/schemas/model_adapter）
     services/        - 业务逻辑层
     routers/         - API 路由层
     constants/       - 枚举常量
@@ -45,7 +45,7 @@ import core.config as _cfg
 from core.config import AVATARS_DIR, FRONTEND_DIR, FRONTEND_STATIC_DIR, PROJECT_DIR, validate_production_config
 from core.database import init_db_pool, close_db_pool
 from services.health_service import check_db_health, check_media_health
-from services.jobs_facade import start_order_cleanup_daemon
+from services.billing_order_service import start_order_cleanup_daemon
 
 # 导入路由
 from routers import admin, auth, billing, characters, chat, media
