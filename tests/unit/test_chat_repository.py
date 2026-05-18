@@ -30,5 +30,5 @@ class TestGetChatHistory:
         conn = FakeSequenceConn([[]])
         get_chat_history(conn, user_id=42, character_id="c1")
         sql, params = conn.executed[0]
-        assert params == (42, "c1")
+        assert params == (42, "c1", 50, 0)
         assert sql.count("%s") == len(params)

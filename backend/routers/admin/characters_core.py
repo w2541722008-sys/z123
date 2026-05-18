@@ -14,7 +14,7 @@ from utils.json_utils import parse_json_list, parse_json_object, to_json_string
 
 from ._helpers import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
 
-router = APIRouter(tags=["admin"])
+router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
 
 @router.get("/admin/characters")

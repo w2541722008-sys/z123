@@ -46,7 +46,10 @@ from fastapi import Header, HTTPException, Request, Response
 from starlette.responses import Response as StarletteResponse
 
 # 本地模块导入
-from core.config import ADMIN_EMAILS, APP_SECRET, DEBUG, ENV, TOKEN_EXPIRE_DAYS
+from core.config import (
+    ACCESS_TOKEN_EXPIRE_MINUTES, ADMIN_EMAILS, APP_SECRET, DEBUG, ENV,
+    REFRESH_TOKEN_EXPIRE_DAYS, TOKEN_EXPIRE_DAYS,
+)
 from core.database import get_conn
 from core.plan_constants import serialize_plan_info
 
@@ -293,53 +296,51 @@ def create_token(
     *,
     conn=None,
     commit: bool = True,
+    token_type: str = "access",
+    device_fingerprint: str = "",
+    refresh_token_hash: str = "",
 ) -> str:
     """
     生成一个新的登录 token，并写入数据库。
 
     安全设计：
         - 用 secrets.token_urlsafe(32) 生成 32 字节随机串（256 位熵），
-          再经过 SHA-256 哈希后存入数据库（这样数据库泄露也无法直接使用 token）
-        - 每个 token 都有明确的过期时间（默认 TOKEN_EXPIRE_DAYS=30 天）
-        - 用户登录时会同步删掉自己名下所有已过期的旧 token，保持数据库干净
-        - 支持复用外部事务连接，让注册/登录和 token 写入保持原子性
+          再经过 SHA-256 哈希后存入数据库（数据库泄露也无法直接使用 token）
+        - 支持 access/refresh 双 token 类型
+        - 设备指纹绑定：refresh token 可绑定到特定设备
+        - 用户登录时会同步删掉自己名下所有已过期的旧 token
 
     Args:
         user_id: 用户 ID
-        conn: 可选，外部传入的数据库连接；不传则函数内部自行创建
-        commit: 是否在函数内部提交事务。传入外部连接时通常设为 False
+        conn: 可选外部数据库连接
+        commit: 是否在函数内部提交事务
+        token_type: 'access' 或 'refresh'
+        device_fingerprint: 设备指纹哈希（仅 refresh token 需要）
+        refresh_token_hash: 关联的 refresh token 哈希（仅 access token 需要）
 
     Returns:
         返回给客户端使用的原始 Bearer Token
-
-    实现细节：
-        1. 生成随机字符串：secrets.token_urlsafe(32)
-        2. SHA-256 哈希后存入数据库
-        3. 清理该用户所有已过期的旧 token
-        4. 插入新 token 记录
     """
-    # 步骤 1：生成原始 token（返回给客户端）
     raw_token = secrets.token_urlsafe(32)
-
-    # 步骤 2：SHA-256 哈希后存库（数据库泄露也无法直接使用）
     token_hash = _hash_token_value(raw_token)
 
-    # 步骤 3：计算过期时间
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
-    expires_at = (now + timedelta(days=TOKEN_EXPIRE_DAYS)).isoformat()
 
-    # 步骤 4：数据库操作（清理旧 token + 插入新 token）
+    if token_type == "refresh":
+        expires_at = (now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)).isoformat()
+    else:
+        expires_at = (now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)).isoformat()
+
     owns_conn = conn is None
     if owns_conn:
         conn = get_conn()
     try:
-        # 清理该用户所有已过期的旧 token（防止数据库无限膨胀）
         _cleanup_expired_tokens(conn, user_id=user_id, now_iso=now_iso, commit=False)
-        # 插入新 token
         conn.execute(
-            "INSERT INTO auth_tokens(token, user_id, created_at, expires_at) VALUES (%s, %s, %s, %s)",
-            (token_hash, user_id, now_iso, expires_at),
+            "INSERT INTO auth_tokens(token, user_id, created_at, expires_at, token_type, device_fingerprint, refresh_token_hash) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (token_hash, user_id, now_iso, expires_at, token_type, device_fingerprint, refresh_token_hash),
         )
         if commit:
             conn.commit()
@@ -352,6 +353,191 @@ def create_token(
             conn.close()
 
     return raw_token
+
+
+def create_token_pair(
+    user_id: int | str,
+    *,
+    conn=None,
+    commit: bool = True,
+    device_fingerprint: str = "",
+) -> dict[str, str]:
+    """
+    生成 access_token + refresh_token 双 token 对。
+
+    Access token 用于 API 鉴权（短期 15 min），
+    Refresh token 用于续期（长期 30 day），绑定设备指纹。
+
+    Args:
+        user_id: 用户 ID
+        conn: 可选外部数据库连接
+        commit: 是否在函数内部提交事务
+        device_fingerprint: 设备指纹哈希
+
+    Returns:
+        {"access_token": "...", "refresh_token": "..."}
+    """
+    owns_conn = conn is None
+    if owns_conn:
+        conn = get_conn()
+    try:
+        refresh_token = create_token(
+            user_id, conn=conn, commit=False,
+            token_type="refresh", device_fingerprint=device_fingerprint,
+        )
+        refresh_hash = _hash_token_value(refresh_token)
+        access_token = create_token(
+            user_id, conn=conn, commit=False,
+            token_type="access", device_fingerprint=device_fingerprint,
+            refresh_token_hash=refresh_hash,
+        )
+        if commit:
+            conn.commit()
+        return {"access_token": access_token, "refresh_token": refresh_token}
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def rotate_access_token(
+    refresh_token: str,
+    *,
+    device_fingerprint: str = "",
+    conn=None,
+) -> str | None:
+    """
+    用 refresh token 换取新的 access token（旧 access token 失效）。
+
+    验证 refresh token 有效 + 设备指纹匹配后：
+    1. 删除旧 access token(s)
+    2. 生成新 access token
+
+    Returns:
+        新 access token，失败返回 None
+    """
+    refresh_hash = _hash_token_value(refresh_token)
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    owns_conn = conn is None
+    if owns_conn:
+        conn = get_conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT user_id, device_fingerprint, expires_at
+            FROM auth_tokens
+            WHERE token = %s AND token_type = 'refresh'
+              AND (expires_at IS NULL OR expires_at > %s)
+            """,
+            (refresh_hash, now_iso),
+        ).fetchone()
+
+        if not row:
+            return None
+
+        # 设备指纹验证
+        stored_fp = row["device_fingerprint"] or ""
+        if device_fingerprint and stored_fp and device_fingerprint != stored_fp:
+            logger.warning("refresh token 设备指纹不匹配")
+            return None
+
+        user_id = row["user_id"]
+
+        # 删除旧 access token(s)
+        conn.execute(
+            "DELETE FROM auth_tokens WHERE refresh_token_hash = %s AND token_type = 'access'",
+            (refresh_hash,),
+        )
+
+        # 生成新 access token
+        new_access = create_token(
+            user_id, conn=conn, commit=False,
+            token_type="access", device_fingerprint=stored_fp,
+            refresh_token_hash=refresh_hash,
+        )
+        conn.commit()
+        return new_access
+    except Exception:
+        if owns_conn:
+            conn.rollback()
+        raise
+    finally:
+        if owns_conn:
+            conn.close()
+
+
+def revoke_user_device_tokens(
+    user_id: int | str,
+    current_refresh_token: str = "",
+    *,
+    conn=None,
+    commit: bool = True,
+) -> int:
+    """
+    踢出用户的其他设备：删除所有不匹配 current_refresh_token 的 refresh token。
+
+    同时级联删除关联的 access token。
+
+    Args:
+        user_id: 用户 ID
+        current_refresh_token: 当前设备的 refresh token（保留此设备）
+        conn: 可选外部数据库连接
+        commit: 是否提交事务
+
+    Returns:
+        被删除的 refresh token 数量
+    """
+    owns_conn = conn is None
+    if owns_conn:
+        conn = get_conn()
+    try:
+        if current_refresh_token:
+            current_hash = _hash_token_value(current_refresh_token)
+            # 先删除其他设备的 access tokens
+            conn.execute(
+                """
+                DELETE FROM auth_tokens
+                WHERE user_id = %s AND token_type = 'access'
+                  AND refresh_token_hash != %s
+                  AND refresh_token_hash != ''
+                """,
+                (user_id, current_hash),
+            )
+            # 再删除其他设备的 refresh tokens
+            cursor = conn.execute(
+                """
+                DELETE FROM auth_tokens
+                WHERE user_id = %s AND token_type = 'refresh'
+                  AND token != %s
+                """,
+                (user_id, current_hash),
+            )
+        else:
+            # 没有指定保留 token，删除所有
+            conn.execute(
+                "DELETE FROM auth_tokens WHERE user_id = %s AND token_type = 'access'",
+                (user_id,),
+            )
+            cursor = conn.execute(
+                "DELETE FROM auth_tokens WHERE user_id = %s AND token_type = 'refresh'",
+                (user_id,),
+            )
+        deleted = int(cursor.rowcount)
+        if commit:
+            conn.commit()
+        return deleted
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
+    finally:
+        if owns_conn:
+            conn.close()
 
 
 def delete_token(token: str, *, commit: bool = True) -> int:
@@ -463,6 +649,20 @@ def _extract_token_from_request(request: Request, authorization: str | None) -> 
     return None
 
 
+def generate_device_fingerprint(request: Request) -> str:
+    """生成设备指纹哈希。
+
+    基于 User-Agent + 客户端 IP 前缀（前三段）+ X-Device-ID 头（可选）。
+    用于将 refresh token 绑定到特定设备，防止 token 被窃取后在其它设备使用。
+    """
+    ua = request.headers.get("User-Agent", "")
+    ip = request.client.host if request.client else ""
+    ip_prefix = ".".join(ip.split(".")[:3]) if ip else ""
+    device_id = request.headers.get("X-Device-ID", "")
+    raw = f"{ua}|{ip_prefix}|{device_id}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
 def _verify_token_and_get_user(token: str) -> CurrentUser | None:
     """验证 token 并返回 CurrentUser，失败返回 None。
 
@@ -501,6 +701,7 @@ def _verify_token_and_get_user(token: str) -> CurrentUser | None:
             FROM auth_tokens
             JOIN users ON users.id = auth_tokens.user_id
             WHERE auth_tokens.token = %s
+              AND auth_tokens.token_type = 'access'
               AND (auth_tokens.expires_at IS NULL OR auth_tokens.expires_at > %s)
             ORDER BY auth_tokens.created_at DESC
             LIMIT 1

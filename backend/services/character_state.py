@@ -220,6 +220,7 @@ _CUSTOM_VARS_BLACKLIST = {
     "_daily_reset_date",  # 日重置日期（内部使用）
     "_shared_moments",  # 情感锚点列表（系统管理，不允许AI直接修改）
     "_pending_events",  # 待处理剧情事件（系统管理，注入后自动清空）
+    "_pending_phase_upgrade",  # 关系阶段升级触发语（系统管理，用户下次打开时消费）
     "_silent_rounds",  # 沉默轮数计数（系统管理，AI上报后自动归零）
 }
 
@@ -304,27 +305,22 @@ def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
     return sanitized
 
 
-def apply_state_delta(
+# ============================================================
+# apply_state_delta 处理器
+# 将原来的 253 行巨函数拆分为 6 个处理器 + 1 个编排函数
+# ============================================================
+
+def _resolve_affection_delta(
     conn: ConnType,
     user_id: int | str,
     character_id: str,
     delta: dict[str, Any],
-    *,
-    commit: bool = True,
-) -> dict[str, Any]:
-    """
-    把 AI 输出的状态增量应用到现有状态，返回更新后的状态。
-    
-    安全说明：
-        - 所有增量字段都会经过白名单验证
-        - 非法字段会被自动过滤，不会报错但会被记录
-        - 数值字段有范围限制，防止极端值
-    """
-    # 首先验证和清理增量
-    delta = _sanitize_state_delta(delta)
-    
-    affection_enabled = is_affection_enabled(conn, character_id)
+) -> tuple[dict[str, Any], int, str, str, dict[str, Any]]:
+    """处理器1：好感度变化计算。
 
+    读取当前状态、重置每日字段、计算好感度变化量、更新反滥用计数器。
+    返回 (current_state, affection, story_phase, mood, custom_vars)。
+    """
     current = get_character_state(conn, user_id, character_id)
     current = _reset_daily_fields_if_needed(current)
 
@@ -333,8 +329,8 @@ def apply_state_delta(
     mood = current["mood"]
     custom_vars = dict(current["custom_vars"])
 
-    # 好感度变化量计算
     affection_change = 0
+    affection_enabled = is_affection_enabled(conn, character_id)
 
     if affection_enabled:
         if "event" in delta:
@@ -358,34 +354,55 @@ def apply_state_delta(
                     pass
 
     affection = max(0, min(100, affection + affection_change))
+    return current, affection, story_phase, mood, custom_vars
 
-    # 剧情阶段
+
+def _resolve_story_phase(
+    conn: ConnType,
+    character_id: str,
+    affection: int,
+    current_phase: str,
+    delta: dict[str, Any],
+) -> tuple[str, str]:
+    """处理器2：剧情阶段推进。
+
+    如果 AI 指定了阶段则使用指定值，否则按好感度自动推进。
+    返回 (new_phase, old_phase)。
+    """
+    old_phase = current_phase
     if "story_phase" in delta:
         val = str(delta["story_phase"]).strip().lower()
         if val in _VALID_STORY_PHASES:
-            story_phase = val
-    else:
-        # 检查是否允许阶段回退（从角色卡的 affection_rules_json 中读取）
-        allow_regression = False
-        try:
-            rules_row = conn.execute(
-                "SELECT affection_rules_json FROM characters WHERE id = %s",
-                (character_id,),
-            ).fetchone()
-            if rules_row and rules_row["affection_rules_json"]:
-                rules_json = parse_json_object(rules_row["affection_rules_json"], fallback={})
-                allow_regression = bool(rules_json.get("allow_regression", False))
-        except Exception:
-            pass
-        story_phase = _auto_advance_story_phase(affection, story_phase, allow_regression=allow_regression)
+            return val, old_phase
 
-    # 心情
+    # AI 未指定阶段时，按好感度自动推进
+    allow_regression = False
+    try:
+        rules_row = conn.execute(
+            "SELECT affection_rules_json FROM characters WHERE id = %s",
+            (character_id,),
+        ).fetchone()
+        if rules_row and rules_row["affection_rules_json"]:
+            rules_json = parse_json_object(rules_row["affection_rules_json"], fallback={})
+            allow_regression = bool(rules_json.get("allow_regression", False))
+    except Exception:
+        pass
+    new_phase = _auto_advance_story_phase(affection, current_phase, allow_regression=allow_regression)
+    return new_phase, old_phase
+
+
+def _resolve_mood_and_moments(
+    current_mood: str,
+    custom_vars: dict[str, Any],
+    delta: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    """处理器3：心情更新 + 情感锚点追加（FIFO）。"""
+    mood = current_mood
     if "mood" in delta:
         val = str(delta["mood"]).strip().lower()
         if val in _VALID_MOODS:
             mood = val
 
-    # 情感锚点：moment → 追加到 custom_vars._shared_moments（FIFO）
     if "moment" in delta and delta["moment"]:
         moments = list(custom_vars.get("_shared_moments") or [])
         moments.append(str(delta["moment"]))
@@ -393,7 +410,14 @@ def apply_state_delta(
             moments = moments[-_SHARED_MOMENTS_MAX:]
         custom_vars["_shared_moments"] = moments
 
-    # 自定义变量
+    return mood, custom_vars
+
+
+def _resolve_custom_vars_and_silence(
+    custom_vars: dict[str, Any],
+    delta: dict[str, Any],
+) -> dict[str, Any]:
+    """处理器4：自定义变量更新（含 +/- 增量语义）+ 沉默轮数计数。"""
     if "custom" in delta and isinstance(delta["custom"], dict):
         for k, v in delta["custom"].items():
             raw = str(v).strip()
@@ -411,7 +435,6 @@ def apply_state_delta(
             else:
                 custom_vars[k] = v
 
-    # 沉默轮数检测：AI 有上报事件则归零，无上报则 +1
     has_state_update = "event" in delta or "affection" in delta
     silent_rounds = int(custom_vars.get("_silent_rounds") or 0)
     if has_state_update:
@@ -419,8 +442,27 @@ def apply_state_delta(
     else:
         custom_vars["_silent_rounds"] = silent_rounds + 1
 
-    # 剧情线 AI 驱动切换：当 AI 通过 custom.current_storyline_id 切换剧情线时，
-    # 同步更新 user_story_progress 表，确保后置规则等逻辑感知到切换
+    return custom_vars
+
+
+def _handle_storyline_and_events(
+    conn: ConnType,
+    user_id: int | str,
+    character_id: str,
+    affection: int,
+    old_phase: str,
+    new_phase: str,
+    custom_vars: dict[str, Any],
+    current: dict[str, Any],
+    delta: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """处理器5：剧情线切换 + 剧情事件触发 + 阶段升级通知 + 待处理事件管理。
+
+    返回 (updated_custom_vars, triggered_events)。
+    """
+    triggered_events: list[dict[str, Any]] = []
+
+    # ── 剧情线 AI 驱动切换 ──
     new_storyline_id = None
     if "custom" in delta and isinstance(delta["custom"], dict):
         raw_sid = delta["custom"].get("current_storyline_id")
@@ -429,9 +471,9 @@ def apply_state_delta(
                 new_storyline_id = int(raw_sid)
             except (ValueError, TypeError):
                 pass
+
     if new_storyline_id is not None:
         try:
-            # 校验剧情线ID是否属于当前角色且已激活，防止AI幻觉写入无效ID
             valid_row = conn.execute(
                 "SELECT id FROM character_storylines WHERE id = %s AND character_id = %s AND is_active = TRUE",
                 (new_storyline_id, character_id),
@@ -452,13 +494,13 @@ def apply_state_delta(
         except Exception as e:
             logger.warning("剧情线切换失败: %s", e)
 
-    # 检查并触发剧情事件（在写库之前，基于新的好感度）
+    # ── 检查并触发剧情事件 ──
     triggered_events = check_and_trigger_story_events(
-        conn, user_id, character_id, affection, story_phase,
+        conn, user_id, character_id, affection, new_phase,
         custom_vars=custom_vars, commit=False,
     )
 
-    # 检测剧情线切换并通知用户
+    # ── 剧情线切换通知 ──
     old_storyline_id = current.get("storyline_id")
     if new_storyline_id and new_storyline_id != old_storyline_id:
         try:
@@ -467,19 +509,53 @@ def apply_state_delta(
                 (new_storyline_id,)
             ).fetchone()
             if sl_row and sl_row["name"]:
-                if not triggered_events:
-                    triggered_events = []
                 triggered_events.append({
                     "type": "storyline_changed",
                     "title": f"进入【{sl_row['name']}】",
                     "description": ""
                 })
-                # 标记需要刷新开场白
                 custom_vars["_force_refresh_greeting"] = True
         except Exception:
             pass
 
-    # 将触发的剧情事件内容存入 custom_vars._pending_events（下一轮注入到 prompt）
+    # ── 关系阶段升级通知 ──
+    if new_phase != old_phase:
+        try:
+            from services.chat_query import get_greeting_for_phase
+            storyline_id_for_greeting = None
+            progress_row = conn.execute(
+                "SELECT current_storyline_id FROM user_story_progress WHERE user_id = %s AND character_id = %s",
+                (user_id, character_id),
+            ).fetchone()
+            if progress_row and progress_row["current_storyline_id"]:
+                try:
+                    storyline_id_for_greeting = int(progress_row["current_storyline_id"])
+                except (ValueError, TypeError):
+                    pass
+            _, upgrade_greeting = get_greeting_for_phase(
+                conn, character_id, new_phase, storyline_id_for_greeting,
+            )
+            if upgrade_greeting:
+                custom_vars["_pending_phase_upgrade"] = {
+                    "from_phase": old_phase,
+                    "to_phase": new_phase,
+                    "greeting": upgrade_greeting,
+                }
+                from constants.story_phase import STORY_PHASE_LABELS
+                phase_label = STORY_PHASE_LABELS.get(new_phase, new_phase)
+                triggered_events.append({
+                    "type": "phase_upgrade",
+                    "title": f"关系升级为「{phase_label}」",
+                    "description": "下次打开对话时，角色会主动和你说这句话",
+                })
+                logger.info(
+                    "关系阶段升级: user=%s char=%s %s→%s, 触发语已暂存",
+                    user_id, character_id, old_phase, new_phase,
+                )
+        except Exception as e:
+            logger.warning("阶段升级触发语处理异常: %s", e)
+
+    # ── 待处理剧情事件管理 ──
     if triggered_events:
         pending = [
             {"title": e.get("title", ""), "event_content": e.get("event_content", "")}
@@ -489,11 +565,25 @@ def apply_state_delta(
         if pending:
             custom_vars["_pending_events"] = pending
     else:
-        # AI 已成功回复，清空上一轮已消费的待处理事件
-        # （如果本轮触发了新事件，上面的 pending 已设置；否则清除旧事件）
         custom_vars.pop("_pending_events", None)
 
-    # 写库
+    return custom_vars, triggered_events
+
+
+def _persist_and_finalize(
+    conn: ConnType,
+    user_id: int | str,
+    character_id: str,
+    affection: int,
+    story_phase: str,
+    mood: str,
+    custom_vars: dict[str, Any],
+    current: dict[str, Any],
+    triggered_events: list[dict[str, Any]],
+    *,
+    commit: bool,
+) -> dict[str, Any]:
+    """处理器6：持久化到数据库并返回最终状态。"""
     upsert_character_state(
         conn, user_id, character_id,
         affection=affection,
@@ -511,12 +601,57 @@ def apply_state_delta(
         conn.commit()
 
     result = get_character_state(conn, user_id, character_id)
-
-    # 将触发的事件信息添加到返回结果中
     if triggered_events:
         result["_triggered_events"] = triggered_events
 
     return result
+
+
+def apply_state_delta(
+    conn: ConnType,
+    user_id: int | str,
+    character_id: str,
+    delta: dict[str, Any],
+    *,
+    commit: bool = True,
+) -> dict[str, Any]:
+    """把 AI 输出的状态增量应用到现有状态，返回更新后的状态。
+
+    安全说明：
+        - 所有增量字段都会经过白名单验证
+        - 非法字段会被自动过滤，不会报错但会被记录
+        - 数值字段有范围限制，防止极端值
+    """
+    # 安全验证
+    delta = _sanitize_state_delta(delta)
+
+    # 处理器1：好感度变化计算
+    current, affection, story_phase, mood, custom_vars = _resolve_affection_delta(
+        conn, user_id, character_id, delta,
+    )
+
+    # 处理器2：剧情阶段推进
+    story_phase, old_phase = _resolve_story_phase(
+        conn, character_id, affection, story_phase, delta,
+    )
+
+    # 处理器3：心情 + 情感锚点
+    mood, custom_vars = _resolve_mood_and_moments(mood, custom_vars, delta)
+
+    # 处理器4：自定义变量 + 沉默轮数
+    custom_vars = _resolve_custom_vars_and_silence(custom_vars, delta)
+
+    # 处理器5：剧情线切换 + 剧情事件 + 阶段升级
+    custom_vars, triggered_events = _handle_storyline_and_events(
+        conn, user_id, character_id, affection, old_phase, story_phase,
+        custom_vars, current, delta,
+    )
+
+    # 处理器6：持久化 + 返回
+    return _persist_and_finalize(
+        conn, user_id, character_id, affection, story_phase, mood,
+        custom_vars, current, triggered_events, commit=commit,
+    )
 
 
 

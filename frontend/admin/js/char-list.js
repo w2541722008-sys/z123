@@ -80,7 +80,7 @@ async function selectChar(charId) {
     loadCharacterSummary();
     loadPromptPreview();
   } catch (e) {
-    overviewPanel.innerHTML = `<div class="empty-state" style="color:var(--danger-light)">加载失败：${e.message}</div>`;
+    overviewPanel.innerHTML = `<div class="empty-state" style="color:var(--danger-light)">加载失败：${escHtml(e.message)}</div>`;
   }
 }
 

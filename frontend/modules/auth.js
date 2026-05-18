@@ -51,8 +51,11 @@
   function _onAuthSuccess(result) {
     // Cookie 由浏览器自动管理，此处仅保留 token 作为过渡兼容
     // 后端已同时设置 HttpOnly Cookie，前端不再必须手动存储 token
-    if (result.token) {
-      AppState.setToken(result.token);  // 过渡期保留，未来移除
+    if (result.access_token) {
+      AppState.setToken(result.access_token);
+    }
+    if (result.refresh_token) {
+      AppState.setRefreshToken(result.refresh_token);
     }
     user = {
       id: result.user.id,
@@ -153,6 +156,7 @@
        await API.logout();  // 后端会清除 Cookie
      } catch (e) { console.warn('logout 请求失败，前端仍会清除本地状态', e); }
      AppState.setToken('');
+     AppState.setRefreshToken('');
      AppState.setUser(null);
      loggedIn = false;
      user = null;

@@ -12,7 +12,7 @@ set -Eeuo pipefail
 SERVER_IP="124.156.199.146"
 SERVER_USER="ubuntu"
 SERVER_DIR="/opt/aifriend"
-SSH_KEY="/Users/jjj/.ssh/id_ed25519_aifriend"
+SSH_KEY="${HOME}/.ssh/id_ed25519_aifriend"
 
 SSH_OPTS=(-i "$SSH_KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=no)
 

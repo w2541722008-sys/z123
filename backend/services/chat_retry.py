@@ -76,7 +76,12 @@ def _messages_before_target(
     fallback_recent: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     target_idx = _find_target_message_index(chronological, target_message_id)
-    return chronological[:target_idx] if target_idx is not None else fallback_recent
+    if target_idx is not None:
+        # 目标消息在列表中，截取它之前的消息
+        return chronological[:target_idx]
+    # 目标消息不在列表中（已通过 created_at 过滤排除），
+    # 直接使用整个 chronological 列表作为上下文
+    return chronological if chronological else fallback_recent
 
 
 def _trim_recent_messages_tail(

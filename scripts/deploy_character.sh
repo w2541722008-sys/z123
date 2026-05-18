@@ -9,11 +9,14 @@ read -sp "请输入管理员密码: " ADMIN_PASSWORD
 echo ""
 echo ""
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 python3 << PYTHON_EOF
 import json
+import os
 import requests
 import sys
 
+SCRIPT_DIR = "$SCRIPT_DIR"
 BASE_URL = "https://lunawhisp.com/api"
 ADMIN_EMAIL = "773682014@qq.com"
 ADMIN_PASSWORD = "$ADMIN_PASSWORD"
@@ -34,9 +37,9 @@ print("✅ 登录成功！\n")
 headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 # 读取数据
-with open('bai_xiaotang_character_data.json', 'r', encoding='utf-8') as f:
+with open(os.path.join(SCRIPT_DIR, 'bai_xiaotang_character_data.json'), 'r', encoding='utf-8') as f:
     data = json.load(f)
-with open('bai_xiaotang_advanced_config.json', 'r', encoding='utf-8') as f:
+with open(os.path.join(SCRIPT_DIR, 'bai_xiaotang_advanced_config.json'), 'r', encoding='utf-8') as f:
     advanced = json.load(f)
 
 # 创建角色

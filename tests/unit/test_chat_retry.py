@@ -120,8 +120,16 @@ class TestMessagesBeforeTarget:
         assert len(result) == 2
         assert result[0]["id"] == "1"
 
-    def test_not_found_returns_fallback(self):
+    def test_not_found_returns_chronological(self):
+        """目标消息不在列表中（已通过 created_at 过滤排除），直接使用整个 chronological 列表。"""
         msgs = [{"id": "1", "role": "user", "content": "a"}]
+        fallback = [{"role": "assistant", "content": "fallback"}]
+        result = _messages_before_target(msgs, "999", fallback)
+        assert result == msgs
+
+    def test_not_found_empty_chronological_uses_fallback(self):
+        """chronological 为空且找不到目标消息时，使用 fallback。"""
+        msgs = []
         fallback = [{"role": "assistant", "content": "fallback"}]
         result = _messages_before_target(msgs, "999", fallback)
         assert result == fallback
@@ -216,14 +224,15 @@ class TestResolveRecentMessagesBeforeTarget:
         )
         assert all(m["role"] != "assistant" for m in result) or not result
 
-    def test_not_found_uses_fallback(self):
+    def test_not_found_returns_chronological_after_trim(self):
+        """目标消息不在列表中时，使用 chronological 并移除末尾 assistant。"""
         chronological = [{"id": "1", "role": "user", "content": "a"}]
         fallback = [{"role": "assistant", "content": "fallback"}]
         result = _resolve_recent_messages_before_target(
             chronological, target_message_id="999", fallback_recent=fallback
         )
-        # target not found → _messages_before_target returns fallback → _trim handles it
-        assert result == [{"role": "assistant", "content": "fallback"}]
+        # chronological 非空且末尾是 user，直接返回
+        assert result == chronological
 
 
 # ============================================================

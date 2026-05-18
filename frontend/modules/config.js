@@ -35,6 +35,10 @@ const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
   const TOKEN_KEY = shared?.STORAGE_KEYS?.TOKEN_KEY || 'aifriend_token';
   const USER_KEY = shared?.STORAGE_KEYS?.USER_KEY || 'aifriend_user';
    const LAST_CHAR_KEY = 'aifriend_last_char';
+   const DEVICE_ID_KEY = 'aifriend_device_id';
+
+   // refresh token 仅存内存，不落盘（安全增强）
+   let _refreshToken = '';
 
    function setToken(token) {
      if (token) {
@@ -48,12 +52,12 @@ const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
      return localStorage.getItem(TOKEN_KEY) || '';
    }
 
-   function setUser(user) {
-     if (user) {
-       localStorage.setItem(USER_KEY, JSON.stringify(user));
-     } else {
-       localStorage.removeItem(USER_KEY);
-     }
+   function setRefreshToken(token) {
+     _refreshToken = token || '';
+   }
+
+   function getRefreshToken() {
+     return _refreshToken;
    }
 
    function getUser() {
@@ -61,6 +65,14 @@ const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
        return JSON.parse(localStorage.getItem(USER_KEY) || 'null');
      } catch (_) {
        return null;
+     }
+   }
+
+   function setUser(user) {
+     if (user) {
+       localStorage.setItem(USER_KEY, JSON.stringify(user));
+     } else {
+       localStorage.removeItem(USER_KEY);
      }
    }
 
@@ -76,13 +88,25 @@ const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
      return localStorage.getItem(LAST_CHAR_KEY) || '';
    }
 
+   function getDeviceId() {
+     let id = localStorage.getItem(DEVICE_ID_KEY);
+     if (!id) {
+       id = 'dev_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+       localStorage.setItem(DEVICE_ID_KEY, id);
+     }
+     return id;
+   }
+
    return {
      setToken,
      getToken,
+     setRefreshToken,
+     getRefreshToken,
      setUser,
      getUser,
      setLastCharacterId,
      getLastCharacterId,
+     getDeviceId,
    };
  })();
 

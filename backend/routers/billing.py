@@ -22,6 +22,7 @@ from repositories import billing_repository as billing_repo
 from services.billing_order_service import close_expired_pending_orders
 from services.cache_service import invalidate_user
 from core.plan_constants import SVIP_PLAN, VIP_PLAN, plan_display_name
+from services.rate_limit import enforce_rate_limit, get_request_client_ip
 
 router = APIRouter()
 
@@ -161,6 +162,10 @@ def billing_create_order(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     """创建会员订单预留记录（支付网关后续再接）。"""
+    enforce_rate_limit(
+        "billing_create_order", str(user.id),
+        limit=3, window_seconds=30, detail="订单创建过于频繁",
+    )
     product = PLAN_PRODUCTS.get(payload.plan_type)
     if not product:
         raise HTTPException(status_code=400, detail="暂不支持该会员套餐")

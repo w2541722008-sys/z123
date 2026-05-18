@@ -188,19 +188,6 @@
 
 ---
 
-### `world` — 世界卡
-
-**定位**：世界观探索，AI 扮演整个世界的系统/导游/NPC 集合。
-
-**特征**：
-- `world_rules` 和 `world_info_before/after` 是核心
-- 有丰富的 `conditional_entries`（多 NPC / 多场景触发）
-- 用户可以自由探索世界，而不是跟随单一剧情
-
-**Prompt 构建**：走 `world_builder`（system_builder）
-
----
-
 ## 四、创建角色的操作步骤
 
 ### 方式一：通过管理后台创建（推荐）
@@ -409,6 +396,5 @@ print("写入完成")
 |------|-----------|------|---------------|
 | 陈序 | intimate | 多开场白，剧情线丰富 | alternate_greetings 写法 |
 | 路少晖 | scenario | 多条剧情线，世界书完整 | scenario + conditional_entries |
-| 淑女学园都市 | world | 多 NPC，日期事件系统 | world_rules + world_info |
 | 阮绿瓷 | intimate | HTML 状态面板，变量系统 | extension_hints 用法 |
 | 姜梨 | intimate | 变量初始化系统，好感度追踪 | custom_vars 设计思路 |

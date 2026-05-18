@@ -2,7 +2,7 @@
 
 > 文件路径：`aifriend/docs/AFFECTION_SYSTEM.md`
 > 代码位置：`aifriend/backend/services/character_state.py`
-> 最后更新：2026-04-01
+> 最后更新：2026-05-18
 > 维护者：小b
 
 ---
@@ -12,7 +12,7 @@
 1. **防刷分**：用户不能通过连续发同类消息快速刷满好感度
 2. **数值稳定**：AI 不自己决定加多少分，只上报"发生了什么事"，服务端查规则表算分
 3. **可维护**：全局底座规则 + 角色卡自定义规则分离，修改底座一处生效全局
-4. **卡类型差异化**：world 卡不启用好感度，intimate 卡默认启用，scenario 卡可选
+4. **卡类型差异化**：intimate 卡默认启用，scenario 卡可选
 
 ---
 
@@ -26,7 +26,7 @@ AI 生成回复（回复末尾附 [STATE_UPDATE]{...}[/STATE_UPDATE] 标签）
 parse_state_update_tag() 从回复中提取标签内容
     ↓
 apply_state_delta() 处理增量：
-    ├── 检查 affection_enabled（world 卡直接跳过）
+    ├── 检查 affection_enabled（禁用的卡直接跳过）
     ├── 读取当前状态（含三防计数器）
     ├── 惰性日重置（日期变了就清空当日统计）
     ├── 查找事件规则（全局底座 + 角色卡覆盖）
@@ -235,7 +235,6 @@ WHERE name = '陈序';
 |-----------|--------------|------|
 | `intimate` | ✅ 默认启用 | 核心就是养成关系 |
 | `scenario` | 🔶 可选（默认启用） | 在 `affection_rules_json` 里设 `"enabled": false` 关闭 |
-| `world` | ❌ 强制禁用 | 知识库型，无单一 NPC，不适用亲密度 |
 
 ---
 

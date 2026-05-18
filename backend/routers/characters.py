@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from core.auth import CurrentUser, get_current_user, get_optional_user
 from core.database import ConnType, get_db_dep
@@ -299,16 +299,23 @@ def chat_history(
     character_id: str,
     user: CurrentUser = Depends(get_current_user),
     conn: ConnType = Depends(get_db_dep),
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(50, ge=1, le=200, description="每页条数，最大 200"),
 ) -> dict[str, Any]:
-    """获取聊天历史记录。"""
+    """获取聊天历史记录（分页）。"""
     char_row = _get_accessible_character(conn, character_id, user.effective_plan)
     ensure_opening_message(conn, user.id, character_id)
 
-    messages = chat_repo.get_chat_history(conn, user.id, character_id)
+    total = chat_repo.count_chat_history(conn, user.id, character_id)
+    offset = (page - 1) * page_size
+    messages = chat_repo.get_chat_history(conn, user.id, character_id, limit=page_size, offset=offset)
 
     return {
         "character": _serialize_character_for_client(conn, char_row, user.id),
         "character_id": character_id,
         "messages": messages,
-        "count": len(messages),
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": offset + page_size < total,
     }

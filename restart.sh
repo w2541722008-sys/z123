@@ -89,18 +89,8 @@ restart_backend() {
 }
 
 restart_frontend() {
-  echo "▶ 重启前端（本地静态预览）"
-  require_cmd npx
-  stop_processes "http-server -p 8080" "前端"
-  cd "$FRONTEND_DIR"
-  nohup npx http-server -p 8080 -c-1 > "$FRONTEND_DIR/frontend.log" 2>&1 &
-  sleep 2
-
-  if pgrep -f "http-server -p 8080" >/dev/null 2>&1; then
-    echo "✅ 前端预览启动成功: http://localhost:8080"
-  else
-    echo "⚠️ 前端预览未启动，可忽略（生产环境通常由反向代理托管静态资源）"
-  fi
+  echo "▶ 前端静态文件由 Nginx 托管，无需单独重启"
+  echo "  如需本地预览：cd $FRONTEND_DIR && npx http-server -p 8080 -c-1"
 }
 
 show_status() {
@@ -109,12 +99,6 @@ show_status() {
     echo "后端: 运行中"
   else
     echo "后端: 未运行"
-  fi
-
-  if pgrep -f "http-server -p 8080" >/dev/null 2>&1; then
-    echo "前端预览: 运行中"
-  else
-    echo "前端预览: 未运行"
   fi
 }
 

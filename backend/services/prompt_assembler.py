@@ -360,6 +360,359 @@ def resolve_world_info(
     return before_list, after_list
 
 
+# ============================================================
+# build_layered_chat_messages 阶段函数
+# 将原来的 388 行巨函数拆分为 5 个阶段 + 1 个编排函数
+# ============================================================
+
+def _init_runtime_context(
+    character: Any,
+    related_assets: list[Any] | None,
+    user_name: str,
+    budget: "TokenBudget | None",
+) -> tuple[dict[str, Any], str, str, str, str, "TokenBudget"]:
+    """阶段1：初始化运行时 bundle，确定资产类型/产品卡类型，展开宏。"""
+    _budget = budget if budget is not None else _DEFAULT_BUDGET
+    runtime_bundle = build_runtime_bundle(character, related_assets=related_assets)
+    asset_type = runtime_bundle.get("asset_type") or _get_field(character, "asset_type", "hybrid")
+    card_type = _get_field(character, "card_type", "intimate") or "intimate"
+    char_name = _get_field(character, "name", "") or ""
+    char_id = _get_field(character, "id", "")
+    runtime_bundle = _expand_bundle_macros(runtime_bundle, char_name=char_name, user_name=user_name)
+    return runtime_bundle, asset_type, card_type, char_name, char_id, _budget
+
+
+def _inject_life_profile(
+    runtime_bundle: dict[str, Any],
+    character: Any,
+    card_type: str,
+) -> None:
+    """阶段2：注入人生档案（仅对话陪伴类型）。"""
+    if card_type != "intimate":
+        return
+    life_profile = parse_json_object(_get_field(character, "life_profile_json", "{}"), fallback={})
+    if not life_profile or not any(life_profile.values()):
+        return
+    profile_lines = ["【角色人生档案】"]
+    if life_profile.get("basic_info"):
+        profile_lines.append(life_profile["basic_info"])
+    if life_profile.get("childhood"):
+        profile_lines.append(f"\n童年经历：\n{life_profile['childhood']}")
+    if life_profile.get("family"):
+        profile_lines.append(f"\n家庭背景：\n{life_profile['family']}")
+    if life_profile.get("work"):
+        profile_lines.append(f"\n工作经历：\n{life_profile['work']}")
+    if life_profile.get("personality"):
+        profile_lines.append(f"\n性格特点：\n{life_profile['personality']}")
+    if life_profile.get("habits"):
+        profile_lines.append(f"\n生活习惯：\n{life_profile['habits']}")
+    if life_profile.get("important_events"):
+        profile_lines.append(f"\n重要经历：\n{life_profile['important_events']}")
+    profile_text = "\n".join(profile_lines)
+    existing_after = runtime_bundle.get("world_info_after") or ""
+    runtime_bundle["world_info_after"] = (profile_text + "\n\n" + existing_after).strip() if existing_after else profile_text
+
+
+def _resolve_world_info_triggers(
+    conn: ConnType | None,
+    character: Any,
+    runtime_bundle: dict[str, Any],
+    recent_messages: list[dict[str, str]],
+    character_state: dict | None,
+    _budget: "TokenBudget",
+) -> None:
+    """阶段3：World Info 动态触发——数据库记忆 + 角色卡条件词条合并。"""
+    ctx_messages = recent_messages[-(RECENT_MESSAGE_WINDOW):] if recent_messages else []
+    ctx_text = " ".join(
+        m.get("content", "") for m in ctx_messages if m.get("content")
+    )
+
+    char_id = _get_field(character, "id", "")
+    _custom_vars = (character_state or {}).get("custom_vars") or {}
+    _wi_sticky = _custom_vars.get("_wi_sticky") or {}
+    _wi_cooldown = _custom_vars.get("_wi_cooldown") or {}
+
+    if conn is not None:
+        current_storyline_id = (character_state or {}).get("storyline_id")
+        db_before, db_after, new_sticky, new_cooldown = fetch_character_memories(
+            conn, char_id, ctx_text,
+            max_triggered=_wi_max_triggered(_budget),
+            max_per_entry=_wi_max_chars_per_entry(_budget),
+            wi_max=_budget.wi_max_chars(),
+            sticky_state=_wi_sticky,
+            cooldown_state=_wi_cooldown,
+            current_storyline_id=current_storyline_id,
+        )
+    else:
+        db_before, db_after = [], []
+        new_sticky, new_cooldown = {}, {}
+
+    if character_state is not None:
+        cv = dict(character_state.get("custom_vars") or {})
+        cv["_wi_sticky"] = new_sticky
+        cv["_wi_cooldown"] = new_cooldown
+        character_state["custom_vars"] = cv
+
+    conditional_entries = runtime_bundle.get("conditional_entries") or []
+    card_before: list[Any] = []
+    card_after: list[Any] = []
+    if conditional_entries:
+        card_before, card_after = resolve_world_info(conditional_entries, ctx_text, budget=_budget)
+
+    wi_max = _budget.wi_max_chars()
+
+    def _safe_wi_append(existing: str, new_items: list[str], remaining_budget: int) -> tuple[str, int]:
+        parts = [existing] if existing else []
+        used = len(existing) if existing else 0
+        for item in new_items:
+            item_chars = len(item)
+            if used + item_chars > remaining_budget:
+                break
+            parts.append(item)
+            used += item_chars
+        return "\n\n".join(parts).strip(), used
+
+    db_reserve_ratio = 0.3
+    has_db_entries = bool(db_before or db_after)
+    card_wi_budget = int(wi_max * (1 - db_reserve_ratio)) if has_db_entries else wi_max
+
+    if card_before:
+        merged_before, card_before_used = _safe_wi_append(
+            runtime_bundle.get("world_info_before") or "", card_before, card_wi_budget
+        )
+        runtime_bundle["world_info_before"] = merged_before
+    else:
+        card_before_used = 0
+
+    if card_after:
+        merged_after, card_after_used = _safe_wi_append(
+            runtime_bundle.get("world_info_after") or "", card_after, card_wi_budget
+        )
+        runtime_bundle["world_info_after"] = merged_after
+    else:
+        card_after_used = 0
+
+    remaining_before = max(0, wi_max - card_before_used)
+    remaining_after = max(0, wi_max - card_after_used)
+
+    if db_before and remaining_before > 0:
+        runtime_bundle["world_info_before"] = _safe_wi_append(
+            runtime_bundle.get("world_info_before") or "", db_before, remaining_before
+        )[0]
+
+    if db_after and remaining_after > 0:
+        runtime_bundle["world_info_after"] = _safe_wi_append(
+            runtime_bundle.get("world_info_after") or "", db_after, remaining_after
+        )[0]
+
+
+def _inject_post_history_rules(
+    conn: ConnType | None,
+    char_id: str,
+    runtime_bundle: dict[str, Any],
+    character_state: dict | None,
+    _budget: "TokenBudget",
+) -> None:
+    """阶段4：从数据库查询后置规则，合并到 runtime_bundle。"""
+    if conn is not None:
+        db_post_rules = fetch_character_post_rules(
+            conn, char_id,
+            storyline_id=character_state.get("storyline_id") if character_state else None,
+            story_phase=character_state.get("story_phase") if character_state else None,
+            max_chars=_budget.reserve_max_chars() if _budget is not None else _LAYER_MAX_CHARS,
+        )
+    else:
+        db_post_rules = []
+
+    if db_post_rules:
+        existing_rules = runtime_bundle.get("post_history_rules") or ""
+        all_rules = [r for r in ([existing_rules] + db_post_rules) if r and r.strip()]
+        merged_rules = "\n\n".join(all_rules).strip()
+        runtime_bundle["post_history_rules"] = merged_rules
+
+
+def _inject_state_snapshot(
+    conn: ConnType | None,
+    character: Any,
+    runtime_bundle: dict[str, Any],
+    character_state: dict | None,
+    _budget: "TokenBudget",
+    card_type: str,
+    last_chat_time: str | None,
+    user_id: int | str | None,
+    char_id: str,
+) -> None:
+    """阶段5：构建关系状态快照、时间感知、情感锚点，注入到 world_info_after。"""
+    _affection_enabled = True
+    if conn is not None and character_state:
+        _affection_enabled = _check_affection(conn, char_id)
+
+    if not (character_state and _affection_enabled):
+        return
+
+    affection = character_state.get("affection", 30)
+    phase = character_state.get("story_phase", "stranger")
+    mood = character_state.get("mood", "neutral")
+    custom_vars = character_state.get("custom_vars") or {}
+
+    phase_behaviors = parse_json_object(_get_field(character, "phase_behaviors_json", ""), fallback={})
+
+    if card_type == "scenario":
+        phase_label = SCENARIO_PHASE_LABELS.get(phase, phase)
+        mood_label = SCENARIO_MOOD_LABELS.get(mood, mood)
+        update_instruction = _SCENARIO_STATE_UPDATE_INSTRUCTION
+        tendency = _get_behavior_tendency(phase, mood, card_type="scenario", phase_behaviors=phase_behaviors)
+        state_lines = [
+            "【当前剧情状态（每轮自动更新）】",
+            f"- 剧情沉浸度：{affection}/100",
+            f"- 剧情阶段：{phase_label}（{phase}）",
+            f"- 当前氛围：{mood_label}（{mood}）",
+        ]
+    else:
+        phase_label = STORY_PHASE_LABELS.get(phase, phase)
+        mood_label = MOOD_LABELS.get(mood, mood)
+        update_instruction = _STATE_UPDATE_INSTRUCTION
+        tendency = _get_behavior_tendency(phase, mood, phase_behaviors=phase_behaviors)
+        state_lines = [
+            "【当前关系状态（每轮自动更新）】",
+            f"- 好感度：{affection}/100",
+            f"- 关系阶段：{phase_label}（{phase}）",
+            f"- 当前心情：{mood_label}（{mood}）",
+        ]
+    if tendency:
+        state_lines.append(f"- 行为倾向：{tendency}")
+
+    # 当前剧情线名称显示
+    storyline_id = character_state.get("storyline_id") if character_state else None
+    if storyline_id and conn is not None:
+        try:
+            sl_row = conn.execute(
+                "SELECT name FROM character_storylines WHERE id = %s",
+                (storyline_id,),
+            ).fetchone()
+            if sl_row and sl_row["name"]:
+                state_lines.append(f"- 当前剧情线：{sl_row['name']}")
+
+            if card_type == "scenario" and user_id:
+                try:
+                    progress_row = conn.execute(
+                        "SELECT triggered_event_ids FROM user_story_progress WHERE user_id = %s AND character_id = %s",
+                        (user_id, char_id)
+                    ).fetchone()
+                    if progress_row and progress_row["triggered_event_ids"]:
+                        event_ids = [int(x.strip()) for x in str(progress_row["triggered_event_ids"]).split(",") if x.strip().isdigit()]
+                        if event_ids:
+                            recent_ids = event_ids[-3:]
+                            placeholders = ",".join(["%s"] * len(recent_ids))
+                            recent_events = conn.execute(
+                                f"SELECT title FROM story_events WHERE id IN ({placeholders}) ORDER BY id DESC",
+                                tuple(recent_ids)
+                            ).fetchall()
+                            if recent_events:
+                                titles = [e["title"] for e in recent_events if e["title"]]
+                                if titles:
+                                    state_lines.append(f"- 最近剧情：{' → '.join(titles)}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # 时间感知
+    _tz_offset = 8
+    _now = datetime.now(timezone(timedelta(hours=_tz_offset)))
+    _h = _now.hour
+    if _h < 5: _time_desc = "深夜"
+    elif _h < 8: _time_desc = "清晨"
+    elif _h < 12: _time_desc = "上午"
+    elif _h < 14: _time_desc = "中午"
+    elif _h < 18: _time_desc = "下午"
+    elif _h < 20: _time_desc = "傍晚"
+    else: _time_desc = "晚上"
+    _date_desc = "周末" if _now.weekday() >= 5 else "工作日"
+    state_lines.append(f"- 当前时间：{_date_desc}{_time_desc}（背景信息，不要主动提及时间，除非用户话题涉及）")
+
+    # 自定义变量展示（过滤内部变量）
+    if custom_vars:
+        for k, v in list(custom_vars.items())[:5]:
+            if k.startswith("_"):
+                continue
+            state_lines.append(f"- {k}：{v}")
+
+    # 注入待处理剧情事件
+    pending_events = custom_vars.get("_pending_events") or []
+    if pending_events:
+        for pe in pending_events[:2]:
+            title = pe.get("title", "剧情事件")
+            content = pe.get("event_content", "")
+            if content:
+                state_lines.append(f"- 【触发剧情事件：{title}】{content[:100]}")
+
+    # 沉默轮数提醒
+    silent_rounds = int(custom_vars.get("_silent_rounds") or 0)
+    if silent_rounds >= 3:
+        state_lines.append(f"- 💡 提示：已连续{silent_rounds}轮未记录互动，如本轮有值得记录的内容可补充上报")
+
+    state_lines.extend(update_instruction)
+
+    state_snapshot = "\n".join(state_lines)
+    _state_max = max(1000, int(_budget.wi_max_chars() * 0.15))
+    if len(state_snapshot) > _state_max:
+        truncated_lines = state_lines[:6]
+        truncated_lines.append("…（自定义变量已省略）")
+        truncated_lines.extend(update_instruction)
+        state_snapshot = "\n".join(truncated_lines)
+
+    # ── 情感锚点 & 主动回忆注入 ──
+    shared_moments = list(custom_vars.get("_shared_moments") or [])
+    proactive_cared = False
+
+    if shared_moments and last_chat_time:
+        try:
+            last_dt = datetime.fromisoformat(str(last_chat_time))
+            hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
+            if hours_since >= 24:
+                anchor = random.choice(shared_moments[-5:])
+                if card_type == "scenario":
+                    proactive_text = (
+                        f"【剧情回响】距离上一次互动已过去较长时间（{int(hours_since)}小时）。回忆起「{anchor}」，"
+                        f"如果用户的问题与此相关，可以自然地引入这段经历。"
+                    )
+                else:
+                    proactive_text = (
+                        f"【背景提示】你已经很久没和用户聊天了（{int(hours_since)}小时）。想起「{anchor}」，你有点想念对方。"
+                        f"但不要生硬地打断用户的问题——如果用户问了具体问题，先认真回答；"
+                        f"如果用户只是打招呼或闲聊，可以自然地表达想念，如\"好久不见，最近怎么样？\"或\"想起{anchor}，就想和你聊聊\"。"
+                    )
+                existing_after = runtime_bundle.get("world_info_after") or ""
+                runtime_bundle["world_info_after"] = (proactive_text + "\n\n" + existing_after).strip()
+                proactive_cared = True
+        except (ValueError, TypeError):
+            pass
+
+    if shared_moments and not proactive_cared:
+        candidates = shared_moments[-5:]
+        anchor = random.choice(candidates)
+        if card_type == "scenario":
+            anchor_text = (
+                f"【共同回忆】{anchor}"
+                f"（这段经历是你和用户之间的纽带，不需要刻意提及，但会影响你此刻的态度和情感色彩）"
+            )
+        else:
+            anchor_text = (
+                f"【共同回忆】{anchor}"
+                f"（这是你和用户的共同回忆，会影响你此刻的情感基调。只有当话题自然关联时才提起，不要为了提起而提起）"
+            )
+        existing_after = runtime_bundle.get("world_info_after") or ""
+        runtime_bundle["world_info_after"] = (anchor_text + "\n\n" + existing_after).strip()
+
+    # 状态快照优先级最高：放在 world_info_after 最前面
+    existing_after = runtime_bundle.get("world_info_after") or ""
+    if existing_after:
+        runtime_bundle["world_info_after"] = (state_snapshot + "\n\n" + existing_after).strip()
+    else:
+        runtime_bundle["world_info_after"] = state_snapshot
+
+
 def build_layered_chat_messages(
     character: Any,
     recent_messages: list[dict[str, str]],
@@ -379,367 +732,27 @@ def build_layered_chat_messages(
     ① asset_type（导卡层）: character / hybrid / scenario
     ② card_type（产品层）: intimate(对话陪伴) / scenario(剧情沙盒)
        当 card_type 有明确产品语义时，优先按 card_type 覆盖 builder 选择：
-         - card_type=scenario    → 强制走 _build_scenario_mode_messages（旁白/NPC/分支剧情）
+         - card_type=scenario    → 强制走 _build_scenario_mode_messages
          - card_type=intimate    → 按 asset_type 原路由（保持现有行为）
-
-    user_name：当前用户的显示名（用于替换 {{user}} 宏），可选。
-    character_state：当前关系状态快照，格式 {"affection":int,"story_phase":str,"mood":str,"custom_vars":dict}，可选。
-    budget：TokenBudget 实例（可选），控制各区块的 token 分配。
-            不传时自动使用 _DEFAULT_BUDGET（64K context，2048 output reserve）。
     """
-    # 使用传入的 budget 或默认实例
-    _budget = budget if budget is not None else _DEFAULT_BUDGET
-
-    runtime_bundle = build_runtime_bundle(character, related_assets=related_assets)
-    asset_type = runtime_bundle.get("asset_type") or _get_field(character, "asset_type", "hybrid")
-    # 读取产品层 card_type（数据库字段，用 _get_field 兼容多种返回格式）
-    card_type = _get_field(character, "card_type", "intimate") or "intimate"
-    char_name = _get_field(character, "name", "") or ""
-    # 对 bundle 内所有文本做一次宏展开（{{char}} → 角色名，{{user}} → 用户名）
-    runtime_bundle = _expand_bundle_macros(runtime_bundle, char_name=char_name, user_name=user_name)
-
-    # ── 人生档案注入（仅对话陪伴类型）──────────────────────────────────────
-    # 将角色的人生档案（life_profile_json）注入到 world_info_after
-    # 优先级：状态快照 > 人生档案 > 情感锚点 > 普通世界书
-    # 剧情沙盒不使用人生档案，避免污染剧情 prompt
-    if card_type == "intimate":
-        life_profile = parse_json_object(_get_field(character, "life_profile_json", "{}"), fallback={})
-        if life_profile and any(life_profile.values()):
-            profile_lines = ["【角色人生档案】"]
-            if life_profile.get("basic_info"):
-                profile_lines.append(life_profile["basic_info"])
-            if life_profile.get("childhood"):
-                profile_lines.append(f"\n童年经历：\n{life_profile['childhood']}")
-            if life_profile.get("family"):
-                profile_lines.append(f"\n家庭背景：\n{life_profile['family']}")
-            if life_profile.get("work"):
-                profile_lines.append(f"\n工作经历：\n{life_profile['work']}")
-            if life_profile.get("personality"):
-                profile_lines.append(f"\n性格特点：\n{life_profile['personality']}")
-            if life_profile.get("habits"):
-                profile_lines.append(f"\n生活习惯：\n{life_profile['habits']}")
-            if life_profile.get("important_events"):
-                profile_lines.append(f"\n重要经历：\n{life_profile['important_events']}")
-
-            profile_text = "\n".join(profile_lines)
-            # 注入到 world_info_after，优先级仅次于状态快照
-            existing_after = runtime_bundle.get("world_info_after") or ""
-            runtime_bundle["world_info_after"] = (profile_text + "\n\n" + existing_after).strip() if existing_after else profile_text
-
-    # ── World Info 动态触发 ──────────────────────────────────────────────
-    # 用最新用户消息 + 最近几条对话作为匹配上下文
-    # 触发到的词条追加到 world_info_before / world_info_after
-
-    # 构建用于关键词匹配的上下文文本（最近消息末尾几条）
-    ctx_messages = recent_messages[-(RECENT_MESSAGE_WINDOW):] if recent_messages else []
-    ctx_text = " ".join(
-        m.get("content", "") for m in ctx_messages if m.get("content")
+    # 阶段1：初始化运行时上下文
+    runtime_bundle, asset_type, card_type, char_name, char_id, _budget = _init_runtime_context(
+        character, related_assets, user_name, budget,
     )
-    
-    # 1. 从数据库查询记忆条目（新的角色配置系统）
-    char_id = _get_field(character, "id", "")
-    _b = _budget or _DEFAULT_BUDGET
-    # sticky/cooldown 状态从 character_state 的 custom_vars 中读取
-    _custom_vars = (character_state or {}).get("custom_vars") or {}
-    _wi_sticky = _custom_vars.get("_wi_sticky") or {}
-    _wi_cooldown = _custom_vars.get("_wi_cooldown") or {}
-    if conn is not None:
-        # 获取当前剧情线 ID
-        current_storyline_id = (character_state or {}).get("storyline_id")
-        db_before, db_after, new_sticky, new_cooldown = fetch_character_memories(
-            conn, char_id, ctx_text,
-            max_triggered=_wi_max_triggered(_budget),
-            max_per_entry=_wi_max_chars_per_entry(_budget),
-            wi_max=_b.wi_max_chars(),
-            sticky_state=_wi_sticky,
-            cooldown_state=_wi_cooldown,
-            current_storyline_id=current_storyline_id,
-        )
-    else:
-        db_before, db_after = [], []
-        new_sticky, new_cooldown = {}, {}
-    # 将新的 sticky/cooldown 状态写回 character_state 的 custom_vars（引用传递，调用方可感知）
-    if character_state is not None:
-        cv = dict(character_state.get("custom_vars") or {})
-        cv["_wi_sticky"] = new_sticky
-        cv["_wi_cooldown"] = new_cooldown
-        character_state["custom_vars"] = cv
-    
-    # 2. 从角色卡解析的 conditional_entries（兼容旧的角色卡导入）
-    conditional_entries = runtime_bundle.get("conditional_entries") or []
-    card_before: list[Any] = []
-    card_after: list[Any] = []
-    if conditional_entries:
-        card_before, card_after = resolve_world_info(conditional_entries, ctx_text, budget=_budget)
-    
-    # 3. 合并数据库和角色卡的触发结果（角色卡优先，数据库补充）
-    # 角色卡包含核心设定，应优先保证；数据库的记忆条目作为动态补充
-    wi_max = _budget.wi_max_chars()
 
-    def _calc_wi_used(items: list[str]) -> int:
-        """计算已使用的 World Info 字符数。"""
-        return sum(len(item) for item in items)
+    # 阶段2：人生档案注入（仅对话陪伴）
+    _inject_life_profile(runtime_bundle, character, card_type)
 
-    def _safe_wi_append(existing: str, new_items: list[str], remaining_budget: int) -> tuple[str, int]:
-        """把 new_items 追加到 existing，总量不超过 remaining_budget。
-        返回 (合并后的文本, 实际使用的字符数)
-        """
-        parts = [existing] if existing else []
-        used = len(existing) if existing else 0  # 已有内容也计入预算
-        for item in new_items:
-            item_chars = len(item)
-            if used + item_chars > remaining_budget:
-                break
-            parts.append(item)
-            used += item_chars
-        return "\n\n".join(parts).strip(), used
+    # 阶段3：World Info 动态触发
+    _resolve_world_info_triggers(conn, character, runtime_bundle, recent_messages, character_state, _budget)
 
-    # 先处理角色卡的 World Info（优先）
-    # P8: 当数据库有匹配条目时，为 DB WI 保底 30% 的 wi_max 预算
-    # 避免角色卡 WI 用完全部预算导致数据库动态知识被完全排挤
-    db_reserve_ratio = 0.3
-    has_db_entries = bool(db_before or db_after)
-    card_wi_budget = int(wi_max * (1 - db_reserve_ratio)) if has_db_entries else wi_max
-    
-    # 处理 card_before
-    if card_before:
-        merged_before, card_before_used = _safe_wi_append(
-            runtime_bundle.get("world_info_before") or "", card_before, card_wi_budget
-        )
-        runtime_bundle["world_info_before"] = merged_before
-    else:
-        card_before_used = 0
-    
-    # 处理 card_after
-    if card_after:
-        merged_after, card_after_used = _safe_wi_append(
-            runtime_bundle.get("world_info_after") or "", card_after, card_wi_budget
-        )
-        runtime_bundle["world_info_after"] = merged_after
-    else:
-        card_after_used = 0
-    
-    # 再处理数据库的记忆条目（使用实际剩余预算）
-    remaining_before = max(0, wi_max - card_before_used)
-    remaining_after = max(0, wi_max - card_after_used)
-    
-    if db_before and remaining_before > 0:
-        runtime_bundle["world_info_before"] = _safe_wi_append(
-            runtime_bundle.get("world_info_before") or "", db_before, remaining_before
-        )[0]
-    
-    if db_after and remaining_after > 0:
-        runtime_bundle["world_info_after"] = _safe_wi_append(
-            runtime_bundle.get("world_info_after") or "", db_after, remaining_after
-        )[0]
+    # 阶段4：后置规则注入
+    _inject_post_history_rules(conn, char_id, runtime_bundle, character_state, _budget)
 
-    # ── 后置规则动态注入 ──────────────────────────────────────────────────
-    # 从数据库查询后置规则，合并到 runtime_bundle 的 post_history_rules 中
-    # 后置规则放在历史记录后，用于控制输出格式、过滤内容等
-    if conn is not None:
-        db_post_rules = fetch_character_post_rules(
-            conn, char_id,
-            storyline_id=character_state.get("storyline_id") if character_state else None,
-            story_phase=character_state.get("story_phase") if character_state else None,
-            max_chars=_budget.reserve_max_chars() if _budget is not None else _LAYER_MAX_CHARS,
-        )
-    else:
-        db_post_rules = []
-    
-    if db_post_rules:
-        # 合并数据库后置规则和角色卡原有的 post_history_rules
-        # 合并顺序：角色卡规则在前，数据库规则在后
-        # 这样数据库的动态规则会覆盖角色卡的静态规则（后出现的指令优先）
-        existing_rules = runtime_bundle.get("post_history_rules") or ""
-        # 过滤掉空字符串，避免产生多余的换行
-        all_rules = [r for r in ([existing_rules] + db_post_rules) if r and r.strip()]
-        merged_rules = "\n\n".join(all_rules).strip()
-        runtime_bundle["post_history_rules"] = merged_rules
+    # 阶段5：状态快照与情感锚点注入
+    _inject_state_snapshot(conn, character, runtime_bundle, character_state, _budget, card_type, last_chat_time, user_id, char_id)
 
-    # ── 关系状态快照注入 ──────────────────────────────────────────────────
-    # 将当前好感度/阶段/心情以紧凑文本注入到 world_info_after（放在设定末尾，
-    # 让 AI 每轮都能看到"当前关系快照"，并据此决定是否输出 [STATE_UPDATE]）。
-    # 禁用好感度的角色卡不注入状态快照和 STATE_UPDATE 指令，
-    # 节省 token 并避免 AI 输出无用标签。
-    _affection_enabled = True
-    if conn is not None and character_state:
-        _affection_enabled = _check_affection(conn, char_id)
-
-    if character_state and _affection_enabled:
-        affection = character_state.get("affection", 30)
-        phase = character_state.get("story_phase", "stranger")
-        mood = character_state.get("mood", "neutral")
-        custom_vars = character_state.get("custom_vars") or {}
-
-        # 读取角色卡自定义阶段行为
-        phase_behaviors = parse_json_object(_get_field(character, "phase_behaviors_json", ""), fallback={})
-
-        # 根据 card_type 选择标签映射和 STATE_UPDATE 指令
-        if card_type == "scenario":
-            phase_label = SCENARIO_PHASE_LABELS.get(phase, phase)
-            mood_label = SCENARIO_MOOD_LABELS.get(mood, mood)
-            update_instruction = _SCENARIO_STATE_UPDATE_INSTRUCTION
-            tendency = _get_behavior_tendency(phase, mood, card_type="scenario", phase_behaviors=phase_behaviors)
-            state_lines = [
-                "【当前剧情状态（每轮自动更新）】",
-                f"- 剧情沉浸度：{affection}/100",
-                f"- 剧情阶段：{phase_label}（{phase}）",
-                f"- 当前氛围：{mood_label}（{mood}）",
-            ]
-        else:
-            phase_label = STORY_PHASE_LABELS.get(phase, phase)
-            mood_label = MOOD_LABELS.get(mood, mood)
-            update_instruction = _STATE_UPDATE_INSTRUCTION
-            tendency = _get_behavior_tendency(phase, mood, phase_behaviors=phase_behaviors)
-            state_lines = [
-                "【当前关系状态（每轮自动更新）】",
-                f"- 好感度：{affection}/100",
-                f"- 关系阶段：{phase_label}（{phase}）",
-                f"- 当前心情：{mood_label}（{mood}）",
-            ]
-        if tendency:
-            state_lines.append(f"- 行为倾向：{tendency}")
-
-        # 当前剧情线名称显示（从 character_state 的 storyline_id 查询名称）
-        storyline_id = character_state.get("storyline_id") if character_state else None
-        if storyline_id and conn is not None:
-            try:
-                sl_row = conn.execute(
-                    "SELECT name FROM character_storylines WHERE id = %s",
-                    (storyline_id,),
-                ).fetchone()
-                if sl_row and sl_row["name"]:
-                    state_lines.append(f"- 当前剧情线：{sl_row['name']}")
-
-                # 剧情回顾：显示最近触发的 3 个剧情事件（仅 scenario 卡）
-                if card_type == "scenario" and user_id:
-                    try:
-                        progress_row = conn.execute(
-                            "SELECT triggered_event_ids FROM user_story_progress WHERE user_id = %s AND character_id = %s",
-                            (user_id, char_id)
-                        ).fetchone()
-                        if progress_row and progress_row["triggered_event_ids"]:
-                            event_ids = [int(x.strip()) for x in str(progress_row["triggered_event_ids"]).split(",") if x.strip().isdigit()]
-                            if event_ids:
-                                recent_ids = event_ids[-3:]  # 最近 3 个
-                                placeholders = ",".join(["%s"] * len(recent_ids))
-                                recent_events = conn.execute(
-                                    f"SELECT title FROM story_events WHERE id IN ({placeholders}) ORDER BY id DESC",
-                                    tuple(recent_ids)
-                                ).fetchall()
-                                if recent_events:
-                                    titles = [e["title"] for e in recent_events if e["title"]]
-                                    if titles:
-                                        state_lines.append(f"- 最近剧情：{' → '.join(titles)}")
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        # 时间感知（Step 5 优化版）
-        _tz_offset = 8  # UTC+8 中国时区
-        _now = datetime.now(timezone(timedelta(hours=_tz_offset)))
-        _h = _now.hour
-        if _h < 5: _time_desc = "深夜"
-        elif _h < 8: _time_desc = "清晨"
-        elif _h < 12: _time_desc = "上午"
-        elif _h < 14: _time_desc = "中午"
-        elif _h < 18: _time_desc = "下午"
-        elif _h < 20: _time_desc = "傍晚"
-        else: _time_desc = "晚上"
-        _date_desc = "周末" if _now.weekday() >= 5 else "工作日"
-        # 关键修改：时间作为背景信息，不鼓励AI主动提及
-        state_lines.append(f"- 当前时间：{_date_desc}{_time_desc}（背景信息，不要主动提及时间，除非用户话题涉及）")
-
-        # 自定义变量展示（Step 4：过滤内部变量）
-        if custom_vars:
-            for k, v in list(custom_vars.items())[:5]:
-                if k.startswith("_"):  # 跳过内部变量（_shared_moments, _wi_sticky 等）
-                    continue
-                state_lines.append(f"- {k}：{v}")
-
-        # 注入待处理剧情事件（Optimization A：story_event 的 event_content 下一轮注入后清空）
-        pending_events = custom_vars.get("_pending_events") or []
-        if pending_events:
-            for pe in pending_events[:2]:  # 最多注入2个，避免占太多token
-                title = pe.get("title", "剧情事件")
-                content = pe.get("event_content", "")
-                if content:
-                    state_lines.append(f"- 【触发剧情事件：{title}】{content[:100]}")
-
-        # 沉默轮数提醒：连续3轮AI未上报事件时注入提醒（优化版）
-        silent_rounds = int(custom_vars.get("_silent_rounds") or 0)
-        if silent_rounds >= 3:
-            state_lines.append(f"- 💡 提示：已连续{silent_rounds}轮未记录互动，如本轮有值得记录的内容可补充上报")
-
-        state_lines.extend(update_instruction)
-
-        state_snapshot = "\n".join(state_lines)
-        # 状态快照字数保护：上限为 WI 预算的 15%，但保证至少 1000 字符
-        # 状态快照对角色行为影响重大，需要保证完整性
-        _state_max = max(1000, int(_budget.wi_max_chars() * 0.15))
-        if len(state_snapshot) > _state_max:
-            # 优先截断自定义变量部分，保留核心状态信息
-            truncated_lines = state_lines[:6]  # 保留标题和核心状态（好感度、阶段、心情）
-            truncated_lines.append("…（自定义变量已省略）")
-            truncated_lines.extend(update_instruction)  # 保留指令部分
-            state_snapshot = "\n".join(truncated_lines)
-
-        # ── 情感锚点 & 主动回忆注入（Steps 3 & 8）──────────────────
-        shared_moments = list(custom_vars.get("_shared_moments") or [])
-        proactive_cared = False  # 标记是否已触发主动关心（避免和通用锚点重复）
-
-        # 主动回忆：久未聊天时注入背景提示（Step 8 优化版）
-        if shared_moments and last_chat_time:
-            try:
-                last_dt = datetime.fromisoformat(str(last_chat_time))
-                hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
-                if hours_since >= 24:
-                    anchor = random.choice(shared_moments[-5:])
-                    if card_type == "scenario":
-                        proactive_text = (
-                            f"【剧情回响】距离上一次互动已过去较长时间（{int(hours_since)}小时）。回忆起「{anchor}」，"
-                            f"如果用户的问题与此相关，可以自然地引入这段经历。"
-                        )
-                    else:
-                        # 关键修改：不强制"好久不见"，而是作为背景信息让AI自主判断
-                        proactive_text = (
-                            f"【背景提示】你已经很久没和用户聊天了（{int(hours_since)}小时）。想起「{anchor}」，你有点想念对方。"
-                            f"但不要生硬地打断用户的问题——如果用户问了具体问题，先认真回答；"
-                            f"如果用户只是打招呼或闲聊，可以自然地表达想念，如\"好久不见，最近怎么样？\"或\"想起{anchor}，就想和你聊聊\"。"
-                        )
-                    existing_after = runtime_bundle.get("world_info_after") or ""
-                    runtime_bundle["world_info_after"] = (proactive_text + "\n\n" + existing_after).strip()
-                    proactive_cared = True
-            except (ValueError, TypeError):
-                pass
-
-        # 情感锚点：从共同时刻中随机选一条注入（Step 3 优化版）
-        if shared_moments and not proactive_cared:
-            candidates = shared_moments[-5:]  # 从最近5条中选，保证新鲜度
-            anchor = random.choice(candidates)
-            if card_type == "scenario":
-                anchor_text = (
-                    f"【共同回忆】{anchor}"
-                    f"（这段经历是你和用户之间的纽带，不需要刻意提及，但会影响你此刻的态度和情感色彩）"
-                )
-            else:
-                # 关键修改：情感锚点作为背景情绪，不鼓励主动提起
-                anchor_text = (
-                    f"【共同回忆】{anchor}"
-                    f"（这是你和用户的共同回忆，会影响你此刻的情感基调。只有当话题自然关联时才提起，不要为了提起而提起）"
-                )
-            existing_after = runtime_bundle.get("world_info_after") or ""
-            runtime_bundle["world_info_after"] = (anchor_text + "\n\n" + existing_after).strip()
-        
-        # 状态快照优先级最高：放在 world_info_after 的最前面
-        # 这样即使 world_info_after 被截断，状态快照也能保留
-        existing_after = runtime_bundle.get("world_info_after") or ""
-        if existing_after:
-            runtime_bundle["world_info_after"] = (state_snapshot + "\n\n" + existing_after).strip()
-        else:
-            runtime_bundle["world_info_after"] = state_snapshot
-
+    # 阶段6：选择 builder 并构建最终 messages
     builder = _select_mode_builder(card_type, asset_type)
     return builder(
         runtime_bundle,

@@ -654,6 +654,20 @@ body {
       padding: 0;
     }
 
+    .load-earlier-btn {
+      text-align: center;
+      font-size: 12px;
+      color: var(--link);
+      padding: 12px 16px;
+      margin: 0 16px 8px;
+      cursor: pointer;
+      border-radius: 12px;
+      background: rgba(138,114,255,.08);
+      transition: background .2s;
+      user-select: none;
+    }
+    .load-earlier-btn:hover { background: rgba(138,114,255,.15); }
+
     .msg-bubble.typing {
       background: var(--bg-card-md);
       border: 1px solid var(--line);
@@ -1051,6 +1065,11 @@ body {
     }
     .story-event-toast.show {
       top: 16px;
+    }
+    /* 关系阶段升级提示条（粉色渐变，区别于普通剧情事件） */
+    .phase-upgrade-toast {
+      background: linear-gradient(135deg, rgba(244,114,182,.88), rgba(236,72,153,.88));
+      box-shadow: 0 4px 24px rgba(244,114,182,.5);
     }
 
     /* ── 角色状态面板 ───────────────────────── */

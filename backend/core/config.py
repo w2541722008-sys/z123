@@ -148,6 +148,12 @@ ADMIN_EMAILS = {
 # 可通过 .env 中的 TOKEN_EXPIRE_DAYS 覆盖。
 TOKEN_EXPIRE_DAYS = _int_env("TOKEN_EXPIRE_DAYS", 30, minimum=1, maximum=365)
 
+# 双 Token 模型配置
+# Access Token：短期（默认 15 分钟），用于 API 鉴权
+# Refresh Token：长期（默认 30 天），仅用于刷新 Access Token，绑定设备指纹
+ACCESS_TOKEN_EXPIRE_MINUTES = _int_env("ACCESS_TOKEN_EXPIRE_MINUTES", 15, minimum=5, maximum=60)
+REFRESH_TOKEN_EXPIRE_DAYS = _int_env("REFRESH_TOKEN_EXPIRE_DAYS", 30, minimum=1, maximum=365)
+
 
 # ============================================================
 # 基础限流配置（保持简单、低复杂度）

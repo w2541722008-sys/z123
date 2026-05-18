@@ -79,12 +79,12 @@
      close();
      if (!ensureCurrentChar()) return;
      const meta = Chat.getDisplayMeta();
-     const ok = await UI.confirm(
-       `清空与${meta.displayName}的聊天记录`,
-       `清空后可以重新选择剧情线开始，当前的聊天记录将无法恢复。`,
-       '确认清空',
-       '再想想'
-     );
+    const ok = await UI.confirm(
+      `清空与${meta.displayName}的聊天记录`,
+      `清空后一切将从零开始（包括关系状态、好感度、剧情进度），当前的聊天记录将无法恢复。`,
+      '确认清空',
+      '再想想'
+    );
      if (!ok) return;
      try {
        // 先清空聊天记录（用默认开场白占位）

@@ -584,5 +584,5 @@ async function testKeywords() {
       <div class="test-result-header"><span class="test-result-title">${escHtml(r.keywords)}</span><span class="test-result-match">✓ 匹配</span></div>
       <div class="test-result-content">${escHtml(r.content.substring(0,200))}${r.content.length>200?'...':''}</div>
       <div class="test-result-keywords">匹配的关键词: <span>${escHtml(r.matched_keywords.join(', '))}</span></div></div>`).join('');
-  } catch(e) { container.innerHTML = `<div class="no-results" style="color:var(--danger-light)">测试失败：${e.message}</div>`; }
+  } catch(e) { container.innerHTML = `<div class="no-results" style="color:var(--danger-light)">测试失败：${escHtml(e.message)}</div>`; }
 }

@@ -26,9 +26,11 @@ AI Friend 后端主入口
 from __future__ import annotations
 
 # 标准库导入
+import contextvars
 import logging
 import os
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from contextlib import asynccontextmanager
@@ -139,6 +141,34 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="aifriend backend", version="0.3.0", lifespan=lifespan)
 
 # ============================================================
+# 请求追踪 ID
+# ============================================================
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+
+
+class _RequestIDLogFilter(logging.Filter):
+    """将 X-Request-ID 注入到所有日志记录的 extra 字段。"""
+    def filter(self, record):
+        record.request_id = request_id_var.get()
+        return True
+
+
+# 注册到根 logger，确保 uvicorn 和项目日志都能拿到 request_id
+logging.getLogger().addFilter(_RequestIDLogFilter())
+
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    """为每个请求生成 X-Request-ID，注入响应头和日志上下文。"""
+    request_id = uuid.uuid4().hex[:8]
+    request.state.request_id = request_id
+    request_id_var.set(request_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+# ============================================================
 # CORS 跨域配置
 # ============================================================
 TRACKED_REQUEST_PATHS = _tracked_request_paths()
@@ -151,6 +181,25 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+# ============================================================
+# 请求体大小限制中间件
+# ============================================================
+MAX_REQUEST_BODY_BYTES = 5 * 1024 * 1024  # 5MB
+
+
+@app.middleware("http")
+async def limit_request_body_size(request: Request, call_next):
+    """限制请求体最大 5MB，防止内存耗尽攻击。"""
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit():
+        if int(content_length) > MAX_REQUEST_BODY_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"请求体过大，最大允许 {MAX_REQUEST_BODY_BYTES // (1024 * 1024)}MB"},
+            )
+    return await call_next(request)
 
 
 # ============================================================

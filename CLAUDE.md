@@ -37,14 +37,14 @@ routers/ → services/ → repositories/ → core/ + constants/
 
 - `backend/main.py` — FastAPI 应用入口，注册所有路由到 `/api`，托管前端静态文件
 - `backend/core/` — 基础设施层：`auth.py`（JWT + 缓存回调注入）、`database.py`（ThreadedConnectionPool）、`config.py`、`schemas.py`（Pydantic 模型）、`model_adapter.py`（AI 模型适配）、`plan_constants.py`（会员档位常量）
-- `backend/services/` — 业务逻辑层（28 个模块）。核心服务：`chat_send.py`、`chat_stream_service.py`、`chat_stream_infra.py`、`chat_stream_persist.py`、`prompt_assembler.py`（已从 core 迁移）、`prompt_builder.py`、`runtime_bundle.py`、`memory_core.py`、`memory_summary.py`、`memory_background.py`、`token_budget.py`、`character_state.py`、`story_event_service.py`、`memory_service.py`、`plan_service.py`、`billing_order_service.py`、`cache_service.py`、`rate_limit.py`、`usage_guard.py`、`health_service.py`、`email.py`、`db_monitor.py`、`jobs_facade.py` 等
-- `backend/routers/` — 路由层：`auth.py`、`billing.py`、`characters.py`、`chat/`（包式路由，含 `_route_builders.py`）、`media.py`、`admin/`（按域拆分：`_router.py` + `_shared.py` + `characters_core/insights/memory/rules_events/story` + `users` + `orders` + `dashboard`）
+- `backend/services/` — 业务逻辑层（22 个模块）。核心服务：`chat_send.py`、`chat_stream_service.py`、`prompt_assembler.py`、`prompt_builder.py`、`runtime_bundle.py`、`token_budget.py`、`character_state.py`、`character_affection.py`、`character_session_service.py`、`story_event_service.py`、`memory_service.py`、`plan_service.py`、`billing_order_service.py`、`chat_query.py`、`chat_retry.py`、`cache_service.py`、`rate_limit.py`、`usage_guard.py`、`circuit_breaker.py`、`health_service.py`、`email.py`、`db_monitor.py`
+- `backend/routers/` — 路由层：`auth.py`、`billing.py`、`characters.py`、`chat/`（包式路由，含 `_route_builders.py`）、`media.py`、`admin/`（按域拆分：`_router.py` + `_helpers.py` + `characters_core.py`、`characters_insights.py`、`characters_memory.py`、`characters_rules_events.py`、`characters_story.py` + `users.py` + `orders.py` + `dashboard.py`）
 - `backend/repositories/` — 纯 SQL 层（6 个模块）：`character_repository.py`、`character_memory_repository.py`、`chat_repository.py`、`user_repository.py`、`billing_repository.py`、`auth_repository.py`
 - `backend/constants/` — 枚举常量：`mood.py`（Mood 枚举 + 中英文标签映射）、`story_phase.py`（StoryPhase 枚举 + 标签映射，含 scenario 卡专用语义）
 - `backend/utils/` — 通用工具：`card_text.py`、`json_utils.py`、`stream_filter.py`
-- `frontend/modules/` — 原生 JS IIFE 模块（用户端聊天 UI，14 个模块）
+- `frontend/modules/` — 原生 JS IIFE 模块（用户端聊天 UI，18 个模块）
 - `frontend/admin/js/` — 管理后台 JS 模块（17 个模块）
-- `tests/` — `unit/`（25 文件）、`services/`（6 文件）、`routers/`（7 文件）、`contracts/`（6 文件）、`integration/`（需真实 DB，2 文件）、`regression/`（1 文件）
+- `tests/` — `unit/`（26 文件）、`services/`（6 文件）、`routers/`（7 文件）、`contracts/`（6 文件）、`integration/`（需真实 DB，3 文件）、`regression/`（1 文件）
 
 ## 协作规则（必须严格遵守）
 
@@ -53,6 +53,15 @@ routers/ → services/ → repositories/ → core/ + constants/
 - **多方案时**：一句话说清区别，直接给出推荐，不让用户自己选
 - **文件结构**：按功能分文件夹，目录名让零基础用户也能看懂用途
 - **单文件上限 1000 行**：超出必须拆分；确实无法拆分时需在文件顶部注明原因
+- **工具函数分类存放**：按功能分文件，禁止大杂烩式的 util 文件
+- **新代码保持设计模式一致**：必须与现有模块采用同一设计模式，不引入新的架构风格
+- **新增功能同步配置**：增加了项目功能后，要同步判断是否需要在后台管理界面加入相关配置
+- **新增功能同步测试**：增加了项目功能后，要同步判断是否需要增加测试以及数据库变更
+- **代码质量三要素**：写代码时从三个维度审视——可维护性（maintainability）、边界条件（boundary conditions）、回归风险（regression risk）。代码质量决定系统能否上线，以资深架构师的专业水准完成每一项任务
+
+## 测试账号
+
+- 管理后台测试账号：`773682014@qq.com` / `jie159357`（管理员白名单邮箱，用于 API 测试和角色卡导入）
 
 ## 关键规则
 

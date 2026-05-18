@@ -59,7 +59,10 @@ def _resolve_chat_clear_greeting(conn: ConnType, character_id: str, greeting_ind
 
 
 def _clear_chat_data(conn: ConnType, user_id: int | str, character_id: str) -> None:
-    """清除指定用户和角色的聊天消息和摘要数据。
+    """清除指定用户和角色的所有对话数据。
+
+    包括：聊天消息、摘要、关系状态、剧情进度。
+    清空后一切从零开始，避免出现"关系还在但记忆全无"的逻辑矛盾。
 
     Args:
         conn: 数据库连接
@@ -74,6 +77,16 @@ def _clear_chat_data(conn: ConnType, user_id: int | str, character_id: str) -> N
         "DELETE FROM chat_summaries WHERE user_id = %s AND character_id = %s",
         (user_id, character_id),
     )
+    # 同步重置关系状态，防止"失忆但关系还在"的违和感
+    conn.execute(
+        "DELETE FROM character_states WHERE user_id = %s AND character_id = %s",
+        (user_id, character_id),
+    )
+    # 同步清除剧情线进度
+    conn.execute(
+        "DELETE FROM user_story_progress WHERE user_id = %s AND character_id = %s",
+        (user_id, character_id),
+    )
 
 
 def reset_character_chat_state(
@@ -85,11 +98,8 @@ def reset_character_chat_state(
     commit: bool = True,
 ) -> dict[str, Any]:
     _clear_chat_data(conn, user_id, character_id)
-    if clear_state:
-        conn.execute(
-            "DELETE FROM character_states WHERE user_id = %s AND character_id = %s",
-            (user_id, character_id),
-        )
+    # _clear_chat_data 已包含 character_states 和 user_story_progress 的删除，
+    # clear_state 参数保留兼容，但实际已无额外操作
 
     ensure_opening_message(conn, user_id, character_id, commit=False)
     state = get_character_state(conn, user_id, character_id) if clear_state else None

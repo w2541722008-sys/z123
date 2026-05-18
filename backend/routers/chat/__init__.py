@@ -42,6 +42,7 @@ from ._route_builders import (
     _build_guest_route_response,
     _build_retry_route_response,
 )
+from repositories.chat_repository import search_messages, count_search_results
 
 # ============================================================
 # 测试 patch 入口（routers.chat.enforce_rate_limit 供 mock 使用）
@@ -233,6 +234,50 @@ def chat_continue(
         endpoint="/api/chat/continue",
         is_append=True,
     )
+
+
+@router.get("/chat/search")
+def chat_search(
+    q: str,
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+    conn: ConnType = Depends(get_db_dep),
+    character_id: str = "",
+    page: int = 1,
+    page_size: int = 20,
+) -> dict[str, Any]:
+    """全文搜索聊天消息。
+
+    使用 PostgreSQL tsvector + GIN 索引，支持中文分词。
+    多词查询用空格分隔，结果按相关度排序。
+
+    Args:
+        q: 搜索关键词（必填）
+        character_id: 可选，限定角色
+        page: 页码（从 1 开始）
+        page_size: 每页条数（默认 20，上限 50）
+    """
+    if not q or not q.strip():
+        raise HTTPException(status_code=400, detail="搜索关键词不能为空")
+    page_size = max(1, min(50, page_size))
+    offset = (max(1, page) - 1) * page_size
+    char_id = character_id.strip() or None
+
+    results = search_messages(
+        conn, user.id, q.strip(),
+        character_id=char_id,
+        limit=page_size, offset=offset,
+    )
+    total = count_search_results(conn, user.id, q.strip(), character_id=char_id)
+
+    return {
+        "query": q.strip(),
+        "results": results,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": (offset + page_size) < total,
+    }
 
 
 # ============================================================

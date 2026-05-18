@@ -2,10 +2,8 @@
 
 ## 入口
 
-- 服务端入口：`/admin.html`
-- 静态入口：`/frontend/admin/index.html`
-
-两者均指向同一后台页面资源，线上建议使用 `/admin.html`。
+- 管理后台入口：`frontend/admin/index.html`
+- 通过 Nginx 反向代理访问：`https://你的域名/admin`
 
 ## 前端模块结构
 

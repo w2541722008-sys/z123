@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 import sys
 import requests
 
@@ -22,7 +23,8 @@ headers = {
 }
 
 # 读取角色数据
-with open('bai_xiaotang_character_data.json', 'r', encoding='utf-8') as f:
+DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bai_xiaotang_character_data.json')
+with open(DATA_FILE, 'r', encoding='utf-8') as f:
     data = json.load(f)
 
 # 1. 创建角色
@@ -72,7 +74,8 @@ else:
 
 # 3. 创建记忆条目
 print("\n正在创建记忆条目...")
-with open('bai_xiaotang_advanced_config.json', 'r', encoding='utf-8') as f:
+ADVANCED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bai_xiaotang_advanced_config.json')
+with open(ADVANCED_FILE, 'r', encoding='utf-8') as f:
     advanced = json.load(f)
 
 for idx, entry in enumerate(advanced["memory_entries"], 1):

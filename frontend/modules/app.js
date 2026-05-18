@@ -77,7 +77,7 @@
     } catch (err) {
        document.getElementById('char-grid').innerHTML = `
          <div class="card" style="padding:16px;color:var(--muted);grid-column:1 / -1;">
-           角色加载失败：${err.message}<br/>请先启动本地后端，再刷新页面。
+           角色加载失败：${escapeHtml(err.message)}<br/>请先启动本地后端，再刷新页面。
          </div>
        `;
      }

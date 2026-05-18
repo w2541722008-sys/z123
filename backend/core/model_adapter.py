@@ -10,6 +10,8 @@ import httpx
 from core.config import AI_CHAT_MAX_OUTPUT_TOKENS, DEFAULT_AI_BASE_URL, DEFAULT_AI_MODEL
 import os
 
+from services.circuit_breaker import get_circuit_breaker
+
 logger = logging.getLogger(__name__)
 
 # 常量定义
@@ -181,6 +183,12 @@ def request_chat_completion(
     if not config["api_key"]:
         raise RuntimeError("AIFRIEND_API_KEY 未配置")
 
+    breaker = get_circuit_breaker()
+    endpoint_key = config["base_url"]
+
+    # 熔断器检查（OPEN 状态直接抛异常，上层转 503）
+    breaker.before_request(endpoint_key)
+
     optional_params = _get_optional_params()
     payload = build_chat_payload(
         messages=messages,
@@ -200,8 +208,10 @@ def request_chat_completion(
         resp.raise_for_status()
         body = resp.text
     except httpx.HTTPError as exc:
+        breaker.report_failure(endpoint_key)
         _handle_model_error(exc)
 
+    breaker.report_success(endpoint_key)
     data = json.loads(body)
     choices = data.get("choices", [])
     content = choices[0].get("message", {}).get("content", "") if choices else ""
@@ -219,6 +229,12 @@ def stream_chat_completion(
     """流式模型调用，逐块产出 delta 文本。"""
     if not config["api_key"]:
         raise RuntimeError("AIFRIEND_API_KEY 未配置")
+
+    breaker = get_circuit_breaker()
+    endpoint_key = config["base_url"]
+
+    # 熔断器检查
+    breaker.before_request(endpoint_key)
 
     optional_params = _get_optional_params()
     payload = build_chat_payload(
@@ -238,6 +254,7 @@ def stream_chat_completion(
             headers=_build_request_headers(config),
         ) as resp:
             resp.raise_for_status()
+            breaker.report_success(endpoint_key)
             for raw_line in resp.iter_lines():
                 line = raw_line.strip()
                 if not line or not line.startswith("data: "):
@@ -254,4 +271,5 @@ def stream_chat_completion(
                 if delta:
                     yield delta
     except httpx.HTTPError as exc:
+        breaker.report_failure(endpoint_key)
         _handle_model_error(exc)

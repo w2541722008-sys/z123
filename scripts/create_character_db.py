@@ -33,8 +33,10 @@ except Exception as e:
     print(f"❌ 数据库连接失败: {e}")
     exit(1)
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # 读取角色数据
-with open('bai_xiaotang_character_data.json', 'r', encoding='utf-8') as f:
+with open(os.path.join(SCRIPT_DIR, 'bai_xiaotang_character_data.json'), 'r', encoding='utf-8') as f:
     data = json.load(f)
 
 char_id = data['id']
@@ -93,7 +95,7 @@ except Exception as e:
 
 # 创建高级配置
 print("\n📦 创建高级配置...")
-with open('bai_xiaotang_advanced_config.json', 'r', encoding='utf-8') as f:
+with open(os.path.join(SCRIPT_DIR, 'bai_xiaotang_advanced_config.json'), 'r', encoding='utf-8') as f:
     advanced = json.load(f)
 
 # 1. 创建记忆条目

@@ -1,0 +1,132 @@
+/* ============================================================
+   layout.css — 页面结构：手机壳、顶栏、页面切换、底部导航、弹窗骨架
+============================================================ */
+
+/* ── 手机容器 ──────────────────────────────────────────────── */
+.phone-shell {
+  width: 100%;
+  max-width: 430px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: rgba(8,10,20,0.75);
+  backdrop-filter: blur(14px);
+  position: relative;
+  overflow: hidden;
+  border-left:  1px solid rgba(255,255,255,.04);
+  border-right: 1px solid rgba(255,255,255,.04);
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+}
+
+/* ── 顶部栏 ────────────────────────────────────────────────── */
+.page-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding: calc(14px + var(--safe-top)) 18px 12px;
+  background: linear-gradient(180deg, rgba(10,14,26,.97), rgba(10,14,26,.70));
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+  contain: layout style;
+}
+.page-topbar h1 { margin: 0; font-size: 18px; font-weight: 700; }
+.page-topbar .subtitle { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+
+/* ── 页面 / 路由 ──────────────────────────────────────────── */
+.page {
+  display: none;
+  padding: 16px 16px calc(var(--nav-h) + var(--safe-bottom) + 14px);
+  animation: page-in .25s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+.page.active { display: block; }
+.page.exiting {
+  animation: page-out .2s ease forwards;
+}
+
+/* ── 底部导航 ──────────────────────────────────────────────── */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 430px;
+  height: calc(var(--nav-h) + var(--safe-bottom));
+  display: flex;
+  align-items: flex-start;
+  padding-top: 8px;
+  padding-bottom: var(--safe-bottom);
+  background: linear-gradient(180deg, rgba(10,14,26,0), rgba(10,14,26,.97) 30%);
+  backdrop-filter: blur(14px);
+  border-top: 1px solid rgba(255,255,255,.04);
+  z-index: 40;
+}
+.nav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 10px;
+  user-select: none;
+  transition: color .18s, transform .1s;
+  padding: 8px 0;
+  margin: -8px 0;
+}
+.nav-item:active { transform: scale(0.92); }
+.nav-item .nav-icon {
+  font-size: 20px;
+  line-height: 1;
+  transition: transform .2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.nav-item.active { color: var(--pink); }
+.nav-item.active .nav-icon { transform: scale(1.1); }
+
+/* ── 弹窗骨架 ──────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.65);
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s;
+}
+.modal-overlay.open { opacity: 1; pointer-events: all; }
+
+.modal-sheet {
+  width: 100%;
+  max-width: 430px;
+  background: #0f0f1e;
+  border-radius: 28px 28px 0 0;
+  padding: 24px 22px calc(36px + var(--safe-bottom));
+  border-top: 1px solid rgba(255,255,255,.07);
+  transform: translateY(40px);
+  transition: transform .26s cubic-bezier(0.22, 1, 0.36, 1);
+  max-height: 90vh;
+  max-height: 90dvh;
+  overflow-y: auto;
+  will-change: transform;
+}
+.modal-overlay.open .modal-sheet { transform: translateY(0); }
+
+.modal-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,.12);
+  margin: 0 auto 20px;
+}
+
+.modal-title { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+.modal-sub   { font-size: 13px; color: var(--muted); margin-bottom: 22px; }
+.modal-actions { display: flex; gap: 10px; margin-top: 6px; }
+.modal-actions .btn { flex: 1; }

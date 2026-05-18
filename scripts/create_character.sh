@@ -28,4 +28,5 @@ echo "✅ 登录成功！"
 echo ""
 
 # 2. 使用 Python 脚本创建角色
-python3 create_bai_xiaotang.py "$TOKEN"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+python3 "$SCRIPT_DIR/create_bai_xiaotang.py" "$TOKEN"

@@ -4,17 +4,17 @@
 
 ## 项目现状
 
-- 前端用户站：`/`（`index.html` + `frontend/modules/`）
-- 管理后台：`/admin.html`
-- 后端 API：`/api/*`
+- 用户端：`index.html` + `frontend/modules/`（18 个 JS 模块）
+- 管理后台：`frontend/admin/index.html` + `frontend/admin/js/`（17 个 JS 模块）
+- 后端 API：`/api/*`（FastAPI，路由 → 服务 → 仓库 三层架构）
 - 健康检查：`/api/health`
 
 ## 技术栈
 
 - 后端：Python 3.10+、FastAPI、Uvicorn、httpx、psycopg2（ThreadedConnectionPool）
-- 数据库：PostgreSQL（Supabase）+ Alembic 迁移
-- 前端：原生 HTML/CSS/JavaScript（IIFE）
-- 测试：pytest（841 tests）+ Node.js 脚本
+- 数据库：PostgreSQL（Supabase）+ Alembic 迁移（13 个版本）
+- 前端：原生 HTML/CSS/JavaScript（IIFE 模块模式）
+- 测试：pytest（843 tests）+ Node.js 脚本
 
 ## 本地开发
 
@@ -39,16 +39,7 @@ pip install -r requirements.txt
 cd backend && python3 -m alembic upgrade head
 ```
 
-迁移说明（共 8 个，001-008）：
-
-- `001_initial_schema.py`：基线迁移，创建全部 18 张表
-- `002_text_to_timestamptz_jsonb.py`：类型修复（幂等可重跑）
-- `003_add_reset_code_attempt_count.py`：密码重试计数列（幂等）
-- `004_memory_enhanced_fields.py`：记忆增强字段
-- `005_remove_world_divination.py`：移除世界占卜功能
-- `006_add_phase_behaviors.py`：阶段行为配置
-- `007_add_trigger_custom_key.py`：剧情事件自定义键触发
-- `008_add_missing_columns.py`：补全缺失列
+当前迁移版本（13 个）：001~012 + 一个命名版本（`5f37709aff83_add_life_profile`）。
 
 ### 4) 启动后端
 
@@ -80,9 +71,11 @@ bash deploy.sh
 
 ## 文档导航
 
-- 总导航：[docs/README.md](docs/README.md)
-- 部署主文档：[docs/DEPLOYMENT_GUIDE_VPS.md](docs/DEPLOYMENT_GUIDE_VPS.md)
-- 上线检查清单：[docs/DEPLOYMENT_CHECKLIST.md](docs/DEPLOYMENT_CHECKLIST.md)
-- 后端接口文档：[docs/backend_api.md](docs/backend_api.md)
-- 前端架构文档：[docs/FRONTEND_ARCHITECTURE.md](docs/FRONTEND_ARCHITECTURE.md)
-- 开发规范：[docs/dev_rules.md](docs/dev_rules.md)
+- **总导航**：[docs/README.md](docs/README.md)
+- **部署指南**：[docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)
+- **API 文档**：[docs/API.md](docs/API.md)
+- **好感度系统**：[docs/AFFECTION_SYSTEM.md](docs/AFFECTION_SYSTEM.md)
+- **角色导入**：[docs/CHARACTER_IMPORT_SOP.md](docs/CHARACTER_IMPORT_SOP.md)
+- **管理后台**：[docs/ADMIN_PANEL_GUIDE.md](docs/ADMIN_PANEL_GUIDE.md)
+- **前端架构**：[docs/FRONTEND_ARCHITECTURE.md](docs/FRONTEND_ARCHITECTURE.md)
+- **部署脚本**：`deploy.sh` / `restart.sh` / `rollback.sh` / `setup_server.sh` / `verify_server.sh`

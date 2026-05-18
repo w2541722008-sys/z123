@@ -33,14 +33,19 @@ from core.auth import (
     _extract_token_from_request,
     clear_auth_cookie,
     create_token,
+    create_token_pair,
     delete_token,
+    generate_device_fingerprint,
     get_current_user,
     hash_password_bcrypt,
+    revoke_user_device_tokens,
+    rotate_access_token,
     set_auth_cookie,
     verify_password,
     _is_admin_email,
 )
 from core.config import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
     LOGIN_RATE_LIMIT_COUNT,
     LOGIN_RATE_LIMIT_EMAIL_COUNT,
     LOGIN_RATE_LIMIT_WINDOW_SECONDS,
@@ -176,13 +181,16 @@ def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = D
         if not user_id:
             raise RuntimeError("用户创建失败：无法获取新用户ID")
 
-        # 步骤 5：生成登录 token，并与用户创建保持同一事务
-        token = create_token(user_id, conn=conn, commit=False)
+        # 步骤 5：生成双 token（access + refresh），并与用户创建保持同一事务
+        device_fp = generate_device_fingerprint(request)
+        tokens = create_token_pair(user_id, conn=conn, commit=False, device_fingerprint=device_fp)
         conn.commit()
 
-        # 设置 HttpOnly Cookie + 返回用户信息
+        # 设置 HttpOnly Cookie + 返回双 token
         body = {
-            "token": token,  # 保留兼容：前端过渡期仍可读取
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             "user": _build_user_payload(
                 user_id=user_id,
                 email=normalized_email,
@@ -193,7 +201,7 @@ def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = D
             ),
         }
         response = JSONResponse(body)
-        set_auth_cookie(response, token)
+        set_auth_cookie(response, tokens["access_token"])
         return response
     except Exception:
         conn.rollback()
@@ -258,14 +266,17 @@ def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends
             new_hash = hash_password_bcrypt(payload.password)
             user_repo.update_password(conn, row["id"], new_hash)
 
-        # 步骤 4：生成 token，并与密码升级保持同一事务
-        token = create_token(row["id"], conn=conn, commit=False)
+        # 步骤 4：生成双 token（access + refresh），并与密码升级保持同一事务
+        device_fp = generate_device_fingerprint(request)
+        tokens = create_token_pair(row["id"], conn=conn, commit=False, device_fingerprint=device_fp)
         conn.commit()
         nickname = row["nickname"] or normalized_email.split("@")[0]
 
-        # 设置 HttpOnly Cookie + 返回用户信息
+        # 设置 HttpOnly Cookie + 返回双 token
         body = {
-            "token": token,  # 保留兼容：前端过渡期仍可读取
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             "user": _build_user_payload(
                 user_id=row["id"],
                 email=row["email"],
@@ -277,7 +288,7 @@ def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends
             ),
         }
         response = JSONResponse(body)
-        set_auth_cookie(response, token)
+        set_auth_cookie(response, tokens["access_token"])
         return response
     except Exception:
         conn.rollback()
@@ -315,7 +326,7 @@ def auth_logout(
     """
     用户登出接口。
 
-    删除当前 token，使其失效，并清除 HttpOnly Cookie。
+    删除当前 access token，使其失效，并清除 HttpOnly Cookie。
 
     Args:
         request: FastAPI 请求对象（用于读取 Cookie）
@@ -325,7 +336,6 @@ def auth_logout(
     Returns:
         成功标记
     """
-    # 从 Cookie 或 Header 提取 token 并删除
     token = _extract_token_from_request(request, authorization)
     if token:
         delete_token(token)
@@ -333,6 +343,76 @@ def auth_logout(
     response = JSONResponse({"ok": True})
     clear_auth_cookie(response)
     return response
+
+
+# ============================================================
+# 双 Token 管理接口
+# ============================================================
+
+_REFRESH_TOKEN_COOKIE = "aifriend_refresh"
+
+
+@router.post("/auth/refresh")
+def auth_refresh(request: Request, conn: ConnType = Depends(get_db_dep)) -> JSONResponse:
+    """
+    用 refresh token 换取新的 access token。
+
+    Refresh token 从 Cookie 或 Authorization 头读取。
+    验证通过后旧 access token 失效，返回新 access token。
+
+    安全：验证设备指纹匹配，防止 refresh token 被窃取后跨设备使用。
+    """
+    # 从请求中提取 refresh token
+    auth_header = request.headers.get("Authorization", "")
+    refresh_token = None
+    if auth_header.startswith("Bearer "):
+        refresh_token = auth_header.split(" ", 1)[1].strip()
+    if not refresh_token:
+        refresh_token = request.cookies.get(_REFRESH_TOKEN_COOKIE)
+    if not refresh_token:
+        # 兼容：也尝试从 aifriend_session cookie 读取
+        refresh_token = request.cookies.get(_COOKIE_NAME)
+
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="缺少 refresh token")
+
+    device_fp = generate_device_fingerprint(request)
+    new_access = rotate_access_token(refresh_token, device_fingerprint=device_fp, conn=conn)
+
+    if not new_access:
+        raise HTTPException(status_code=401, detail="refresh token 无效或已过期")
+
+    response = JSONResponse({
+        "access_token": new_access,
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    })
+    set_auth_cookie(response, new_access)
+    return response
+
+
+@router.post("/auth/logout-others")
+def auth_logout_others(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    user: CurrentUser = Depends(get_current_user),
+    conn: ConnType = Depends(get_db_dep),
+) -> dict[str, Any]:
+    """
+    踢出其他设备：使当前用户的其他所有设备的 refresh token 失效。
+
+    需要提供当前 refresh token 以保留当前设备。
+    """
+    # 从请求中尝试提取 refresh token
+    refresh_token = request.cookies.get(_REFRESH_TOKEN_COOKIE)
+    if not refresh_token:
+        refresh_token = request.cookies.get(_COOKIE_NAME)
+    # 兼容：也尝试从 Authorization 头获取
+    if not refresh_token and authorization and authorization.startswith("Bearer "):
+        refresh_token = authorization.split(" ", 1)[1].strip()
+
+    deleted = revoke_user_device_tokens(user.id, refresh_token or "", conn=conn)
+    logger.info("用户 %s 踢出其他设备，删除 %s 个 token", user.id, deleted)
+    return {"ok": True, "deleted_devices": deleted}
 
 
 # ============================================================
