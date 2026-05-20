@@ -1,0 +1,103 @@
+<!-- 系统标签页面板（由 index.html 内联脚本注入） -->
+
+<!-- 仪表盘 -->
+<div id="tab-dashboard" class="tab-panel" style="display:none">
+  <div class="panel-header">
+    <h3>📊 运营仪表盘</h3>
+    <button class="btn btn-ghost" data-action="load-dashboard">🔄 刷新</button>
+  </div>
+  <div id="dashboard-content">
+    <div class="no-results">加载中…</div>
+  </div>
+</div>
+
+<!-- 会员管理 -->
+<div id="tab-membership" class="tab-panel" style="display:none">
+  <div id="membership-users-section">
+    <div class="panel-header">
+      <h3>👥 用户会员管理</h3>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost" data-action="load-membership-data">🔄 刷新</button>
+        <button class="btn btn-ghost" data-action="export-users-csv">📥 导出 CSV</button>
+      </div>
+    </div>
+    <div class="desc" style="margin-bottom:14px;">支持搜索、筛选、编辑和删除用户。删除会清理该用户所有关联数据。</div>
+    <div class="search-bar">
+      <input type="search" id="user-search" placeholder="搜索邮箱或昵称…" class="input-search" style="flex:1;min-width:180px;" />
+      <select id="user-plan-filter" class="input-select">
+        <option value="">全部档位</option>
+        <option value="free">Free</option>
+        <option value="vip">VIP</option>
+        <option value="svip">SVIP</option>
+      </select>
+      <div class="count" id="user-count-label"></div>
+    </div>
+    <div class="batch-bar" id="user-batch-bar">
+      <span class="batch-count" id="user-batch-count">已选 0 位用户</span>
+      <div class="batch-actions">
+        <select id="batch-plan-select" class="input-select">
+          <option value="free">Free</option>
+          <option value="vip">VIP</option>
+          <option value="svip">SVIP</option>
+        </select>
+        <input type="number" id="batch-days" value="30" min="1" max="3650" placeholder="天数" class="input-number" style="width:80px;" />
+        <button class="btn btn-primary btn-sm" data-action="batch-update-plan">批量设置档位</button>
+      </div>
+      <button class="btn btn-ghost btn-sm" data-action="clear-user-selection" style="margin-left:auto;">取消</button>
+    </div>
+    <div id="membership-users-table-wrap">
+      <div class="no-results">加载中…</div>
+    </div>
+    <div class="pager" id="user-pager"></div>
+  </div>
+
+  <div style="margin-top:24px;">
+    <div class="panel-header">
+      <h3>🧾 订单管理</h3>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost" data-action="load-membership-data">🔄 刷新</button>
+        <button class="btn btn-ghost" data-action="export-orders-csv">📥 导出 CSV</button>
+      </div>
+    </div>
+    <div class="desc" style="margin-bottom:14px;">支持搜索和状态筛选，点击订单号查看完整详情。</div>
+    <div class="search-bar">
+      <input type="search" id="order-search" placeholder="搜索订单号或用户邮箱…" class="input-search" style="flex:1;min-width:180px;" />
+      <select id="order-status-filter" class="input-select">
+        <option value="">全部状态</option>
+        <option value="pending">待支付</option>
+        <option value="paid">已支付</option>
+        <option value="expired">已过期</option>
+        <option value="closed">已关闭</option>
+        <option value="refunded">已退款</option>
+      </select>
+      <div class="count" id="order-count-label"></div>
+    </div>
+    <div id="membership-orders-table-wrap">
+      <div class="no-results">加载中…</div>
+    </div>
+    <div class="pager" id="order-pager"></div>
+  </div>
+</div>
+
+<!-- 操作日志 -->
+<div id="tab-auditlog" class="tab-panel" style="display:none">
+  <div class="panel-header">
+    <h3>🧾 操作日志</h3>
+    <button class="btn btn-ghost" data-action="load-audit-logs">🔄 刷新</button>
+  </div>
+  <div class="desc" style="margin-bottom:14px;">记录管理后台的关键操作，可按类型筛选。</div>
+  <div class="search-bar">
+    <select id="audit-action-filter" class="input-select">
+      <option value="">全部操作</option>
+      <option value="delete_user">删除用户</option>
+      <option value="edit_user">编辑用户</option>
+      <option value="update_plan">修改档位</option>
+      <option value="batch_update">批量操作</option>
+    </select>
+    <div class="count" id="audit-count-label"></div>
+  </div>
+  <div id="audit-logs-table-wrap">
+    <div class="no-results">加载中…</div>
+  </div>
+  <div class="pager" id="audit-pager"></div>
+</div>

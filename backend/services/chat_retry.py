@@ -497,7 +497,7 @@ def save_regenerated_version(
             (final_content, json.dumps(versions, ensure_ascii=False), message_id),
         )
     except Exception as e:
-        logger.warning("版本保存失败，降级为仅更新内容: %s", e)
+        logger.warning("版本保存失败，降级为仅更新内容: %s", e, exc_info=True)
 
         if is_append:
             row = conn.execute(

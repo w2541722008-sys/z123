@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -8,6 +9,8 @@ from core.auth import CurrentUser, get_current_user, get_optional_user
 from core.database import ConnType, get_db_dep
 from core.schemas import CharacterProfileUpdatePayload, ClearChatPayload
 from repositories import character_repository as char_repo
+
+logger = logging.getLogger(__name__)
 from repositories import chat_repository as chat_repo
 from services.character_session_service import (
     clear_chat_history_with_greeting,
@@ -255,7 +258,7 @@ def get_character_state_api(
             if "show_bar" in rules:
                 show_bar = bool(rules["show_bar"])
     except Exception:
-        pass
+        logger.warning("解析好感度规则失败 character_id=%s", character_id, exc_info=True)
     return {"state": clean_state, "show_bar": show_bar}
 
 

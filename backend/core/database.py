@@ -106,7 +106,7 @@ class ConnWrapper:
             try:
                 cur.close()
             except Exception:
-                pass
+                logger.warning("游标关闭失败", exc_info=True)
         self._open_cursors.clear()
         try:
             self._pool.putconn(self._conn)
@@ -228,7 +228,7 @@ def get_db_dep() -> Generator[ConnType, None, None]:
         try:
             conn.rollback()  # 安全兜底：回滚任何未提交的事务
         except Exception:
-            pass
+            logger.warning("安全兜底 rollback 失败", exc_info=True)
         conn.close()
 
 

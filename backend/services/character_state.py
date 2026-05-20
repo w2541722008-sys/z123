@@ -498,7 +498,7 @@ def _handle_storyline_and_events(
             else:
                 logger.warning("剧情线ID无效或不属于当前角色: storyline_id=%s, character_id=%s", new_storyline_id, character_id)
         except Exception as e:
-            logger.warning("剧情线切换失败: %s", e)
+            logger.warning("剧情线切换失败 storyline_id=%s: %s", new_storyline_id, e, exc_info=True)
 
     # ── 检查并触发剧情事件 ──
     triggered_events = check_and_trigger_story_events(
@@ -522,7 +522,7 @@ def _handle_storyline_and_events(
                 })
                 custom_vars["_force_refresh_greeting"] = True
         except Exception:
-            pass
+            logger.warning("剧情线切换查询失败 storyline_id=%s", new_storyline_id, exc_info=True)
 
     # ── 关系阶段升级通知 ──
     if new_phase != old_phase:
@@ -559,7 +559,7 @@ def _handle_storyline_and_events(
                     user_id, character_id, old_phase, new_phase,
                 )
         except Exception as e:
-            logger.warning("阶段升级触发语处理异常: %s", e)
+            logger.warning("阶段升级触发语处理异常: %s", e, exc_info=True)
 
     # ── 待处理剧情事件管理 ──
     if triggered_events:

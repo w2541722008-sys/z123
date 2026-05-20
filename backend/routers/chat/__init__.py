@@ -34,7 +34,7 @@ from services.chat_send import (
     save_assistant_message,
     store_user_message,
 )
-from services.chat_query import count_chat_messages
+from services.chat_query import count_chat_messages, count_chat_search_results, search_chat_messages
 from services.rate_limit import enforce_rate_limit, get_request_client_ip
 
 from ._route_builders import (
@@ -42,7 +42,6 @@ from ._route_builders import (
     _build_guest_route_response,
     _build_retry_route_response,
 )
-from repositories.chat_repository import search_messages, count_search_results
 
 # ============================================================
 # 测试 patch 入口（routers.chat.enforce_rate_limit 供 mock 使用）
@@ -297,12 +296,12 @@ def chat_search(
     offset = (max(1, page) - 1) * page_size
     char_id = character_id.strip() or None
 
-    results = search_messages(
+    results = search_chat_messages(
         conn, user.id, q.strip(),
         character_id=char_id,
         limit=page_size, offset=offset,
     )
-    total = count_search_results(conn, user.id, q.strip(), character_id=char_id)
+    total = count_chat_search_results(conn, user.id, q.strip(), character_id=char_id)
 
     return {
         "query": q.strip(),

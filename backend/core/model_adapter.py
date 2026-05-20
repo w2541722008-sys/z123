@@ -11,9 +11,16 @@ import httpx
 from core.config import AI_CHAT_MAX_OUTPUT_TOKENS, DEFAULT_AI_BASE_URL, DEFAULT_AI_MODEL
 import os
 
-from services.circuit_breaker import get_circuit_breaker
-
 logger = logging.getLogger(__name__)
+
+# 熔断器回调 — 由 main.py lifespan 注入，解除 core 对 services 的直接依赖
+_get_circuit_breaker: Callable[..., Any] | None = None
+
+
+def register_circuit_breaker(cb_fn: Callable[..., Any]) -> None:
+    """注册熔断器工厂函数（由 main.py 在启动时调用）。"""
+    global _get_circuit_breaker
+    _get_circuit_breaker = cb_fn
 
 # 常量定义
 DEFAULT_TIMEOUT = 60
@@ -193,7 +200,7 @@ def request_chat_completion(
     if not config["api_key"]:
         raise RuntimeError("AIFRIEND_API_KEY 未配置")
 
-    breaker = get_circuit_breaker()
+    breaker = _get_circuit_breaker()
     endpoint_key = config["base_url"]
 
     # 熔断器检查（OPEN 状态直接抛异常，上层转 503）
@@ -256,7 +263,7 @@ def stream_chat_completion(
     if not config["api_key"]:
         raise RuntimeError("AIFRIEND_API_KEY 未配置")
 
-    breaker = get_circuit_breaker()
+    breaker = _get_circuit_breaker()
     endpoint_key = config["base_url"]
 
     # 熔断器检查

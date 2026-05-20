@@ -94,7 +94,7 @@ def resolve_media_response(raw_value: str, *, fallback_path: Path | None = None)
                     if resolved.exists() and _is_under_safe_dir(resolved):
                         return FileResponse(resolved)
         except Exception as exc:
-            logger.warning("avatar resolve failed for value=%s: %s", media_value[:80], exc)
+            logger.warning("avatar resolve failed for value=%s: %s", media_value[:80], exc, exc_info=True)
 
     if fallback_path and fallback_path.exists():
         return FileResponse(fallback_path)

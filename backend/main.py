@@ -112,6 +112,11 @@ async def lifespan(app: FastAPI):
     from services.cache_service import cache_get, cache_set, cache_delete
     register_cache_callbacks(cache_get, cache_set, cache_delete)
 
+    # 注入熔断器回调，解除 core.model_adapter 对 services.circuit_breaker 的直接依赖
+    from core.model_adapter import register_circuit_breaker
+    from services.circuit_breaker import get_circuit_breaker
+    register_circuit_breaker(get_circuit_breaker)
+
     start_order_cleanup_daemon(interval_seconds=3600)
     logging.info("✅ 订单清理后台任务已启动")
 

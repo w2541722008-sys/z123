@@ -439,7 +439,7 @@ def refresh_memory_summary(
     except Exception as exc:
         logger.warning(
             "记忆摘要 AI 生成失败，改走降级方案 user_id=%s character_id=%s error=%s",
-            user_id, character_id, exc,
+            user_id, character_id, exc, exc_info=True,
         )
         summary_text = build_structured_memory_summary_fallback(existing_summary, summary_target_rows)
 

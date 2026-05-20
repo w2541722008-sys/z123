@@ -1,14 +1,14 @@
-var GreetingSelect = (function() {
-  var _char = null;
+const GreetingSelect = (() => {
+  let _char = null;
 
   function open(char, greetings) {
     _char = char;
 
-    var listEl = document.getElementById('greeting-list');
+    const listEl = document.getElementById('greeting-list');
     listEl.innerHTML = '';
 
-    greetings.forEach(function(item) {
-      var div = document.createElement('div');
+    greetings.forEach((item) => {
+      const div = document.createElement('div');
       div.className = 'greeting-item';
       div.setAttribute('data-greeting-index', String(item.index));
       div.innerHTML =
@@ -18,7 +18,7 @@ var GreetingSelect = (function() {
         '</div>' +
         '<span class="greeting-item-arrow">›</span>';
 
-      div.addEventListener('click', function() {
+      div.addEventListener('click', () => {
         handleSelect(item.index);
       });
 
@@ -34,12 +34,12 @@ var GreetingSelect = (function() {
   }
 
   function handleSelect(index) {
-    var char = _char;
+    const char = _char;
     close();
 
     if (!char) {
       if (typeof UI !== 'undefined' && UI.toast) {
-        UI.toast('\u89d2\u8272\u4fe1\u606f\u4e22\u5931\uff0c\u8bf7\u91cd\u8bd5', 'error');
+        UI.toast('角色信息丢失，请重试', 'error');
       }
       return;
     }
@@ -54,25 +54,24 @@ var GreetingSelect = (function() {
       return;
     }
 
-    safeApiCall(function() {
+    safeApiCall(() => {
       return API.clearChatWithGreeting({
         character_id: char.id,
         greeting_index: index,
       });
-    }).then(function(result) {
+    }).then(() => {
       Chat.enterChat(char);
-    }).catch(function(err) {
-      var msg = (err && err.message) ? err.message : JSON.stringify(err);
-      if (msg === '[object Object]') msg = String(err);
-      if (msg && msg !== '\u672a\u767b\u5f55') {
+    }).catch((err) => {
+      const msg = (err && err.message) ? err.message : JSON.stringify(err);
+      if (msg && msg !== '未登录') {
         if (typeof UI !== 'undefined' && UI.toast) {
           console.error('[GreetingSelect] clearChat error:', err);
-          UI.toast('\u5207\u6362\u5931\u8d25:' + msg, 'error');
+          UI.toast('切换失败:' + msg, 'error');
         }
       }
       Chat.enterChat(char);
     });
   }
 
-  return { open: open, close: close, select: handleSelect };
+  return { open, close, select: handleSelect };
 })();

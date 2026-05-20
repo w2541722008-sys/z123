@@ -76,6 +76,7 @@ def _stream_ai_completion(stream_messages: list, ai_config: dict):
         delta = _parse_accumulated_state_update(stream_state.get("_state_update_parts", []))
         return final_reply_raw, None, delta
     except Exception as exc:
+        logger.exception("流式回复最终处理失败: %s", exc)
         return full_reply, str(exc), None
     finally:
         if stream_iter is not None and hasattr(stream_iter, 'close'):
@@ -500,6 +501,7 @@ def _postprocess_guest_stream_result_impl(
         log_conn.commit()
     except Exception:
         log_conn.rollback()
+        logger.warning("AI 请求日志写入失败", exc_info=True)
     finally:
         log_conn.close()
 

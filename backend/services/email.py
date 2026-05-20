@@ -200,7 +200,7 @@ def _send_via_smtp(to_email: str, code: str, max_retries: int = 3) -> bool:
         except smtplib.SMTPException as e:
             logger.warning("SMTP 发送失败 (尝试 %d/%d): %s", attempt + 1, max_retries, e)
         except Exception as e:
-            logger.warning("SMTP 发送异常 (尝试 %d/%d): %s", attempt + 1, max_retries, e)
+            logger.warning("SMTP 发送异常 (尝试 %d/%d): %s", attempt + 1, max_retries, e, exc_info=True)
 
         if attempt < max_retries - 1:
             time.sleep(1 * (attempt + 1))

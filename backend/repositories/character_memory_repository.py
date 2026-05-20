@@ -265,3 +265,18 @@ def fetch_character_post_rules(
         rules.append(content)
 
     return rules
+
+
+def get_active_keyword_memories(
+    conn: ConnType, character_id: str
+) -> list[dict[str, Any]]:
+    """获取角色所有活跃的关键词记忆（用于管理后台关键词测试）。"""
+    return conn.execute(
+        """
+        SELECT id, keywords, trigger_logic, content
+        FROM character_memories
+        WHERE character_id = %s AND is_active = 1
+        ORDER BY priority ASC, id ASC
+        """,
+        (character_id,),
+    ).fetchall()

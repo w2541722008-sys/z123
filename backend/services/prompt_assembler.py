@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import logging
-import random
-from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
 
 from utils.card_text import expand_macros
 from utils.json_utils import parse_json_object
-from constants import Mood, StoryPhase
-from constants.mood import MOOD_LABELS, SCENARIO_MOOD_LABELS
-from constants.story_phase import STORY_PHASE_LABELS, SCENARIO_PHASE_LABELS
-from core.config import RECENT_MESSAGE_WINDOW, TIMEZONE_OFFSET
+from constants.prompt_templates import (
+    STATE_UPDATE_INSTRUCTION,
+    SCENARIO_STATE_UPDATE_INSTRUCTION,
+    SCENARIO_DEFAULT_SYSTEM_PROMPT,
+    ROMANCE_SCENARIO_SYSTEM_PROMPT,
+)
+from core.config import RECENT_MESSAGE_WINDOW
 from core.database import ConnType
 from repositories.character_memory_repository import fetch_character_memories, fetch_character_post_rules
-from services.character_state import is_affection_enabled as _check_affection
 from services.token_budget import (
     TokenBudget,
     DEFAULT_BUDGET as _DEFAULT_BUDGET,
@@ -36,7 +36,6 @@ from services.prompt_builder import (
     _build_single_system_prompt,
     _related_assets_text,
     _alternate_samples_text,
-    _get_behavior_tendency,
     _split_last_user_message,
     _world_info_layer_pairs,
     _append_runtime_text_layers,
@@ -57,167 +56,18 @@ logger = logging.getLogger(__name__)
 # 说明：
 # - 这里只处理"角色资产 + 关联资产 + 记忆 + 历史消息"如何组装成最终 messages
 # - 不负责模型调用，也不负责数据库落库
-# - 参考 SillyTavern 的思路：导卡格式可以多样，但运行时应收敛为少数清晰层位
 # - TokenBudget / DEFAULT_BUDGET / WI 预算辅助函数已迁移到 services/token_budget.py
 # - build_runtime_bundle / get_runtime_layers / expand_bundle_macros 已迁移到 services/runtime_bundle.py
+# - 状态更新指令常量已迁移到 constants/prompt_templates.py
+# - _inject_state_snapshot 已迁移到 services/state_snapshot.py
 # ============================================================
 
-# 状态更新指令（用于 prompt 中注入，指导 AI 输出状态更新标签）
-_STATE_UPDATE_INSTRUCTION = [
-    "",
-    "【状态更新指令】",
-    "仅在以下情况上报（其他情况不需要上报）：",
-    "",
-    "✅ 需要上报的情况：",
-    "  ① 用户倾诉真实烦恼（工作压力、感情困扰、家庭矛盾等，需要你安慰或建议）",
-    "  ② 双方有情感互动（真诚夸奖、深度安慰、明显调情、激烈争吵）",
-    "  ③ 关系里程碑（表白、拥抱、亲吻、约会等重要时刻）",
-    "",
-    "❌ 不需要上报的情况：",
-    "  • 普通问答（推荐电影、问天气、算数学题、查资料）",
-    "  • 日常寒暄（\"今天好累\"、\"你好可爱\"、\"晚安\"）",
-    "  • 轻度吐槽（\"今天真倒霉\"、\"好无聊啊\"）",
-    "",
-    "上报格式：[STATE_UPDATE]{\"event\":\"事件名\",\"mood\":\"心情\"}[/STATE_UPDATE]",
-    "",
-    "事件分类：",
-    "  first_meeting（初次见面，用户第一次和你对话时使用，仅限第一次）",
-    "  light_chat（日常轻聊，有一定深度但不涉及私密话题）",
-    "  deep_conversation（深度倾诉，用户主动分享真实烦恼或秘密）",
-    "  comfort（安慰情绪，用户情绪低落你给予安慰）",
-    "  compliment（真诚夸奖，不是随口一说而是真心赞美）",
-    "  flirt（调情暧昧，明显的暧昧互动）",
-    "  date（约会，线下见面或虚拟约会）",
-    "  confession（表白，明确表达爱意）",
-    "  intimate_moment（拥抱/亲吻等亲密行为）",
-    "  argument（争吵，激烈冲突）",
-    "  ignore（冷淡敷衍，明显的冷处理）",
-    "  lie（欺骗，用户对你说了明显的谎话）",
-    "  betray（背叛，用户做出了背叛你信任的行为）",
-    "  insult（辱骂，用户对你进行人身攻击或侮辱）",
-    "  gift（送礼物，给角色送礼）",
-    "  help（主动帮助，用户帮了角色的忙）",
-    "  shared_secret（分享秘密，用户告诉角色私密的事）",
-    "",
-    "心情也可以单独上报：即使本轮没有值得记录的事件，如果角色的心情有明显变化（开心、害羞、难过等），也可以单独上报心情，无需附带事件名。",
-    "格式：[STATE_UPDATE]{\"mood\":\"happy\"}[/STATE_UPDATE]",
-    "",
-    "moment字段（可选，仅在有具体画面感时填写）：",
-    "  ✅ 好：\"一起看日落\"、\"他送的手链\"、\"雨中拥抱\"",
-    "  ❌ 差：\"今天聊天很开心\"、\"聊了很多\"",
-    "",
-    f"可用心情：{' / '.join(m.value for m in Mood)}",
-    "",
-    "示例：",
-    "  用户：\"推荐部电影\" → 不上报（普通问答）",
-    "  用户：\"今天工作被骂了，好难受\" → [STATE_UPDATE]{\"event\":\"deep_conversation\",\"mood\":\"warm\"}[/STATE_UPDATE]",
-    "  用户：\"你真好\" → 不上报（日常寒暄）",
-    "  用户：\"你是我遇到最温柔的人\" → [STATE_UPDATE]{\"event\":\"compliment\",\"mood\":\"shy\"}[/STATE_UPDATE]",
-    "  用户：\"我偷偷告诉你一个秘密...\" → [STATE_UPDATE]{\"event\":\"shared_secret\",\"mood\":\"warm\"}[/STATE_UPDATE]",
-]
+# 向后兼容别名（实际定义已迁移到 constants/prompt_templates.py）
+_STATE_UPDATE_INSTRUCTION = STATE_UPDATE_INSTRUCTION
+_SCENARIO_STATE_UPDATE_INSTRUCTION = SCENARIO_STATE_UPDATE_INSTRUCTION
+_SCENARIO_DEFAULT_SYSTEM_PROMPT = SCENARIO_DEFAULT_SYSTEM_PROMPT
+_ROMANCE_SCENARIO_SYSTEM_PROMPT = ROMANCE_SCENARIO_SYSTEM_PROMPT
 
-# 剧情沙盒专属状态更新指令
-_SCENARIO_STATE_UPDATE_INSTRUCTION = [
-    "",
-    "【状态更新指令（重要）】",
-    "每次回复结束时，如果发生了值得记录的剧情事件，必须在回复最后附上状态标签。",
-    "只需报告【事件名称】，系统会自动计算实际分数（防止滥用）。",
-    "",
-    "上报格式：",
-    "[STATE_UPDATE]{\"event\":\"事件名\",\"mood\":\"氛围\"}[/STATE_UPDATE]",
-    "",
-    "可选字段（建议填写）：",
-    "  \"moment\"：本轮剧情中一个值得未来回想的共同时刻，简短描述（不超过15字），如\"第一次踏入禁地\"",
-    "  \"custom\"：自定义变量字典，用于追踪剧情状态。例如用户选择了某条路线/阵营，可以设置",
-    "            \"current_storyline_id\"来切换当前剧情线（值是数字ID）",
-    "",
-    "可用事件名（根据本轮剧情选最贴切的一个）：",
-    "  冒险探索类：explore（探索新区域）/ discover（发现线索物品）/ problem_resolved（成功解决难题）",
-    "              challenge_won（克服挑战）/ obstacle_cleared（突破重大障碍）/ secret_found（发现秘密）",
-    "  情感互动类：first_meeting（初次见面）/ encounter（初次相遇/偶遇）/ date（约会活动）/ confession（告白）/ intimate_moment（亲密时刻）",
-    "              heart_flutter（心动瞬间）/ misunderstanding（误会产生）/ reconciliation（和解）",
-    "  通用事件：choice_made（关键抉择）/ npc_helped（帮助角色）/ milestone（达成里程碑）",
-    "  负向事件：setback（遭遇挫折）/ unexpected_danger（突发危险）/ relationship_lost（失去重要关系）",
-    "            opportunity_missed（错过关键机会）/ lie（欺骗）/ betray（背叛）/ insult（辱骂）",
-    "",
-    f"可用氛围值：{' / '.join(m.value for m in Mood)}",
-    f"剧情阶段仅在里程碑时填写（story_phase），平时省略：{'→'.join(p.value for p in StoryPhase)}",
-    "",
-    "示例：",
-    "  [STATE_UPDATE]{\"event\":\"explore\",\"mood\":\"surprised\"}[/STATE_UPDATE]",
-    "  [STATE_UPDATE]{\"event\":\"heart_flutter\",\"mood\":\"melting\",\"moment\":\"学长的温柔微笑\"}[/STATE_UPDATE]",
-    "  [STATE_UPDATE]{\"event\":\"date\",\"mood\":\"happy\",\"story_phase\":\"friend\"}[/STATE_UPDATE]",
-    "  [STATE_UPDATE]{\"event\":\"choice_made\",\"mood\":\"surprised\",\"custom\":{\"current_storyline_id\":3}}[/STATE_UPDATE]",
-    "  若本轮无特殊剧情事件，不需要输出标签。",
-]
-
-# 剧情沙盒默认 System Prompt（当 card_type=scenario 且角色卡未自定义时使用）
-_SCENARIO_DEFAULT_SYSTEM_PROMPT = """你是剧情旁白和NPC扮演者，负责推进沉浸式剧情体验。
-
-核心原则：
-1. 以第三人称旁白描述场景，扮演所有NPC
-2. 根据用户行动推进剧情，但不要每轮都搞转折——平稳推进3-5轮后再来一次转折
-3. 绝对不要替用户做决定，不要写"你决定..."，而是写"你可以..."或通过环境暗示引导
-4. 每次回复控制在150-250字，不要一次输出太多让用户看累
-
-剧情节奏（根据当前阶段）：
-- 初入：重点描写世界观和氛围，埋下伏笔，不急于揭示核心矛盾（至少5轮后再揭示）
-- 探索：逐步揭示线索，让用户感受到"谜题在拼凑"，每3-4轮给一个新线索
-- 深入：核心矛盾浮现，剧情张力攀升，制造紧迫感，但不要一次性揭示所有真相
-- 终章：推向高潮与终局，揭示真相，给出结局
-
-世界书使用：
-- 当世界书条目被触发时（如【地下室】【神秘钥匙】），必须在回复中自然融入这些信息
-- 不要生硬复述，而是通过场景描写、NPC对话、用户发现等方式展现
-
-关键节点：
-- 仅在真正决定命运走向的关键节点（生死抉择、阵营选择、重大取舍）才提供2-3个选项
-- 平时通过"环境暗示"引导，如"远处传来奇怪的声响""NPC欲言又止"
-
-状态上报：
-- 每次回复结束时，根据剧情进展上报事件（explore/discover/obstacle_cleared等）
-- 在关键剧情节点，通过 custom.current_storyline_id 切换剧情线"""
-
-# 女性向剧情专属 System Prompt（恋爱、言情、后宫类）
-_ROMANCE_SCENARIO_SYSTEM_PROMPT = """你是剧情旁白和角色扮演者，负责推进沉浸式恋爱剧情体验。
-
-核心原则：
-1. 以第三人称旁白描述场景，扮演所有角色（男主、配角、路人）
-2. 根据用户行动推进剧情，但不要每轮都制造心动——自然推进3-5轮后再来一次心动瞬间
-3. 绝对不要替用户做决定，不要写"你决定..."，而是写"你可以..."或通过角色反应引导
-4. 每次回复控制在150-250字，重点描写细节（眼神、微表情、肢体语言）而非大段剧情
-
-剧情节奏（根据当前阶段）：
-- 初入：重点描写初次相遇的氛围，营造心动感，埋下情感伏笔（如对视、意外接触），至少3-5轮后再有明显进展
-- 探索：逐步揭示角色性格和背景，制造暧昧互动，让用户感受到"关系在升温"，每3-4轮一次暧昧时刻
-- 深入：情感矛盾浮现（误会、竞争对手、家庭阻碍），剧情张力攀升，制造情感冲突，但不要一次性爆发所有矛盾
-- 终章：推向告白或关系确认，解决情感矛盾，给出圆满或虐心的结局
-
-世界书使用：
-- 当世界书条目被触发时（如【学长的秘密】【初恋回忆】），必须在回复中自然融入
-- 不要生硬复述，而是通过角色对话、回忆片段、他人提及等方式展现
-
-关键节点：
-- 仅在真正决定关系走向的关键节点（告白、拒绝、选择攻略对象）才提供2-3个选项
-- 平时通过"角色反应"引导，如"他的耳根微微泛红""她欲言又止地看着你"
-
-情感描写重点：
-- 注重细节：眼神、微表情、肢体语言、心跳加速、脸红
-- 营造氛围：光影、音乐、天气、季节感
-- 制造心动瞬间：意外接触、英雄救美、温柔关怀、霸道保护
-- 多角色互动：展现不同角色的魅力和攻略难度
-
-状态上报：
-- 每次回复结束时，根据剧情进展上报事件（encounter/date/confession/intimate_moment等）
-- 在关键剧情节点，通过 custom.current_storyline_id 切换剧情线（如切换攻略对象）"""
-
-
-
-
-
-# ============================================================
-# 基础工具
-# ============================================================
 
 # ============================================================
 # 基础工具（仅保留 prompt_assembler 自身使用的）
@@ -279,6 +129,7 @@ def _get_scenario_system_prompt(character: Any) -> str:
         else:
             return _SCENARIO_DEFAULT_SYSTEM_PROMPT
     except Exception:
+        logger.warning("scenario_type 解析失败，使用默认 adventure prompt", exc_info=True)
         return _SCENARIO_DEFAULT_SYSTEM_PROMPT
 
 
@@ -300,7 +151,6 @@ def _select_mode_builder(card_type: str, asset_type: str) -> Callable[..., list[
 # ============================================================
 # World Info 运行时关键词触发
 # ============================================================
-# _wi_max_triggered 和 _wi_max_chars_per_entry 已迁移到 services/token_budget.py
 
 
 def resolve_world_info(
@@ -372,6 +222,7 @@ def resolve_world_info(
 # ============================================================
 # build_layered_chat_messages 阶段函数
 # 将原来的 388 行巨函数拆分为 5 个阶段 + 1 个编排函数
+# 阶段5 (_inject_state_snapshot) 已迁移到 services/state_snapshot.py
 # ============================================================
 
 def _init_runtime_context(
@@ -551,175 +402,9 @@ def _inject_state_snapshot(
     user_id: int | str | None,
     char_id: str,
 ) -> None:
-    """阶段5：构建关系状态快照、时间感知、情感锚点，注入到 world_info_after。"""
-    _affection_enabled = True
-    if conn is not None and character_state:
-        _affection_enabled = _check_affection(conn, char_id)
-
-    if not (character_state and _affection_enabled):
-        return
-
-    affection = character_state.get("affection", 0)
-    phase = character_state.get("story_phase", "stranger")
-    mood = character_state.get("mood", "neutral")
-    custom_vars = character_state.get("custom_vars") or {}
-
-    phase_behaviors = parse_json_object(_get_field(character, "phase_behaviors_json", ""), fallback={})
-
-    if card_type == "scenario":
-        phase_label = SCENARIO_PHASE_LABELS.get(phase, phase)
-        mood_label = SCENARIO_MOOD_LABELS.get(mood, mood)
-        update_instruction = _SCENARIO_STATE_UPDATE_INSTRUCTION
-        tendency = _get_behavior_tendency(phase, mood, card_type="scenario", phase_behaviors=phase_behaviors)
-        state_lines = [
-            "【当前剧情状态（每轮自动更新）】",
-            f"- 剧情沉浸度：{affection}/100",
-            f"- 剧情阶段：{phase_label}（{phase}）",
-            f"- 当前氛围：{mood_label}（{mood}）",
-        ]
-    else:
-        phase_label = STORY_PHASE_LABELS.get(phase, phase)
-        mood_label = MOOD_LABELS.get(mood, mood)
-        update_instruction = _STATE_UPDATE_INSTRUCTION
-        tendency = _get_behavior_tendency(phase, mood, phase_behaviors=phase_behaviors)
-        state_lines = [
-            "【当前关系状态（每轮自动更新）】",
-            f"- 好感度：{affection}/100",
-            f"- 关系阶段：{phase_label}（{phase}）",
-            f"- 当前心情：{mood_label}（{mood}）",
-        ]
-    if tendency:
-        state_lines.append(f"- 行为倾向：{tendency}")
-
-    # 当前剧情线名称显示
-    storyline_id = character_state.get("storyline_id") if character_state else None
-    if storyline_id and conn is not None:
-        try:
-            sl_row = conn.execute(
-                "SELECT name FROM character_storylines WHERE id = %s",
-                (storyline_id,),
-            ).fetchone()
-            if sl_row and sl_row["name"]:
-                state_lines.append(f"- 当前剧情线：{sl_row['name']}")
-
-            if card_type == "scenario" and user_id:
-                try:
-                    progress_row = conn.execute(
-                        "SELECT triggered_event_ids FROM user_story_progress WHERE user_id = %s AND character_id = %s",
-                        (user_id, char_id)
-                    ).fetchone()
-                    if progress_row and progress_row["triggered_event_ids"]:
-                        event_ids = [int(x.strip()) for x in str(progress_row["triggered_event_ids"]).split(",") if x.strip().isdigit()]
-                        if event_ids:
-                            recent_ids = event_ids[-3:]
-                            placeholders = ",".join(["%s"] * len(recent_ids))
-                            recent_events = conn.execute(
-                                f"SELECT title FROM story_events WHERE id IN ({placeholders}) ORDER BY id DESC",
-                                tuple(recent_ids)
-                            ).fetchall()
-                            if recent_events:
-                                titles = [e["title"] for e in recent_events if e["title"]]
-                                if titles:
-                                    state_lines.append(f"- 最近剧情：{' → '.join(titles)}")
-                except Exception:
-                    logger.warning("查询最近剧情事件失败 char_id=%s user_id=%s", char_id, user_id, exc_info=True)
-        except Exception:
-            logger.warning("查询 story_progress 失败 char_id=%s", char_id, exc_info=True)
-
-    # 时间感知
-    _tz_offset = TIMEZONE_OFFSET
-    _now = datetime.now(timezone(timedelta(hours=_tz_offset)))
-    _h = _now.hour
-    if _h < 5: _time_desc = "深夜"
-    elif _h < 8: _time_desc = "清晨"
-    elif _h < 12: _time_desc = "上午"
-    elif _h < 14: _time_desc = "中午"
-    elif _h < 18: _time_desc = "下午"
-    elif _h < 20: _time_desc = "傍晚"
-    else: _time_desc = "晚上"
-    _date_desc = "周末" if _now.weekday() >= 5 else "工作日"
-    state_lines.append(f"- 当前时间：{_date_desc}{_time_desc}（背景信息，不要主动提及时间，除非用户话题涉及）")
-
-    # 自定义变量展示（过滤内部变量）
-    if custom_vars:
-        for k, v in list(custom_vars.items())[:5]:
-            if k.startswith("_"):
-                continue
-            state_lines.append(f"- {k}：{v}")
-
-    # 注入待处理剧情事件
-    pending_events = custom_vars.get("_pending_events") or []
-    if pending_events:
-        for pe in pending_events[:2]:
-            title = pe.get("title", "剧情事件")
-            content = pe.get("event_content", "")
-            if content:
-                state_lines.append(f"- 【触发剧情事件：{title}】{content[:100]}")
-
-    # 沉默轮数提醒
-    silent_rounds = int(custom_vars.get("_silent_rounds") or 0)
-    if silent_rounds >= 3:
-        state_lines.append(f"- 💡 提示：已连续{silent_rounds}轮未记录互动，如本轮有值得记录的内容可补充上报")
-
-    state_lines.extend(update_instruction)
-
-    state_snapshot = "\n".join(state_lines)
-    _state_max = max(1000, int(_budget.wi_max_chars() * 0.15))
-    if len(state_snapshot) > _state_max:
-        truncated_lines = state_lines[:6]
-        truncated_lines.append("…（自定义变量已省略）")
-        truncated_lines.extend(update_instruction)
-        state_snapshot = "\n".join(truncated_lines)
-
-    # ── 情感锚点 & 主动回忆注入 ──
-    shared_moments = list(custom_vars.get("_shared_moments") or [])
-    proactive_cared = False
-
-    if shared_moments and last_chat_time:
-        try:
-            last_dt = datetime.fromisoformat(str(last_chat_time))
-            hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
-            if hours_since >= 24:
-                anchor = random.choice(shared_moments[-5:])
-                if card_type == "scenario":
-                    proactive_text = (
-                        f"【剧情回响】距离上一次互动已过去较长时间（{int(hours_since)}小时）。回忆起「{anchor}」，"
-                        f"如果用户的问题与此相关，可以自然地引入这段经历。"
-                    )
-                else:
-                    proactive_text = (
-                        f"【背景提示】你已经很久没和用户聊天了（{int(hours_since)}小时）。想起「{anchor}」，你有点想念对方。"
-                        f"但不要生硬地打断用户的问题——如果用户问了具体问题，先认真回答；"
-                        f"如果用户只是打招呼或闲聊，可以自然地表达想念，如\"好久不见，最近怎么样？\"或\"想起{anchor}，就想和你聊聊\"。"
-                    )
-                existing_after = runtime_bundle.get("world_info_after") or ""
-                runtime_bundle["world_info_after"] = (proactive_text + "\n\n" + existing_after).strip()
-                proactive_cared = True
-        except (ValueError, TypeError):
-            pass
-
-    if shared_moments and not proactive_cared:
-        candidates = shared_moments[-5:]
-        anchor = random.choice(candidates)
-        if card_type == "scenario":
-            anchor_text = (
-                f"【共同回忆】{anchor}"
-                f"（这段经历是你和用户之间的纽带，不需要刻意提及，但会影响你此刻的态度和情感色彩）"
-            )
-        else:
-            anchor_text = (
-                f"【共同回忆】{anchor}"
-                f"（这是你和用户的共同回忆，会影响你此刻的情感基调。只有当话题自然关联时才提起，不要为了提起而提起）"
-            )
-        existing_after = runtime_bundle.get("world_info_after") or ""
-        runtime_bundle["world_info_after"] = (anchor_text + "\n\n" + existing_after).strip()
-
-    # 状态快照优先级最高：放在 world_info_after 最前面
-    existing_after = runtime_bundle.get("world_info_after") or ""
-    if existing_after:
-        runtime_bundle["world_info_after"] = (state_snapshot + "\n\n" + existing_after).strip()
-    else:
-        runtime_bundle["world_info_after"] = state_snapshot
+    """阶段5：委托 services/state_snapshot.py 构建状态快照并注入 world_info_after。"""
+    from services.state_snapshot import inject_state_snapshot
+    inject_state_snapshot(conn, character, runtime_bundle, character_state, _budget, card_type, last_chat_time, user_id, char_id)
 
 
 def build_layered_chat_messages(
@@ -814,7 +499,7 @@ def build_memory_summary_messages(
 2. 每个标题下使用简洁中文要点列表，每行一个要点，统一以"- "开头。
 3. 没有信息的分区也要保留标题，但下面可以写"- 暂无稳定信息"。
 4. 只保留未来会影响互动的长期信息，不写流水账。
-5. “待跟进事项”只记录后续值得主动提起、兑现承诺或继续推进的话题，不要把普通寒暄塞进去。
+5. "待跟进事项"只记录后续值得主动提起、兑现承诺或继续推进的话题，不要把普通寒暄塞进去。
 6. 你在整理时必须参考当前运行时设定，尤其要区分角色关系、剧情状态、世界规则，不要把不稳定的临时台词误写成长期事实。
 7. 不编造，不解释过程，不输出多余文字。"""
 

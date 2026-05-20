@@ -339,7 +339,7 @@ def _build_guest_stream_messages(
             character_state=None,
         )
     except Exception as exc:
-        logger.warning("游客 prompt 构建失败，使用降级 prompt: %s", exc)
+        logger.warning("游客 prompt 构建失败，使用降级 prompt: %s", exc, exc_info=True)
         messages = _build_guest_fallback_messages(character, clean_text)
     return clean_text, messages
 
@@ -582,7 +582,7 @@ def _resolve_public_character_state(
             if "show_bar" in rules:
                 result["show_bar"] = bool(rules["show_bar"])
     except Exception:
-        pass
+        logger.warning("解析好感度规则失败 character_id=%s", character_id, exc_info=True)
     # 追加剧情线名称（前端状态栏展示用）
     storyline_id = raw_state.get("storyline_id")
     if storyline_id and conn is not None:
@@ -594,7 +594,7 @@ def _resolve_public_character_state(
             if sl_row and sl_row["name"]:
                 result["storyline_name"] = sl_row["name"]
         except Exception:
-            pass
+            logger.warning("查询剧情线名称失败 storyline_id=%s", storyline_id, exc_info=True)
     return result
 
 

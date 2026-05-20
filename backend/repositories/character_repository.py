@@ -240,3 +240,118 @@ def delete_character_cascade(conn: ConnType, character_id: str) -> dict[str, Any
     conn.execute("DELETE FROM character_storylines WHERE character_id = %s", (character_id,))
     conn.execute("DELETE FROM characters WHERE id = %s", (character_id,))
     return dict(row)
+
+
+# ============================================================
+# Admin 洞察/摘要
+# ============================================================
+
+def get_character_config_fields(conn: ConnType, character_id: str) -> dict[str, Any] | None:
+    """获取角色配置摘要所需的字段子集。"""
+    return conn.execute(
+        """
+        SELECT id, name, subtitle, opening_message, system_prompt, is_visible,
+               card_type,
+               affection_enabled, affection_rules_json, structured_asset_json
+        FROM characters
+        WHERE id = %s
+        """,
+        (character_id,),
+    ).fetchone()
+
+
+def get_character_asset_stats(conn: ConnType, character_id: str) -> dict[str, int]:
+    """返回角色各资产表的总数和活跃数（单次查询聚合，避免 N 次 COUNT）。"""
+    rows = conn.execute(
+        """
+        SELECT
+            'memory' AS kind, COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active
+        FROM character_memories WHERE character_id = %s
+        UNION ALL
+        SELECT 'category', COUNT(*), 0 FROM memory_categories WHERE character_id = %s
+        UNION ALL
+        SELECT 'greeting', COUNT(*),
+            COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0)
+        FROM character_greetings WHERE character_id = %s
+        UNION ALL
+        SELECT 'storyline', COUNT(*),
+            COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0)
+        FROM character_storylines WHERE character_id = %s
+        UNION ALL
+        SELECT 'post_rule', COUNT(*),
+            COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0)
+        FROM character_post_rules WHERE character_id = %s
+        UNION ALL
+        SELECT 'story_event', COUNT(*),
+            COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0)
+        FROM story_events WHERE character_id = %s
+        """,
+        (character_id,) * 6,
+    ).fetchall()
+    stats: dict[str, int] = {}
+    for row in rows:
+        stats[row["kind"] + "_count"] = row["total"]
+        stats[row["kind"] + "_active"] = row["active"]
+    return stats
+
+
+def get_greeting_phase_coverage(conn: ConnType, character_id: str) -> int:
+    """返回活跃开场白覆盖的阶段数。"""
+    row = conn.execute(
+        "SELECT COUNT(DISTINCT story_phase) AS cnt FROM character_greetings WHERE character_id = %s AND is_active = 1",
+        (character_id,),
+    ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def get_default_storyline_id(conn: ConnType, character_id: str) -> int | None:
+    """获取默认剧情线 ID。"""
+    row = conn.execute(
+        "SELECT id FROM character_storylines WHERE character_id = %s AND is_default = 1 ORDER BY id ASC LIMIT 1",
+        (character_id,),
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def get_active_greeting_count(conn: ConnType, character_id: str) -> int:
+    """获取活跃开场白数量。"""
+    row = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM character_greetings WHERE character_id = %s AND is_active = 1",
+        (character_id,),
+    ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def get_story_events_for_validation(conn: ConnType, character_id: str) -> list[dict[str, Any]]:
+    """获取剧情事件用于解锁引用校验。"""
+    return conn.execute(
+        "SELECT id, unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id, event_content FROM story_events WHERE character_id = %s",
+        (character_id,),
+    ).fetchall()
+
+
+def get_valid_asset_ids(conn: ConnType, character_id: str) -> dict[str, set[int]]:
+    """返回角色所有有效的记忆/开场白/剧情线 ID 集合（用于验证引用）。"""
+    memories = {r["id"] for r in conn.execute("SELECT id FROM character_memories WHERE character_id = %s", (character_id,)).fetchall()}
+    greetings = {r["id"] for r in conn.execute("SELECT id FROM character_greetings WHERE character_id = %s", (character_id,)).fetchall()}
+    storylines = {r["id"] for r in conn.execute("SELECT id FROM character_storylines WHERE character_id = %s", (character_id,)).fetchall()}
+    return {"memories": memories, "greetings": greetings, "storylines": storylines}
+
+
+def get_asset_max_updated_at(conn: ConnType, character_id: str) -> str | None:
+    """返回角色所有资产表的最近更新时间。"""
+    row = conn.execute(
+        """
+        SELECT MAX(ts) AS max_ts FROM (
+            SELECT MAX(updated_at) AS ts FROM character_memories WHERE character_id = %s
+            UNION ALL SELECT MAX(updated_at) FROM memory_categories WHERE character_id = %s
+            UNION ALL SELECT MAX(updated_at) FROM character_greetings WHERE character_id = %s
+            UNION ALL SELECT MAX(updated_at) FROM character_storylines WHERE character_id = %s
+            UNION ALL SELECT MAX(updated_at) FROM character_post_rules WHERE character_id = %s
+            UNION ALL SELECT MAX(updated_at) FROM story_events WHERE character_id = %s
+        ) t
+        """,
+        (character_id,) * 6,
+    ).fetchone()
+    return str(row["max_ts"]) if row and row["max_ts"] else None

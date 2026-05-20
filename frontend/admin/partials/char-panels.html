@@ -1,0 +1,162 @@
+<!-- 角色标签页面板（由 index.html 内联脚本注入） -->
+<div id="char-tabs" class="char-tabs" style="display:none">
+  <button class="tab-btn active" data-tab="overview">📊 总览</button>
+  <button class="tab-btn" data-tab="edit">✏️ 编辑</button>
+  <button class="tab-btn" data-tab="worldinfo">🌍 世界书</button>
+  <button class="tab-btn" data-tab="story">📖 剧情</button>
+  <button class="tab-btn" data-tab="preview">🧾 预览</button>
+</div>
+
+<!-- 角色总览 -->
+<div id="tab-overview" class="tab-panel" style="display:none">
+  <div class="empty-state">
+    <div class="icon">👈</div>
+    <div>从左侧选择一个角色开始</div>
+  </div>
+</div>
+
+<!-- 编辑面板 -->
+<div id="tab-edit" class="tab-panel" style="display:none">
+  <div class="empty-state">
+    <div class="icon">👈</div>
+    <div>从左侧选择一个角色开始编辑</div>
+  </div>
+</div>
+
+<!-- 世界书面板（记忆条目 + 记忆分类 + 关键词测试） -->
+<div id="tab-worldinfo" class="tab-panel" style="display:none">
+  <div class="empty-state" id="worldinfo-empty">
+    <div class="icon">👈</div>
+    <div>从左侧选择一个角色以配置世界书</div>
+  </div>
+  <div id="worldinfo-content" style="display:none">
+    <div id="worldinfo-guide-card" class="guide-card"></div>
+
+    <!-- 记忆条目区块 -->
+    <div class="section-block">
+      <div class="section-block-header">
+        <h3>🧠 记忆条目（World Info）</h3>
+        <button class="btn btn-primary btn-sm" data-action="open-memory-modal">+ 新增条目</button>
+      </div>
+      <div class="section-block-desc">当用户消息命中关键词时，这段内容会被临时注入到AI的上下文里。适合放人物背景、关系线索、世界规则和行为禁忌。</div>
+      <div class="section-block-toolbar">
+        <input type="search" id="memory-search" placeholder="搜索关键词/内容…" class="input-search" style="flex:1;min-width:160px;" />
+        <select id="memory-filter-category" class="input-select">
+          <option value="all">全部分类</option>
+        </select>
+        <select id="memory-filter-status" class="input-select">
+          <option value="all">全部状态</option>
+          <option value="active">仅启用</option>
+          <option value="inactive">仅禁用</option>
+        </select>
+        <select id="memory-filter-mode" class="input-select">
+          <option value="all">全部模式</option>
+          <option value="keyword">关键词触发</option>
+          <option value="constant">每轮常驻</option>
+          <option value="always">始终注入</option>
+        </select>
+      </div>
+      <div id="memories-list" class="items-list"></div>
+    </div>
+
+    <!-- 记忆分类区块 -->
+    <div class="section-block">
+      <div class="section-block-header">
+        <h3>🏷️ 记忆分类</h3>
+        <button class="btn btn-primary btn-sm" data-action="open-category-modal">+ 新增分类</button>
+      </div>
+      <div class="section-block-desc">给记忆条目打标签，方便归类整理。不直接影响聊天效果。</div>
+      <div id="categories-list" class="items-list"></div>
+    </div>
+
+    <!-- 关键词测试区块 -->
+    <div class="section-block">
+      <div class="section-block-header">
+        <h3>🧪 关键词触发测试</h3>
+      </div>
+      <div class="section-block-desc">输入一句模拟的用户消息，即时测试会触发哪些记忆条目。</div>
+      <div class="test-input-area">
+        <textarea id="test-input" rows="3" placeholder="输入测试文本，例如：今天天气真好，我想去公园散步..."></textarea>
+        <button class="btn btn-primary" data-action="test-keywords">测试匹配</button>
+      </div>
+      <div id="test-results" class="test-results"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 剧情面板（开场白 + 剧情线 + 剧情事件 + 后置规则） -->
+<div id="tab-story" class="tab-panel" style="display:none">
+  <div class="empty-state" id="story-empty">
+    <div class="icon">👈</div>
+    <div>从左侧选择一个角色以配置剧情</div>
+  </div>
+  <div id="story-content" style="display:none">
+    <div id="story-guide-card" class="guide-card"></div>
+
+    <!-- 剧情线区块 -->
+    <div class="section-block">
+      <div class="section-block-header">
+        <h3>📖 剧情线</h3>
+        <button class="btn btn-primary btn-sm" data-action="open-storyline-modal">+ 新增剧情线</button>
+      </div>
+      <div class="section-block-desc">把角色的故事拆成几条分支路线（如校园线/职场线）。每条线可以绑定专属的开场白、后置规则和剧情事件。</div>
+      <div id="storylines-list" class="items-list"></div>
+    </div>
+
+    <!-- 开场白区块 -->
+    <div class="section-block">
+      <div class="section-block-header">
+        <h3>👋 开场白</h3>
+        <button class="btn btn-primary btn-sm" data-action="open-greeting-modal">+ 新增开场白</button>
+      </div>
+      <div class="section-block-desc">用户首次进入、或点击"清空聊天"重新开始时，系统会根据当前关系阶段和剧情线自动挑选。</div>
+      <div id="greeting-phase-buttons" class="phase-filter">
+        <button class="phase-btn active" data-action="filter-greetings" data-phase="all">全部</button>
+        <button class="phase-btn" data-action="filter-greetings" data-phase="stranger">😐 陌生人</button>
+        <button class="phase-btn" data-action="filter-greetings" data-phase="acquaintance">🙂 熟人</button>
+        <button class="phase-btn" data-action="filter-greetings" data-phase="friend">😊 朋友</button>
+        <button class="phase-btn" data-action="filter-greetings" data-phase="lover">❤️ 恋人</button>
+      </div>
+      <div id="greetings-list" class="items-list"></div>
+    </div>
+
+    <!-- 剧情事件区块 -->
+    <div class="section-block">
+      <div class="section-block-header">
+        <h3>🎭 剧情事件</h3>
+        <button class="btn btn-primary btn-sm" data-action="open-event-modal">+ 新增事件</button>
+      </div>
+      <div class="section-block-desc">当用户好感度达到设定阈值时自动触发。建议同时配置触发文案和解锁内容。</div>
+      <div id="events-list" class="items-list"></div>
+    </div>
+
+    <!-- 后置规则区块 -->
+    <div class="section-block">
+      <div class="section-block-header">
+        <h3>📝 后置规则</h3>
+        <button class="btn btn-primary btn-sm" data-action="open-postrule-modal">+ 新增规则</button>
+      </div>
+      <div class="section-block-desc">放在历史记录之后、AI回复之前，作为最后一道约束提醒。适合放语气要求、格式规范、行为边界。</div>
+      <div id="postrules-list" class="items-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Prompt 预览面板 -->
+<div id="tab-preview" class="tab-panel" style="display:none">
+  <div class="preview-card">
+    <div class="preview-toolbar">
+      <div>
+        <div class="preview-title">🧾 Prompt 预览</div>
+        <div class="hint">AI 实际会收到什么设定、记忆和限制，都能在这里看到。</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-ghost" data-action="load-prompt-preview">🔄 刷新预览</button>
+        <button class="btn btn-primary" data-action="copy-prompt-preview">📋 复制</button>
+      </div>
+    </div>
+    <div id="prompt-preview-content">
+      <div class="preview-box muted">请先从左侧选择角色。</div>
+    </div>
+  </div>
+</div>

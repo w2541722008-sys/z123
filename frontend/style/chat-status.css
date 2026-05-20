@@ -1,0 +1,200 @@
+/* ============================================================
+   chat-status.css — 聊天状态UI：关系状态栏、好感度动画、剧情事件提示、角色状态面板
+============================================================ */
+
+/* ── 关系状态栏 ────────────────────────────────────────────── */
+.chat-state-bar {
+  background: rgba(255,255,255,.03);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  padding: 7px 14px 8px;
+  flex-shrink: 0;
+}
+.state-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.state-affection {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.state-label {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  letter-spacing: .5px;
+}
+.affection-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.affection-bar-bg {
+  flex: 1;
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(255,255,255,.08);
+  overflow: hidden;
+}
+.affection-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--purple), var(--pink));
+  transition: width .6s cubic-bezier(.22,1,.36,1);
+}
+.affection-bar-fill.full {
+  animation: affection-glow 1.6s ease-in-out infinite alternate;
+}
+.affection-value {
+  position: relative;
+  font-size: 10px;
+  color: var(--pink);
+  font-variant-numeric: tabular-nums;
+  min-width: 20px;
+  text-align: right;
+}
+/* 好感度变化弹出动画 */
+.affection-value.affection-pop::after {
+  content: attr(data-delta);
+  position: absolute;
+  right: -4px;
+  top: -16px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--pink);
+  pointer-events: none;
+  animation: affection-float-up 1.6s ease-out forwards;
+}
+@keyframes affection-float-up {
+  0%   { opacity: 1; transform: translateY(0); }
+  60%  { opacity: 1; transform: translateY(-14px); }
+  100% { opacity: 0; transform: translateY(-22px); }
+}
+.affection-value[data-delta^="-"]::after {
+  color: #94a3b8;
+}
+.state-pill {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  white-space: nowrap;
+  font-weight: 500;
+  letter-spacing: .3px;
+}
+.state-phase {
+  background: rgba(124,108,240,.15);
+  color: #a89cfe;
+  border: 1px solid rgba(124,108,240,.28);
+}
+.state-mood {
+  background: rgba(167,139,250,.10);
+  color: #c4b5fd;
+  border: 1px solid rgba(167,139,250,.22);
+}
+.state-mood.mood-happy    { color:#c4b5fd; background:rgba(196,181,253,.12); border-color:rgba(196,181,253,.25); }
+.state-mood.mood-warm     { color:#b8a0f5; background:rgba(184,160,245,.12); border-color:rgba(184,160,245,.25); }
+.state-mood.mood-melting  { color:#d4c4fe; background:rgba(167,139,250,.15); border-color:rgba(167,139,250,.30); }
+.state-mood.mood-cold     { color:#80cfff; background:rgba(128,207,255,.10); border-color:rgba(128,207,255,.22); }
+.state-mood.mood-angry    { color:#ff8080; background:rgba(255,80,80,.10);   border-color:rgba(255,80,80,.22); }
+.state-mood.mood-sad      { color:#8b92b0; background:rgba(139,146,176,.10); border-color:rgba(139,146,176,.22); }
+.state-mood.mood-shy      { color:#c4b5fd; background:rgba(196,181,253,.10); border-color:rgba(196,181,253,.22); }
+.state-mood.mood-surprised{ color:#a8e6cf; background:rgba(168,230,207,.10); border-color:rgba(168,230,207,.22); }
+
+.storyline-pill {
+  background: rgba(251,191,36,.10);
+  color: #fbbf24;
+  border: 1px solid rgba(251,191,36,.22);
+}
+
+/* ── 剧情事件解锁提示条 ────────────────────────────────────── */
+.story-event-toast {
+  position: fixed;
+  top: -50px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, rgba(124,108,240,.85), rgba(167,139,250,.85));
+  color: #fff;
+  padding: 10px 24px;
+  border-radius: 99px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  box-shadow: 0 4px 20px rgba(124,108,240,.4);
+  z-index: 1000;
+  transition: top .4s cubic-bezier(.22,1,.36,1);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.story-event-toast.show { top: 16px; }
+.phase-upgrade-toast {
+  background: linear-gradient(135deg, rgba(244,114,182,.88), rgba(236,72,153,.88));
+  box-shadow: 0 4px 24px rgba(244,114,182,.5);
+}
+
+/* ── 角色状态面板 ──────────────────────────────────────────── */
+.char-status-panel {
+  background: rgba(255,255,255,.02);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.csp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s;
+}
+.csp-header:active { background: rgba(255,255,255,.04); }
+.csp-title {
+  font-size: 11px;
+  color: rgba(255,255,255,.40);
+  letter-spacing: .5px;
+}
+.csp-arrow {
+  font-size: 9px;
+  color: rgba(255,255,255,.25);
+  transition: transform .2s;
+}
+.csp-arrow.collapsed { transform: rotate(180deg); }
+.csp-body {
+  padding: 0 14px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  max-height: 200px;
+  overflow-y: auto;
+  transition: max-height .25s ease, padding .25s ease;
+}
+.csp-body.collapsed {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+.csp-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  min-width: 0;
+}
+.csp-field.full-width { width: 100%; flex-direction: column; gap: 2px; }
+.csp-key {
+  color: rgba(255,255,255,.35);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.csp-val {
+  color: rgba(255,255,255,.68);
+  word-break: break-all;
+}
+.csp-field.mood .csp-val { color: #c4b5fd; }

@@ -1,19 +1,14 @@
-const ForgotPassword = {
-  currentStep: 1,
-  email: '',
-  countdownTimer: null,
+const ForgotPassword = (() => {
+  let currentStep = 1;
+  let email = '';
+  let countdownTimer = null;
 
-  get API_BASE() {
+  const API_BASE = (() => {
     const shared = window.AIFriendShared;
     return (shared && typeof shared.resolveApiBase === 'function') ? shared.resolveApiBase() : '/api';
-  },
+  })();
 
-  init() {
-    this.bindCodeInputs();
-    this.bindEnterKey();
-  },
-
-  bindCodeInputs() {
+  function bindCodeInputs() {
     const inputs = document.querySelectorAll('.code-input');
     inputs.forEach((input, index) => {
       input.addEventListener('input', (e) => {
@@ -34,18 +29,18 @@ const ForgotPassword = {
         }
       });
     });
-  },
+  }
 
-  bindEnterKey() {
+  function bindEnterKey() {
     document.getElementById('email-input')?.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.sendCode();
+      if (e.key === 'Enter') sendCode();
     });
     document.getElementById('confirm-password-input')?.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.resetPassword();
+      if (e.key === 'Enter') resetPassword();
     });
-  },
+  }
 
-  goToStep(step) {
+  function goToStep(step) {
     document.querySelectorAll('.step-content').forEach(el => el.classList.remove('active'));
     document.getElementById(`step-${step}`)?.classList.add('active');
     document.querySelectorAll('.step-dot').forEach((dot, index) => {
@@ -53,34 +48,34 @@ const ForgotPassword = {
     });
     const subtitles = { 1: '输入邮箱获取验证码', 2: '输入邮箱中收到的验证码', 3: '设置您的新密码', 4: '密码重置完成' };
     document.getElementById('step-subtitle').textContent = subtitles[step] || '';
-    this.currentStep = step;
+    currentStep = step;
     const focusMap = { 1: 'email-input', 3: 'new-password-input' };
     if (focusMap[step]) document.getElementById(focusMap[step])?.focus();
     else if (step === 2) document.querySelector('.code-input')?.focus();
-  },
+  }
 
-  showError(elementId, message) {
+  function showError(elementId, message) {
     const errorEl = document.getElementById(elementId);
     if (errorEl) { errorEl.textContent = message; errorEl.classList.add('show'); }
     document.getElementById(elementId.replace('-error', '-input'))?.classList.add('error');
-  },
+  }
 
-  clearError(elementId) {
+  function clearError(elementId) {
     const errorEl = document.getElementById(elementId);
     if (errorEl) { errorEl.textContent = ''; errorEl.classList.remove('show'); }
     document.getElementById(elementId.replace('-error', '-input'))?.classList.remove('error');
-  },
+  }
 
-  showToast(message, type = 'info') {
+  function showToast(message, type = 'info') {
     const toast = document.getElementById('ui-toast');
     if (!toast) { alert(message); return; }
     toast.textContent = message;
     toast.style.background = type === 'error' ? '#EF4444' : '#10B981';
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 3000);
-  },
+  }
 
-  setButtonLoading(buttonId, loading) {
+  function setButtonLoading(buttonId, loading) {
     const btn = document.getElementById(buttonId);
     if (!btn) return;
     if (loading) {
@@ -91,90 +86,90 @@ const ForgotPassword = {
       btn.disabled = false;
       btn.textContent = btn.dataset.originalText || btn.textContent;
     }
-  },
+  }
 
-  async sendCode() {
-    const email = document.getElementById('email-input').value.trim();
-    if (!email) { this.showError('email-error', '请输入邮箱地址'); return; }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { this.showError('email-error', '请输入有效的邮箱地址'); return; }
-    this.clearError('email-error');
-    this.setButtonLoading('send-code-btn', true);
+  async function sendCode() {
+    const emailInput = document.getElementById('email-input').value.trim();
+    if (!emailInput) { showError('email-error', '请输入邮箱地址'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput)) { showError('email-error', '请输入有效的邮箱地址'); return; }
+    clearError('email-error');
+    setButtonLoading('send-code-btn', true);
     try {
-      const response = await fetch(`${this.API_BASE}/auth/forgot-password`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email })
+      const response = await fetch(`${API_BASE}/auth/forgot-password`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: emailInput })
       });
       const data = await response.json();
       if (response.ok) {
-        this.email = email;
-        this.showToast(data.message || '如果该邮箱已注册，验证码会发送至邮箱');
-        this.goToStep(2);
-        this.startCountdown();
+        email = emailInput;
+        showToast(data.message || '如果该邮箱已注册，验证码会发送至邮箱');
+        goToStep(2);
+        startCountdown();
       } else {
-        this.showError('email-error', data.detail || '发送失败，请稍后重试');
+        showError('email-error', data.detail || '发送失败，请稍后重试');
       }
-    } catch { this.showError('email-error', '网络错误，请稍后重试'); }
-    finally { this.setButtonLoading('send-code-btn', false); }
-  },
+    } catch { showError('email-error', '网络错误，请稍后重试'); }
+    finally { setButtonLoading('send-code-btn', false); }
+  }
 
-  startCountdown() {
+  function startCountdown() {
     const resendBtn = document.getElementById('resend-btn');
     if (!resendBtn) return;
     let seconds = 60;
     resendBtn.disabled = true;
     resendBtn.textContent = `${seconds}秒后重新发送`;
-    this.countdownTimer = setInterval(() => {
+    countdownTimer = setInterval(() => {
       seconds--;
       if (seconds <= 0) {
-        clearInterval(this.countdownTimer);
+        clearInterval(countdownTimer);
         resendBtn.disabled = false;
         resendBtn.textContent = '重新发送';
       } else {
         resendBtn.textContent = `${seconds}秒后重新发送`;
       }
     }, 1000);
-  },
+  }
 
-  async resendCode() {
-    if (!this.email) return;
-    this.setButtonLoading('resend-btn', true);
+  async function resendCode() {
+    if (!email) return;
+    setButtonLoading('resend-btn', true);
     try {
-      const response = await fetch(`${this.API_BASE}/auth/forgot-password`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: this.email })
+      const response = await fetch(`${API_BASE}/auth/forgot-password`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email })
       });
       const data = await response.json();
       if (response.ok) {
-        this.showToast(data.message || '如果该邮箱已注册，验证码会发送至邮箱');
-        this.startCountdown();
+        showToast(data.message || '如果该邮箱已注册，验证码会发送至邮箱');
+        startCountdown();
       } else {
-        this.showToast(data.detail || '发送失败', 'error');
+        showToast(data.detail || '发送失败', 'error');
       }
-    } catch { this.showToast('网络错误，请稍后重试', 'error'); }
-    finally { this.setButtonLoading('resend-btn', false); }
-  },
+    } catch { showToast('网络错误，请稍后重试', 'error'); }
+    finally { setButtonLoading('resend-btn', false); }
+  }
 
-  getCodeValue() {
+  function getCodeValue() {
     let code = '';
     document.querySelectorAll('.code-input').forEach(input => { code += input.value || ''; });
     return code;
-  },
+  }
 
-  async verifyCode() {
-    const code = this.getCodeValue();
-    if (code.length !== 6) { this.showError('code-error', '请输入完整的 6 位验证码'); return; }
-    this.clearError('code-error');
-    this.setButtonLoading('verify-code-btn', true);
+  async function verifyCode() {
+    const code = getCodeValue();
+    if (code.length !== 6) { showError('code-error', '请输入完整的 6 位验证码'); return; }
+    clearError('code-error');
+    setButtonLoading('verify-code-btn', true);
     try {
-      const response = await fetch(`${this.API_BASE}/auth/verify-code`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: this.email, code })
+      const response = await fetch(`${API_BASE}/auth/verify-code`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, code })
       });
       const data = await response.json();
-      if (response.ok) { this.showToast('验证通过'); this.goToStep(3); }
-      else { this.showError('code-error', data.detail || '验证码错误'); }
-    } catch { this.showError('code-error', '网络错误，请稍后重试'); }
-    finally { this.setButtonLoading('verify-code-btn', false); }
-  },
+      if (response.ok) { showToast('验证通过'); goToStep(3); }
+      else { showError('code-error', data.detail || '验证码错误'); }
+    } catch { showError('code-error', '网络错误，请稍后重试'); }
+    finally { setButtonLoading('verify-code-btn', false); }
+  }
 
-  checkPasswordStrength() {
+  function checkPasswordStrength() {
     const password = document.getElementById('new-password-input')?.value || '';
     const strengthBar = document.getElementById('strength-bar');
     if (!strengthBar) return;
@@ -187,27 +182,34 @@ const ForgotPassword = {
     if (/\d/.test(password)) strength++;
     if (/[^a-zA-Z0-9]/.test(password)) strength++;
     strengthBar.classList.add(strength <= 2 ? 'weak' : strength <= 4 ? 'medium' : 'strong');
-  },
+  }
 
-  async resetPassword() {
+  async function resetPassword() {
     const newPassword = document.getElementById('new-password-input').value;
     const confirmPassword = document.getElementById('confirm-password-input').value;
-    const code = this.getCodeValue();
-    if (!newPassword || newPassword.length < 6) { this.showError('password-error', '密码至少需要 6 位字符'); return; }
-    if (newPassword !== confirmPassword) { this.showError('password-error', '两次输入的密码不一致'); return; }
-    this.clearError('password-error');
-    this.setButtonLoading('reset-password-btn', true);
+    const code = getCodeValue();
+    if (!newPassword || newPassword.length < 6) { showError('password-error', '密码至少需要 6 位字符'); return; }
+    if (newPassword !== confirmPassword) { showError('password-error', '两次输入的密码不一致'); return; }
+    clearError('password-error');
+    setButtonLoading('reset-password-btn', true);
     try {
-      const response = await fetch(`${this.API_BASE}/auth/reset-password`, {
+      const response = await fetch(`${API_BASE}/auth/reset-password`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: this.email, code, new_password: newPassword })
+        body: JSON.stringify({ email, code, new_password: newPassword })
       });
       const data = await response.json();
-      if (response.ok) { this.showToast('密码重置成功'); this.goToStep(4); }
-      else { this.showError('password-error', data.detail || '重置失败，请重试'); }
-    } catch { this.showError('password-error', '网络错误，请稍后重试'); }
-    finally { this.setButtonLoading('reset-password-btn', false); }
+      if (response.ok) { showToast('密码重置成功'); goToStep(4); }
+      else { showError('password-error', data.detail || '重置失败，请重试'); }
+    } catch { showError('password-error', '网络错误，请稍后重试'); }
+    finally { setButtonLoading('reset-password-btn', false); }
   }
-};
+
+  function init() {
+    bindCodeInputs();
+    bindEnterKey();
+  }
+
+  return { init, sendCode, verifyCode, resetPassword, checkPasswordStrength, resendCode };
+})();
 
 document.addEventListener('DOMContentLoaded', () => ForgotPassword.init());

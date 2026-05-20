@@ -8,6 +8,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
 from core.schemas import KeywordTestPayload
+from repositories.character_repository import (
+    check_character_exists,
+    get_active_greeting_count,
+    get_asset_max_updated_at,
+    get_character_asset_stats,
+    get_character_config_fields,
+    get_character_full,
+    get_default_storyline_id,
+    get_greeting_phase_coverage,
+    get_story_events_for_validation,
+    get_valid_asset_ids,
+)
+from repositories.character_memory_repository import get_active_keyword_memories
 from services.prompt_assembler import build_message_preview
 from utils.json_utils import parse_json_object
 
@@ -59,81 +72,43 @@ def _basic_config_warnings(character: dict[str, Any], runtime_layers: dict[str, 
 
 @router.get("/admin/character/{character_id}/config-summary")
 def admin_character_config_summary(character_id: str, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
-    row = conn.execute(
-        """
-        SELECT id, name, subtitle, opening_message, system_prompt, is_visible,
-               card_type,
-               affection_enabled, affection_rules_json, structured_asset_json
-        FROM characters
-        WHERE id = %s
-        """,
-        (character_id,),
-    ).fetchone()
+    row = get_character_config_fields(conn, character_id)
     if not row:
         raise HTTPException(status_code=404, detail="角色不存在")
 
     structured = parse_json_object(row["structured_asset_json"], fallback={})
     runtime_layers = structured.get("runtime_layers", {}) or {}
 
-    counts = {
-        "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = %s", (character_id,)).fetchone()["count"],
-        "memory_category_count": conn.execute("SELECT COUNT(*) FROM memory_categories WHERE character_id = %s", (character_id,)).fetchone()["count"],
-        "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = %s", (character_id,)).fetchone()["count"],
-        "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = %s", (character_id,)).fetchone()["count"],
-        "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = %s", (character_id,)).fetchone()["count"],
-        "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = %s", (character_id,)).fetchone()["count"],
-    }
-    active_counts = {
-        "memory_count": conn.execute("SELECT COUNT(*) FROM character_memories WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
-        "greeting_count": conn.execute("SELECT COUNT(*) FROM character_greetings WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
-        "storyline_count": conn.execute("SELECT COUNT(*) FROM character_storylines WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
-        "post_rule_count": conn.execute("SELECT COUNT(*) FROM character_post_rules WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
-        "story_event_count": conn.execute("SELECT COUNT(*) FROM story_events WHERE character_id = %s AND is_active = 1", (character_id,)).fetchone()["count"],
-    }
-    greeting_phase_coverage = len(conn.execute(
-        "SELECT DISTINCT story_phase FROM character_greetings WHERE character_id = %s AND is_active = 1",
-        (character_id,),
-    ).fetchall())
-
-    default_storyline_id_row = conn.execute(
-        "SELECT id FROM character_storylines WHERE character_id = %s AND is_default = 1 ORDER BY id ASC LIMIT 1",
-        (character_id,),
-    ).fetchone()
-    active_greetings = conn.execute(
-        "SELECT COUNT(*) FROM character_greetings WHERE character_id = %s AND is_active = 1",
-        (character_id,),
-    ).fetchone()["count"]
+    stats = get_character_asset_stats(conn, character_id)
+    greeting_phase_coverage = get_greeting_phase_coverage(conn, character_id)
+    default_storyline_id = get_default_storyline_id(conn, character_id)
+    active_greetings = get_active_greeting_count(conn, character_id)
 
     warnings = _basic_config_warnings(dict(row), runtime_layers)
-    if counts["memory_count"] > 0 and active_counts["memory_count"] == 0:
+    if stats["memory_count"] > 0 and stats["memory_active"] == 0:
         warnings.append("存在记忆条目，但全部处于禁用状态")
-    elif 0 < active_counts["memory_count"] < 3:
+    elif 0 < stats["memory_active"] < 3:
         warnings.append("启用中的记忆条目较少，建议至少准备 3 条高频记忆")
-    if counts["storyline_count"] > 0 and not default_storyline_id_row:
+    if stats["storyline_count"] > 0 and not default_storyline_id:
         warnings.append("存在剧情线，但未设置默认剧情线")
-    if counts["greeting_count"] > 0 and active_greetings == 0:
+    if stats["greeting_count"] > 0 and active_greetings == 0:
         warnings.append("存在开场白，但全部处于禁用状态")
-    elif counts["greeting_count"] > 0 and greeting_phase_coverage < 2:
+    elif stats["greeting_count"] > 0 and greeting_phase_coverage < 2:
         warnings.append("开场白阶段覆盖偏少，建议至少覆盖 2 个关系阶段")
-    if counts["post_rule_count"] > 0 and active_counts["post_rule_count"] == 0:
+    if stats["post_rule_count"] > 0 and stats["post_rule_active"] == 0:
         warnings.append("存在后置规则，但全部处于禁用状态")
-    if row["card_type"] in {"intimate", "scenario"} and counts["greeting_count"] == 0:
+    if row["card_type"] in {"intimate", "scenario"} and stats["greeting_count"] == 0:
         warnings.append("当前角色还没有多阶段开场白，首次体验会偏单一")
 
     empty_unlock_event_count = 0
     empty_event_content_count = 0
-    if counts["story_event_count"] > 0:
-        events = conn.execute(
-            "SELECT id, unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id, event_content FROM story_events WHERE character_id = %s",
-            (character_id,),
-        ).fetchall()
-        valid_memory_ids = {r["id"] for r in conn.execute("SELECT id FROM character_memories WHERE character_id = %s", (character_id,)).fetchall()}
-        valid_greeting_ids = {r["id"] for r in conn.execute("SELECT id FROM character_greetings WHERE character_id = %s", (character_id,)).fetchall()}
-        valid_storyline_ids = {r["id"] for r in conn.execute("SELECT id FROM character_storylines WHERE character_id = %s", (character_id,)).fetchall()}
+    if stats["story_event_count"] > 0:
+        events = get_story_events_for_validation(conn, character_id)
+        valid_ids = get_valid_asset_ids(conn, character_id)
         for event in events:
-            bad_m = [x for x in _split_csv_ids(event["unlocked_memory_ids"]) if x not in valid_memory_ids]
-            bad_g = [x for x in _split_csv_ids(event["unlocked_greeting_ids"]) if x not in valid_greeting_ids]
-            bad_s = event["unlocked_storyline_id"] and event["unlocked_storyline_id"] not in valid_storyline_ids
+            bad_m = [x for x in _split_csv_ids(event["unlocked_memory_ids"]) if x not in valid_ids["memories"]]
+            bad_g = [x for x in _split_csv_ids(event["unlocked_greeting_ids"]) if x not in valid_ids["greetings"]]
+            bad_s = event["unlocked_storyline_id"] and event["unlocked_storyline_id"] not in valid_ids["storylines"]
             has_unlocks = bool(_split_csv_ids(event["unlocked_memory_ids"]) or _split_csv_ids(event["unlocked_greeting_ids"]) or event["unlocked_storyline_id"])
             has_event_content = bool((event["event_content"] or "").strip())
             if not has_unlocks:
@@ -154,43 +129,39 @@ def admin_character_config_summary(character_id: str, conn: ConnType = Depends(g
         bool((row["opening_message"] or "").strip()),
         bool(str(runtime_layers.get("base_profile") or "").strip()),
         bool(str(runtime_layers.get("examples") or "").strip()),
-        active_counts["memory_count"] > 0,
-        active_counts["greeting_count"] > 0,
+        stats["memory_active"] > 0,
+        active_greetings > 0,
         greeting_phase_coverage >= 2,
         (not row["affection_enabled"]) or _affection_rules_use_default(row["affection_rules_json"]) or bool(parse_json_object(row["affection_rules_json"], fallback={})),
-        counts["storyline_count"] == 0 or bool(default_storyline_id_row),
-        counts["story_event_count"] == 0 or empty_unlock_event_count == 0,
+        stats["storyline_count"] == 0 or bool(default_storyline_id),
+        stats["story_event_count"] == 0 or empty_unlock_event_count == 0,
     ]
     completion_score = round(sum(1 for x in checks if x) / len(checks) * 100)
 
-    last_updated_candidates = []
-    for table in ["character_memories", "memory_categories", "character_greetings", "character_storylines", "character_post_rules", "story_events"]:
-        r = conn.execute(f"SELECT MAX(updated_at) as max FROM {table} WHERE character_id = %s", (character_id,)).fetchone()
-        if r and r["max"]:
-            last_updated_candidates.append(str(r["max"]))
+    last_updated = get_asset_max_updated_at(conn, character_id)
 
     return {
         "character_id": row["id"],
         "name": row["name"],
         "subtitle": row["subtitle"] or "",
         "runtime_layer_count": len(runtime_layers),
-        "default_storyline_id": default_storyline_id_row["id"] if default_storyline_id_row else None,
-        "last_updated": max(last_updated_candidates) if last_updated_candidates else "",
+        "default_storyline_id": default_storyline_id,
+        "last_updated": last_updated or "",
         "completeness": completion_score,
         "warnings": warnings,
         "stats": {
-            "memories": counts["memory_count"],
-            "active_memories": active_counts["memory_count"],
-            "categories": counts["memory_category_count"],
-            "greetings": counts["greeting_count"],
-            "active_greetings": active_counts["greeting_count"],
+            "memories": stats["memory_count"],
+            "active_memories": stats["memory_active"],
+            "categories": stats.get("category_count", 0),
+            "greetings": stats["greeting_count"],
+            "active_greetings": active_greetings,
             "greeting_phase_coverage": greeting_phase_coverage,
-            "storylines": counts["storyline_count"],
-            "active_storylines": active_counts["storyline_count"],
-            "post_rules": counts["post_rule_count"],
-            "active_post_rules": active_counts["post_rule_count"],
-            "events": counts["story_event_count"],
-            "active_events": active_counts["story_event_count"],
+            "storylines": stats["storyline_count"],
+            "active_storylines": stats["storyline_active"],
+            "post_rules": stats["post_rule_count"],
+            "active_post_rules": stats["post_rule_active"],
+            "events": stats["story_event_count"],
+            "active_events": stats["story_event_active"],
             "empty_unlock_events": empty_unlock_event_count,
             "empty_event_content_events": empty_event_content_count,
         },
@@ -206,7 +177,7 @@ def admin_message_preview(
     storyline_id: int | None = Query(None, description="当前剧情线ID"),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    char_row = conn.execute("SELECT * FROM characters WHERE id = %s", (character_id,)).fetchone()
+    char_row = get_character_full(conn, character_id)
     if not char_row:
         raise HTTPException(status_code=404, detail="角色不存在")
 
@@ -242,21 +213,10 @@ def test_keywords(
     body: KeywordTestPayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> list[dict[str, Any]]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
+    if not check_character_exists(conn, character_id):
         raise HTTPException(status_code=404, detail="角色不存在")
 
-    rows = conn.execute(
-        """
-        SELECT id, keywords, trigger_logic, content
-        FROM character_memories
-        WHERE character_id = %s AND is_active = 1
-        ORDER BY priority ASC
-        """,
-        (character_id,),
-    ).fetchall()
+    rows = get_active_keyword_memories(conn, character_id)
 
     results = []
     text_lower = body.text.lower()

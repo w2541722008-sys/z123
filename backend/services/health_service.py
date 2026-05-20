@@ -92,7 +92,7 @@ def check_media_health(*, force: bool = False) -> dict[str, object]:
                     if not media_path_exists(value):
                         missing.append(f"{character_id}:{field}:{value}")
     except Exception as exc:
-        logging.warning("媒体资源健康检查失败: %s", exc)
+        logging.warning("媒体资源健康检查失败: %s", exc, exc_info=True)
         _media_health_cache["ok"] = False
         _media_health_cache["missing_count"] = 1
         _media_health_cache["samples"] = [f"health-check-error:{exc}"]

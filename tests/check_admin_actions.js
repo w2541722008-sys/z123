@@ -156,7 +156,14 @@ function runCheck() {
     const adminHtmlPath = path.join(projectRoot, 'frontend', 'admin', 'index.html');
 
     const actionsJsContent = fs.readFileSync(actionsJsPath, 'utf8');
-    const indexHtmlContent = fs.readFileSync(adminHtmlPath, 'utf8');
+    let indexHtmlContent = fs.readFileSync(adminHtmlPath, 'utf8');
+    const partialsDir = path.join(projectRoot, 'frontend', 'admin', 'partials');
+    if (fs.existsSync(partialsDir)) {
+        const partialFiles = fs.readdirSync(partialsDir).filter(f => f.endsWith('.html'));
+        for (const f of partialFiles) {
+            indexHtmlContent += fs.readFileSync(path.join(partialsDir, f), 'utf8');
+        }
+    }
     const { allowSet, grouped } = readAllowList(projectRoot, allowListArg);
     const actionToModules = invertModuleActions(grouped);
 
