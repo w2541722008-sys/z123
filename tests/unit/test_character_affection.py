@@ -81,8 +81,8 @@ class TestCooldowns:
 
     def test_cooldown_prevents_duplicate_event(self):
         rules = {"compliment": 2}
-        # 刚发生的事件，仍在冷却期内
-        just_now = NOW_UTC.isoformat()
+        # 刚发生的事件，仍在冷却期内（函数内部用 datetime.now() 算时间差）
+        just_now = datetime.now(timezone.utc).isoformat()
         state = {"_last_event_timestamps": {"compliment": just_now}}
         change, reason = _calculate_affection_change("compliment", rules, state)
         assert change == 0
