@@ -158,8 +158,22 @@ const ChatStream = ((ChatState) => {
   }
 
   /* ── 角色状态 & 事件 ─────────────────────────────────── */
+  const AFFECTION_MILESTONES = [20, 40, 60, 80, 100];
+
   function syncCharacterState(payload) {
-    if (payload?.character_state && ChatState.renderStateBar) ChatState.renderStateBar(payload.character_state);
+    let deltaInfo = null;
+    if (payload?.character_state && ChatState.renderStateBar) {
+      deltaInfo = ChatState.renderStateBar(payload.character_state);
+    }
+    // 好感度里程碑检测
+    if (deltaInfo && deltaInfo.prevAffection < deltaInfo.newAffection) {
+      for (const m of AFFECTION_MILESTONES) {
+        if (deltaInfo.prevAffection < m && deltaInfo.newAffection >= m) {
+          const label = (ChatState.currentChar?.card_type === 'scenario') ? '沉浸度' : '好感度';
+          UI.toast(label + '达到 ' + m + '！', 'info', 2500);
+        }
+      }
+    }
     const events = payload?.character_state?.triggered_events || payload?.triggered_events || [];
     if (events.length > 0) {
       for (const ev of events) {
@@ -271,6 +285,7 @@ const ChatStream = ((ChatState) => {
           syncCharacterState(payload);
           bindPersistedStreamActions(streamState, msgId);
         } else {
+          if (payload?.character_state) syncCharacterState(payload);
           hideStreamActionButtons(streamState);
         }
       },

@@ -84,3 +84,26 @@ routers/ → services/ → repositories/ → core/ + constants/
 **高风险模块**（需单独开分支）：`routers/admin/`、`routers/billing.py`、`services/chat_stream_service.py`、`services/chat_send.py`、`core/auth.py`、`core/database.py`、`repositories/`、`alembic/versions/`
 
 **分层依赖**：`core/` 不能导入 `services/`——通过回调注入解耦（见 `main.py` lifespan 中的 `register_cache_callbacks`）。
+
+## Agent skills
+
+本项目的 Claude Code skills 位于 `.claude/skills/`，在需要对应场景时会自动触发：
+
+- **diagnose** — 结构化诊断循环。遇到复杂 bug 或性能回归时启动，六阶段流程（建立反馈循环→复现→假设→插桩→修复→清理）
+- **git-guardrails** — 安全护栏。自动拦截 git push、git reset --hard、DROP TABLE、无 WHERE 的 DELETE 等不可逆操作
+- **to-issues** — 需求拆分。将计划/PRD 拆分为垂直切片 issue，每个切片横切所有层级（schema→API→service→repo→前端→管理后台→测试），自动检查后台管理配置和数据库变更需求
+- **tdd** — 测试驱动开发。red-green-refactor 循环，高风险模块强制 TDD，使用 FakeSequenceConn 做数据库隔离
+- **handoff** — 会话交接。压缩当前会话为交接文档（输出到 `.scratch/`），去重脱敏，标注建议技能
+- **triage** — Issue 分类。状态机流程（needs-triage→needs-info→ready-for-agent/ready-for-human/wontfix/needs-db-migration），含高风险模块影响评估
+- **grill-with-docs** — 文档化设计审查。将计划与 CONTEXT.md 领域模型对照挑战，更新术语表，为不可逆决策创建 ADR
+- **improve-codebase-architecture** — 架构深化审查。用删除测试和 Bouncing 检测发现模块边界问题，与"单文件1000行""设计模式一致"规则互补
+- **grill-me** — 深度设计访谈。逐分支遍历设计决策树（仅在用户明确要求时触发，日常不自动激活）
+- **zoom-out** — 宏观视角切换。用领域术语输出模块全景图、数据流和关键决策点
+- **prototype** — 丢弃式原型。终端交互式（Python）或 UI 多版本切换（原生 JS），得到答案后删除
+- **write-a-skill** — 创建新技能。按标准结构生成 SKILL.md，支持渐进披露和内置脚本
+
+配套文档：
+- `CONTEXT.md` — 领域词汇表，Agent 讨论设计和代码时使用
+- `.out-of-scope/` — Agent 行为边界：禁止操作生产库、禁止修改已应用的 migration、禁止修改 card_type 枚举、禁止 core/ 导入 services/
+- `docs/agents/` — Agent 运维配置：issue tracker 信息、triage 标签映射
+- `docs/adr/` — 架构决策记录（4 篇）：两种玩法隔离、分层依赖解耦、连接池选型、测试模拟模式

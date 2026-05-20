@@ -180,18 +180,17 @@ def build_reply_with_fallback(
     # 解析状态增量
     cleaned_reply, delta = parse_state_update_tag(raw_reply)
 
-    # 应用增量到 DB
+    # 应用增量到 DB（失败时不阻断回复交付，但需记录完整堆栈便于排查）
     new_state: dict[str, Any] | None = None
     if delta and conn is not None and user_id is not None:
         try:
             new_state = apply_state_delta(conn, user_id, character["id"], delta, commit=commit)
         except Exception as exc:
-            logger.warning(
-                "角色状态更新失败 user_id=%s character_id=%s delta=%s error=%s",
+            logger.exception(
+                "角色状态更新失败 user_id=%s character_id=%s delta=%s",
                 user_id,
                 character["id"],
                 delta,
-                exc,
             )
 
     return cleaned_reply, new_state
@@ -514,7 +513,7 @@ def _log_failed_chat_request(
             error_detail=error_detail,
         )
     except Exception:
-        pass
+        logger.warning("AI 请求日志记录失败 user_id=%s character_id=%s", user_id, character_id, exc_info=True)
     finally:
         log_conn.close()
 

@@ -62,15 +62,10 @@
      }
    });
 
-   // 防止 iOS 双击缩放
-  let lastTouchEnd = 0;
-  document.addEventListener('touchend', (e) => {
-    const now = Date.now();
-    if (now - lastTouchEnd <= 300) {
-      e.preventDefault();
-    }
-    lastTouchEnd = now;
-  }, { passive: false });
+  // 对交互控件禁用双击缩放（CSS 规则自动覆盖动态元素），保留页面其余区域缩放能力
+  const zoomStyle = document.createElement('style');
+  zoomStyle.textContent = '#chat-input, #send-btn, button, .msg-row, .greeting-card, .character-card { touch-action: manipulation; }';
+  document.head.appendChild(zoomStyle);
 
   // 头像上传
   const avatarInput = document.getElementById('avatar-file-input');

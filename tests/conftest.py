@@ -534,3 +534,58 @@ def admin_client(app_client):
     app.dependency_overrides[get_admin_user] = lambda: _admin
     yield app, client
     app.dependency_overrides = saved_overrides
+
+
+# ====================================================================
+# Factory Fixtures — 集中式测试数据工厂快捷方式
+# ====================================================================
+
+from factories import (
+    UserFactory, CharacterFactory, MessageFactory,
+    CharacterStateFactory, OrderFactory,
+)
+
+
+@pytest.fixture
+def sample_user():
+    return UserFactory.build()
+
+
+@pytest.fixture
+def sample_user_row():
+    return UserFactory.as_row()
+
+
+@pytest.fixture
+def sample_admin_row():
+    return UserFactory.as_row(is_admin=True, plan_type="vip")
+
+
+@pytest.fixture
+def sample_character():
+    return CharacterFactory.build()
+
+
+@pytest.fixture
+def sample_character_row():
+    return CharacterFactory.as_row()
+
+
+@pytest.fixture
+def sample_state():
+    return CharacterStateFactory.build()
+
+
+@pytest.fixture
+def sample_state_row():
+    return CharacterStateFactory.as_row()
+
+
+@pytest.fixture
+def sample_message_row():
+    return MessageFactory.as_row()
+
+
+@pytest.fixture
+def sample_order_row():
+    return OrderFactory.as_row()

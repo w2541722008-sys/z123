@@ -60,7 +60,7 @@ const Chat = (() => {
     spacer.style.height = removedHeight + 'px';
     spacer.innerHTML = '<span class="folded-hint">📦 较早的消息已折叠以节省内存</span>';
     box.insertBefore(spacer, box.firstChild);
-    box.scrollTop = scrollTopBefore + removedHeight;
+    box.scrollTop = scrollTopBefore;
     // 更新折叠计数
     const existing = parseInt(spacer.dataset.foldedCount || '0', 10);
     spacer.dataset.foldedCount = existing + DOM_PRUNE_COUNT;
@@ -91,15 +91,20 @@ const Chat = (() => {
   function initSmartScroll() {
     const box = document.getElementById('chat-messages');
     if (!box) return;
+    // 幂等绑定：先移除旧监听器防止重复累积
+    if (ChatState._scrollHandler) {
+      box.removeEventListener('scroll', ChatState._scrollHandler);
+    }
     const THRESHOLD = 120;
-    box.addEventListener('scroll', () => {
+    ChatState._scrollHandler = () => {
       const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < THRESHOLD;
       ChatState.autoScroll = atBottom;
-    }, { passive: true });
+    };
+    box.addEventListener('scroll', ChatState._scrollHandler, { passive: true });
   }
 
   /* ── 关系状态栏 ──────────────────────────────────────── */
-  const INTIMATE_PHASE_LABELS = { stranger: '陌生人', acquaintance: '普通朋友', friend: '好友', lover: '恋人' };
+  const INTIMATE_PHASE_LABELS = { stranger: '陌生人', acquaintance: '熟人', friend: '朋友', lover: '恋人' };
   const SCENARIO_PHASE_LABELS = { stranger: '初入', acquaintance: '探索', friend: '深入', lover: '终章' };
   const INTIMATE_MOOD_LABELS = {
     neutral: '平静', happy: '开心', warm: '温柔', melting: '心动',
@@ -129,18 +134,30 @@ const Chat = (() => {
   function renderStateBar(state) {
     const barEl = document.getElementById('chat-state-bar');
     if (!barEl || !state) return;
+    // 计算好感度变化量（在覆盖 lastState 之前）
+    const prevAffection = ChatState.lastState ? (ChatState.lastState.affection || 0) : (state.affection || 0);
+    const newAffection = Math.max(0, Math.min(100, state.affection || 0));
+    const affectionDelta = newAffection - prevAffection;
     ChatState.lastState = state;
-    if (_isStateBarHidden()) { barEl.style.display = 'none'; return; }
-    const affection = Math.max(0, Math.min(100, state.affection || 0));
+    if (_isStateBarHidden()) { barEl.style.display = 'none'; return { prevAffection, newAffection }; }
     const phase = state.story_phase || 'stranger';
     const mood = state.mood || 'neutral';
     const labels = _getLabels();
     const labelEl = document.getElementById('state-affection-label');
     if (labelEl) labelEl.textContent = labels.affectionName;
     const fill = document.getElementById('affection-bar-fill');
-    if (fill) { fill.style.width = affection + '%'; fill.classList.toggle('full', affection >= 100); }
+    if (fill) { fill.style.width = newAffection + '%'; fill.classList.toggle('full', newAffection >= 100); }
     const valEl = document.getElementById('affection-value');
-    if (valEl) valEl.textContent = affection;
+    if (valEl) {
+      valEl.textContent = newAffection;
+      // 好感度变化动画提示
+      if (affectionDelta !== 0) {
+        valEl.classList.remove('affection-pop');
+        void valEl.offsetWidth; // 强制回流以重新触发动画
+        valEl.classList.add('affection-pop');
+        valEl.setAttribute('data-delta', (affectionDelta > 0 ? '+' : '') + affectionDelta);
+      }
+    }
     const phaseEl = document.getElementById('state-phase');
     if (phaseEl) phaseEl.textContent = labels.phase[phase] || phase;
     const moodEl = document.getElementById('state-mood');
@@ -161,6 +178,7 @@ const Chat = (() => {
       storylineEl.textContent = '📖 ' + storylineName;
     } else if (storylineEl) { storylineEl.remove(); }
     barEl.style.display = '';
+    return { prevAffection, newAffection };
   }
   ChatState.renderStateBar = renderStateBar;
 
@@ -252,6 +270,14 @@ const Chat = (() => {
     box.innerHTML = '';
     ChatState.lastMsgTimestamp = 0;
     R.appendDateDivider(box);
+    if (!messages.length) {
+      // 新聊天室：显示友好引导
+      const hint = document.createElement('div');
+      hint.className = 'empty-chat-hint';
+      hint.textContent = '发送第一条消息，开始你们的对话吧 ✨';
+      box.appendChild(hint);
+      return;
+    }
     ChatState.batchContainer = document.createDocumentFragment();
     while (box.firstChild) { ChatState.batchContainer.appendChild(box.firstChild); }
     messages.forEach(item => R.appendMsg(item.role, item.content, item.created_at));
@@ -280,8 +306,9 @@ const Chat = (() => {
     const btn = document.querySelector('.load-earlier-btn');
     if (btn) { btn.textContent = '加载中…'; btn.onclick = null; }
     try {
-      ChatState.historyPage += 1;
-      const result = await API.getHistory(ChatState.currentChar.id, ChatState.historyPage);
+      const pageToLoad = ChatState.historyPage + 1;
+      const result = await API.getHistory(ChatState.currentChar.id, pageToLoad);
+      ChatState.historyPage = pageToLoad;
       const olderMessages = result.messages || [];
       ChatState.historyHasMore = result.has_more || false;
       if (olderMessages.length > 0) {
@@ -304,6 +331,7 @@ const Chat = (() => {
       if (ChatState.historyHasMore) renderLoadEarlierButton();
       else if (btn) btn.remove();
     } catch (err) {
+      ChatState.batchContainer = null;
       if (btn) { btn.textContent = '加载失败：' + escapeHtml(err.message); btn.onclick = loadEarlierMessages; }
     } finally { ChatState.historyLoadingMore = false; }
   }
@@ -320,6 +348,17 @@ const Chat = (() => {
     R.appendDateDivider(document.getElementById('chat-messages'));
     ChatStatusPanel.reset();
     App.nav('chat');
+
+    // 游客登录后恢复内存中的聊天历史
+    var guestHistory = window.__guestChatHistory;
+    var guestCharId = window.__guestChatCharId;
+    if (guestHistory && guestHistory.length && guestCharId === ChatState.currentChar.id) {
+      window.__guestChatHistory = null;
+      window.__guestChatCharId = null;
+    } else {
+      guestHistory = null;
+    }
+
     if (!Auth.isLoggedIn()) {
       const openingText = ChatState.currentChar.opening_message || ChatState.currentChar.first_message || '';
       if (openingText) { R.appendMsg('assistant', openingText); ChatState.history.push({ role: 'assistant', content: openingText }); }
@@ -336,6 +375,12 @@ const Chat = (() => {
       ChatState.currentChar = { ...ChatState.currentChar, ...mergedChar };
       ChatState.history = result.messages || [];
       ChatState.historyHasMore = result.has_more || false;
+      // 合并游客历史到从数据库加载的历史前面
+      if (guestHistory && guestHistory.length) {
+        ChatState.history = [...guestHistory, ...ChatState.history];
+        // 后台异步持久化游客历史
+        _persistGuestHistory(ChatState.currentChar.id, guestHistory);
+      }
       R.updateChatHeader(ChatState.currentChar);
       renderHistory(ChatState.history);
       if (ChatState.historyHasMore) renderLoadEarlierButton();
@@ -353,6 +398,14 @@ const Chat = (() => {
   async function handleSendFailure(err, userText) {
     if (!Auth.isLoggedIn()) {
       await refreshGuestQuota();
+        // 额度不足时温和提醒登录
+        if (ChatState.guestQuota && ChatState.guestQuota.remaining_percent > 0 && ChatState.guestQuota.remaining_percent <= 20) {
+          if (!ChatState._guestQuotaWarnedLow) {
+            ChatState._guestQuotaWarnedLow = true;
+            UI.toast('今天的免费额度不多了，登录后可以无限畅聊', 'info', 3500);
+          }
+        }
+
       if ((err.message || '').includes('额度已用完')) {
         UI.toast('今日游客体验额度已用完，登录后可继续聊天', 'warn', 3200);
         setTimeout(() => Auth.openLogin(), 800);
@@ -388,6 +441,14 @@ const Chat = (() => {
           ChatState.streamController.signal
         );
         await refreshGuestQuota();
+	        // 额度不足时温和提醒登录
+	        if (ChatState.guestQuota && ChatState.guestQuota.remaining_percent > 0 && ChatState.guestQuota.remaining_percent <= 20) {
+	          if (!ChatState._guestQuotaWarnedLow) {
+	            ChatState._guestQuotaWarnedLow = true;
+	            UI.toast('今天的免费额度不多了，登录后可以无限畅聊', 'info', 3500);
+	          }
+	        }
+
       } else {
         await API.streamMessage(
           { character_id: ChatState.currentChar.id, message: text },
@@ -404,6 +465,18 @@ const Chat = (() => {
   function openSearch() {
     if (!ChatState.currentChar) return;
     ChatSearch.open(ChatState.currentChar.id);
+  }
+
+  /** 后台异步将游客聊天历史持久化到用户账号 */
+  async function _persistGuestHistory(charId, historyMessages) {
+    try {
+      const payload = {
+        character_id: charId,
+        messages: historyMessages.filter(function(m) { return m.role === 'user' || m.role === 'assistant'; }),
+      };
+      if (!payload.messages.length) return;
+      await API.mergeGuestHistory(payload);
+    } catch (_) { /* 静默失败，不影响主流程 */ }
   }
 
   /* ── 公开 API ────────────────────────────────────────── */

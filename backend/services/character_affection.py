@@ -13,6 +13,7 @@ from utils.json_utils import parse_json_object
 _AFFECTION_BASE_RULES: dict[str, int] = {
     "deep_conversation": 4, "light_chat": 1, "compliment": 2, "gift": 6,
     "help": 3, "shared_secret": 5, "first_meeting": 3, "comfort": 3,
+    "flirt": 2, "date": 5, "confession": 10, "intimate_moment": 6,
     "argument": -5, "rude": -3, "ignore": -2, "lie": -4, "betray": -8, "insult": -6,
 }
 
@@ -102,7 +103,7 @@ def _get_affection_rules(conn: ConnType, character_id: str) -> dict[str, int]:
         # 迁移旧事件名（如 battle_won → challenge_won）
         effective_k = _EVENT_NAME_MIGRATION.get(k, k)
         if effective_k in _AFFECTION_BASE_RULES:
-            base_original = _AFFECTION_BASE_RULES[k]
+            base_original = _AFFECTION_BASE_RULES[effective_k]
             if base_original >= 0:
                 raw_val = max(0, min(raw_val, min(base_original * 2, 15)))
             else:

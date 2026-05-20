@@ -146,7 +146,14 @@ function renderPager(container, page, totalPages, total, onPageChange) {
  * @param {Array<string[]>} rows - 二维数组，第一行为表头
  */
 function downloadCSV(filename, rows) {
-  const csv = rows.map(r => r.map(v => `"${String(v || '').replace(/"/g, '""')}"`).join(',')).join('\n');
+  const csv = rows.map(r => r.map(v => {
+    let val = String(v || '').replace(/"/g, '""');
+    // 防止 CSV 公式注入：对 =、+、-、@ 开头的单元格加单引号前缀
+    if (/^[=+\-@]/.test(val)) {
+      val = "'" + val;
+    }
+    return `"${val}"`;
+  }).join(',')).join('\n');
   const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

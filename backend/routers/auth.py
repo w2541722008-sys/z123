@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # 第三方库导入
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 # 本地模块导入
@@ -32,6 +32,7 @@ from core.auth import (
     CurrentUser,
     _extract_token_from_request,
     clear_auth_cookie,
+    clear_refresh_cookie,
     create_token,
     create_token_pair,
     delete_token,
@@ -41,6 +42,7 @@ from core.auth import (
     revoke_user_device_tokens,
     rotate_access_token,
     set_auth_cookie,
+    set_refresh_cookie,
     verify_password,
     _is_admin_email,
 )
@@ -187,6 +189,8 @@ def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = D
         conn.commit()
 
         # 设置 HttpOnly Cookie + 返回双 token
+        # 注：access_token/refresh_token 在响应体中仅为向前兼容，未来版本将移除
+        # 前端新代码应直接依赖 HttpOnly Cookie 进行认证
         body = {
             "access_token": tokens["access_token"],
             "refresh_token": tokens["refresh_token"],
@@ -202,6 +206,7 @@ def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = D
         }
         response = JSONResponse(body)
         set_auth_cookie(response, tokens["access_token"])
+        set_refresh_cookie(response, tokens["refresh_token"])
         return response
     except Exception:
         conn.rollback()
@@ -273,6 +278,7 @@ def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends
         nickname = row["nickname"] or normalized_email.split("@")[0]
 
         # 设置 HttpOnly Cookie + 返回双 token
+        # 注：access_token/refresh_token 在响应体中仅为向前兼容，未来版本将移除
         body = {
             "access_token": tokens["access_token"],
             "refresh_token": tokens["refresh_token"],
@@ -289,6 +295,7 @@ def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends
         }
         response = JSONResponse(body)
         set_auth_cookie(response, tokens["access_token"])
+        set_refresh_cookie(response, tokens["refresh_token"])
         return response
     except Exception:
         conn.rollback()
@@ -326,7 +333,7 @@ def auth_logout(
     """
     用户登出接口。
 
-    删除当前 access token，使其失效，并清除 HttpOnly Cookie。
+    删除当前 access token 和 refresh token，使其失效，并清除所有认证 Cookie。
 
     Args:
         request: FastAPI 请求对象（用于读取 Cookie）
@@ -340,8 +347,14 @@ def auth_logout(
     if token:
         delete_token(token)
 
+    # 同时删除 refresh token，防止登出后仍可刷新
+    refresh_token = request.cookies.get(_REFRESH_TOKEN_COOKIE)
+    if refresh_token:
+        delete_token(refresh_token)
+
     response = JSONResponse({"ok": True})
     clear_auth_cookie(response)
+    clear_refresh_cookie(response)
     return response
 
 
@@ -385,6 +398,8 @@ def auth_refresh(request: Request, conn: ConnType = Depends(get_db_dep)) -> JSON
     response = JSONResponse({
         "access_token": new_access,
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        # access_token 在响应体中仅为向前兼容，未来版本将移除
+        # 前端新代码应直接依赖 HttpOnly Cookie（已通过 set_auth_cookie 设置）
     })
     set_auth_cookie(response, new_access)
     return response
@@ -420,7 +435,7 @@ def auth_logout_others(
 # ============================================================
 
 @router.post("/auth/forgot-password")
-def forgot_password(payload: ForgotPasswordPayload, request: Request, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
+def forgot_password(payload: ForgotPasswordPayload, request: Request, background_tasks: BackgroundTasks, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
     """
     发送密码重置验证码。
 
@@ -429,8 +444,8 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request, conn: Conn
         2. 检查 60 秒内是否已发送过（防刷）
         3. 生成 6 位数字验证码
         4. 存入数据库（10 分钟过期）
-        5. 发送邮件
-        6. 邮件发送失败则回滚
+        5. 提交事务
+        6. 后台异步发送邮件
 
     Args:
         payload: 包含邮箱的请求体
@@ -439,7 +454,7 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request, conn: Conn
         成功标记和提示信息
 
     Raises:
-        HTTPException: 429 请求过于频繁，500 邮件发送失败
+        HTTPException: 429 请求过于频繁
 
     安全说明：
         - 即使邮箱不存在，也返回统一成功提示，避免枚举用户
@@ -489,14 +504,10 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request, conn: Conn
             expires_at=expires_at,
         )
 
-        # 步骤 6：发送邮件
-        email_sent = send_reset_code_email(user["email"], code)
-
-        if not email_sent:
-            raise HTTPException(status_code=500, detail="邮件发送失败，请稍后重试")
-
+        # 步骤 6：提交验证码后异步发送邮件（不阻塞响应）
         conn.commit()
-        logger.info("密码重置验证码已发送: %s", user["email"])
+        background_tasks.add_task(send_reset_code_email, user["email"], code)
+        logger.info("密码重置验证码已生成: %s", user["email"])
         return {"ok": True, "message": "验证码已发送至您的邮箱，10 分钟内有效"}
 
     except Exception:

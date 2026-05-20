@@ -35,3 +35,13 @@ repos:
         additional_dependencies:
           - types-psycopg2
         files: ^backend/
+
+  - repo: local
+    hooks:
+      - id: fast-tests
+        name: Fast unit tests
+        entry: bash -c 'cd backend && python -m pytest ../tests/unit/ -x -q -n auto -m "not slow" --tb=line'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [push]

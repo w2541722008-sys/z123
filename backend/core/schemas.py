@@ -196,6 +196,11 @@ class GuestChatPayload(_CharacterIdPayload):
     guest_history: list[GuestMessageItem] = Field(default_factory=list, max_length=10)
 
 
+class MergeGuestHistoryPayload(_CharacterIdPayload):
+    """游客登录后将聊天历史合并到用户账号。"""
+    messages: list[GuestMessageItem] = Field(default_factory=list, max_length=50)
+
+
 # ============================================================
 # 管理后台模型
 # ============================================================

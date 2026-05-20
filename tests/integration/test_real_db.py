@@ -15,7 +15,7 @@
 import pytest
 from core.database import get_db
 from repositories.character_repository import get_character_by_id
-from repositories.user_repository import get_user_by_email
+from repositories.user_repository import find_user_by_email
 
 
 @pytest.mark.integration
@@ -35,7 +35,7 @@ def test_user_repository_real_db():
     """测试用户查询（真实数据库）"""
     with get_db() as conn:
         # 查询不存在的用户应返回 None
-        user = get_user_by_email(conn, "nonexistent@example.com")
+        user = find_user_by_email(conn, "nonexistent@example.com")
         assert user is None, "不存在的用户应返回 None"
 
 

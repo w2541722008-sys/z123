@@ -512,11 +512,32 @@
   animation: affection-glow 1.6s ease-in-out infinite alternate;
 }
 .affection-value {
+  position: relative;
   font-size: 10px;
   color: var(--pink);
   font-variant-numeric: tabular-nums;
   min-width: 20px;
   text-align: right;
+}
+/* 好感度变化弹出动画 */
+.affection-value.affection-pop::after {
+  content: attr(data-delta);
+  position: absolute;
+  right: -4px;
+  top: -16px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--pink);
+  pointer-events: none;
+  animation: affection-float-up 1.6s ease-out forwards;
+}
+@keyframes affection-float-up {
+  0%   { opacity: 1; transform: translateY(0); }
+  60%  { opacity: 1; transform: translateY(-14px); }
+  100% { opacity: 0; transform: translateY(-22px); }
+}
+.affection-value[data-delta^="-"]::after {
+  color: #94a3b8;
 }
 .state-pill {
   font-size: 10px;

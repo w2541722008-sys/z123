@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import random
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
@@ -9,7 +10,7 @@ from utils.json_utils import parse_json_object
 from constants import Mood, StoryPhase
 from constants.mood import MOOD_LABELS, SCENARIO_MOOD_LABELS
 from constants.story_phase import STORY_PHASE_LABELS, SCENARIO_PHASE_LABELS
-from core.config import RECENT_MESSAGE_WINDOW
+from core.config import RECENT_MESSAGE_WINDOW, TIMEZONE_OFFSET
 from core.database import ConnType
 from repositories.character_memory_repository import fetch_character_memories, fetch_character_post_rules
 from services.character_state import is_affection_enabled as _check_affection
@@ -49,6 +50,7 @@ from services.prompt_builder import (
     _select_mode_builder as _pb_select_mode_builder,
 )
 
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # Prompt 编排层
@@ -79,6 +81,7 @@ _STATE_UPDATE_INSTRUCTION = [
     "上报格式：[STATE_UPDATE]{\"event\":\"事件名\",\"mood\":\"心情\"}[/STATE_UPDATE]",
     "",
     "事件分类：",
+    "  first_meeting（初次见面，用户第一次和你对话时使用，仅限第一次）",
     "  light_chat（日常轻聊，有一定深度但不涉及私密话题）",
     "  deep_conversation（深度倾诉，用户主动分享真实烦恼或秘密）",
     "  comfort（安慰情绪，用户情绪低落你给予安慰）",
@@ -89,9 +92,15 @@ _STATE_UPDATE_INSTRUCTION = [
     "  intimate_moment（拥抱/亲吻等亲密行为）",
     "  argument（争吵，激烈冲突）",
     "  ignore（冷淡敷衍，明显的冷处理）",
+    "  lie（欺骗，用户对你说了明显的谎话）",
+    "  betray（背叛，用户做出了背叛你信任的行为）",
+    "  insult（辱骂，用户对你进行人身攻击或侮辱）",
     "  gift（送礼物，给角色送礼）",
     "  help（主动帮助，用户帮了角色的忙）",
     "  shared_secret（分享秘密，用户告诉角色私密的事）",
+    "",
+    "心情也可以单独上报：即使本轮没有值得记录的事件，如果角色的心情有明显变化（开心、害羞、难过等），也可以单独上报心情，无需附带事件名。",
+    "格式：[STATE_UPDATE]{\"mood\":\"happy\"}[/STATE_UPDATE]",
     "",
     "moment字段（可选，仅在有具体画面感时填写）：",
     "  ✅ 好：\"一起看日落\"、\"他送的手链\"、\"雨中拥抱\"",
@@ -125,11 +134,11 @@ _SCENARIO_STATE_UPDATE_INSTRUCTION = [
     "可用事件名（根据本轮剧情选最贴切的一个）：",
     "  冒险探索类：explore（探索新区域）/ discover（发现线索物品）/ problem_resolved（成功解决难题）",
     "              challenge_won（克服挑战）/ obstacle_cleared（突破重大障碍）/ secret_found（发现秘密）",
-    "  情感互动类：encounter（初次相遇/偶遇）/ date（约会活动）/ confession（告白）/ intimate_moment（亲密时刻）",
+    "  情感互动类：first_meeting（初次见面）/ encounter（初次相遇/偶遇）/ date（约会活动）/ confession（告白）/ intimate_moment（亲密时刻）",
     "              heart_flutter（心动瞬间）/ misunderstanding（误会产生）/ reconciliation（和解）",
     "  通用事件：choice_made（关键抉择）/ npc_helped（帮助角色）/ milestone（达成里程碑）",
     "  负向事件：setback（遭遇挫折）/ unexpected_danger（突发危险）/ relationship_lost（失去重要关系）",
-    "            opportunity_missed（错过关键机会）",
+    "            opportunity_missed（错过关键机会）/ lie（欺骗）/ betray（背叛）/ insult（辱骂）",
     "",
     f"可用氛围值：{' / '.join(m.value for m in Mood)}",
     f"剧情阶段仅在里程碑时填写（story_phase），平时省略：{'→'.join(p.value for p in StoryPhase)}",
@@ -550,7 +559,7 @@ def _inject_state_snapshot(
     if not (character_state and _affection_enabled):
         return
 
-    affection = character_state.get("affection", 30)
+    affection = character_state.get("affection", 0)
     phase = character_state.get("story_phase", "stranger")
     mood = character_state.get("mood", "neutral")
     custom_vars = character_state.get("custom_vars") or {}
@@ -613,12 +622,12 @@ def _inject_state_snapshot(
                                 if titles:
                                     state_lines.append(f"- 最近剧情：{' → '.join(titles)}")
                 except Exception:
-                    pass
+                    logger.warning("查询最近剧情事件失败 char_id=%s user_id=%s", char_id, user_id, exc_info=True)
         except Exception:
-            pass
+            logger.warning("查询 story_progress 失败 char_id=%s", char_id, exc_info=True)
 
     # 时间感知
-    _tz_offset = 8
+    _tz_offset = TIMEZONE_OFFSET
     _now = datetime.now(timezone(timedelta(hours=_tz_offset)))
     _h = _now.hour
     if _h < 5: _time_desc = "深夜"

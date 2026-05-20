@@ -127,6 +127,9 @@ def sanitize_stream_chunk(chunk: str, state: dict[str, Any]) -> str:
                 buf = ""
             else:
                 in_state_update = False
+                # 累积标签内的 JSON（buf 已通过 state["buffer"] 跨 chunk 拼接完整）
+                parts = state.setdefault("_state_update_parts", [])
+                parts.append(buf[:end_idx])
                 buf = buf[end_idx + len(state_close):]
 
         else:

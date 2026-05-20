@@ -90,9 +90,12 @@ _COOKIE_MAX_AGE = TOKEN_EXPIRE_DAYS * 86400  # 与 token 过期时间一致
 _COOKIE_PATH = "/api"
 _COOKIE_SAMESITE: str = "strict" if ENV == "production" else "lax"  # 生产环境 Strict 防 CSRF
 
+_REFRESH_COOKIE_NAME = "aifriend_refresh"
+_REFRESH_COOKIE_MAX_AGE = REFRESH_TOKEN_EXPIRE_DAYS * 86400
+
 
 def set_auth_cookie(response: Response, token: str) -> None:
-    """在响应中设置 HttpOnly 认证 Cookie。"""
+    """在响应中设置 HttpOnly 认证 Cookie（access token）。"""
     secure = ENV == "production"
     response.set_cookie(
         key=_COOKIE_NAME,
@@ -110,6 +113,32 @@ def clear_auth_cookie(response: Response) -> None:
     secure = ENV == "production"
     response.delete_cookie(
         key=_COOKIE_NAME,
+        path=_COOKIE_PATH,
+        httponly=True,
+        secure=secure,
+        samesite=_COOKIE_SAMESITE,
+    )
+
+
+def set_refresh_cookie(response: Response, token: str) -> None:
+    """在响应中设置 HttpOnly Refresh Cookie。"""
+    secure = ENV == "production"
+    response.set_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        value=token,
+        max_age=_REFRESH_COOKIE_MAX_AGE,
+        path=_COOKIE_PATH,
+        httponly=True,
+        secure=secure,
+        samesite=_COOKIE_SAMESITE,
+    )
+
+
+def clear_refresh_cookie(response: Response) -> None:
+    """清除 Refresh Cookie（登出时调用）。"""
+    secure = ENV == "production"
+    response.delete_cookie(
+        key=_REFRESH_COOKIE_NAME,
         path=_COOKIE_PATH,
         httponly=True,
         secure=secure,

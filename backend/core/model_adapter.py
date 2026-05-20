@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import time
 from typing import Any, Callable, Iterable, Mapping
 
 import httpx
@@ -160,6 +161,15 @@ def _handle_model_error(exc: httpx.HTTPError) -> None:
     raise RuntimeError("模型接口请求失败") from exc
 
 
+def _is_retriable(exc: httpx.HTTPError) -> bool:
+    """判断是否为可重试的瞬时错误（连接失败、超时、网关错误）。"""
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (502, 503, 504)
+    return False
+
+
 def _build_request_headers(config: dict[str, str]) -> dict[str, str]:
     """构建模型请求的通用 headers。"""
     return {
@@ -179,7 +189,7 @@ def request_chat_completion(
     normalize_reply_text: Callable[[str], str],
     max_tokens: int | None = None,
 ) -> str:
-    """普通非流式模型调用。"""
+    """普通非流式模型调用，瞬时错误自动重试最多 2 次。"""
     if not config["api_key"]:
         raise RuntimeError("AIFRIEND_API_KEY 未配置")
 
@@ -198,18 +208,30 @@ def request_chat_completion(
         **optional_params,
     )
 
-    try:
-        client = _get_http_client()
-        resp = client.post(
-            _build_request_url(config),
-            json=payload,
-            headers=_build_request_headers(config),
-        )
-        resp.raise_for_status()
-        body = resp.text
-    except httpx.HTTPError as exc:
-        breaker.report_failure(endpoint_key)
-        _handle_model_error(exc)
+    url = _build_request_url(config)
+    headers = _build_request_headers(config)
+
+    body = ""
+    for attempt in range(3):  # 最多 3 次尝试（1 次原始 + 2 次重试）
+        try:
+            client = _get_http_client()
+            resp = client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            body = resp.text
+            break
+        except httpx.HTTPError as exc:
+            if attempt < 2 and _is_retriable(exc):
+                wait = 0.5 * (2 ** attempt)  # 0.5s → 1.0s → 2.0s
+                logger.warning(
+                    "模型调用失败，%.1f秒后重试(%s/3): %s",
+                    wait, attempt + 2, exc,
+                )
+                time.sleep(wait)
+                # 重试前再次检查熔断器
+                breaker.before_request(endpoint_key)
+                continue
+            breaker.report_failure(endpoint_key)
+            _handle_model_error(exc)
 
     breaker.report_success(endpoint_key)
     data = json.loads(body)
@@ -226,7 +248,11 @@ def stream_chat_completion(
     config: dict[str, str],
     max_tokens: int | None = None,
 ) -> Iterable[str]:
-    """流式模型调用，逐块产出 delta 文本。"""
+    """流式模型调用，逐块产出 delta 文本。
+
+    连接建立阶段（TCP 连接 + HTTP 响应头）支持瞬时错误自动重试 1 次，
+    流式数据迭代阶段不重试（已向客户端发送了部分内容）。
+    """
     if not config["api_key"]:
         raise RuntimeError("AIFRIEND_API_KEY 未配置")
 
@@ -245,31 +271,54 @@ def stream_chat_completion(
         **optional_params,
     )
 
-    try:
-        client = _get_stream_client()
-        with client.stream(
-            "POST",
-            _build_request_url(config),
-            json=payload,
-            headers=_build_request_headers(config),
-        ) as resp:
+    url = _build_request_url(config)
+    headers = _build_request_headers(config)
+
+    # 连接建立阶段（可重试）
+    resp_ctx = None
+    for attempt in range(2):  # 最多 2 次尝试
+        try:
+            client = _get_stream_client()
+            resp_ctx = client.stream("POST", url, json=payload, headers=headers)
+            resp = resp_ctx.__enter__()
             resp.raise_for_status()
-            breaker.report_success(endpoint_key)
-            for raw_line in resp.iter_lines():
-                line = raw_line.strip()
-                if not line or not line.startswith("data: "):
-                    continue
-                payload_text = line[6:]
-                if payload_text == "[DONE]":
-                    break
+            break
+        except httpx.HTTPError as exc:
+            if resp_ctx is not None:
                 try:
-                    data = json.loads(payload_text)
-                except json.JSONDecodeError:
-                    continue
-                choices = data.get("choices", [])
-                delta = choices[0].get("delta", {}).get("content") if choices else None
-                if delta:
-                    yield delta
+                    resp_ctx.__exit__(None, None, None)
+                except Exception:
+                    pass
+                resp_ctx = None
+            if attempt == 0 and _is_retriable(exc):
+                logger.warning("流式连接建立失败，0.5秒后重试: %s", exc)
+                time.sleep(0.5)
+                breaker.before_request(endpoint_key)
+                continue
+            breaker.report_failure(endpoint_key)
+            _handle_model_error(exc)
+
+    # 流式迭代阶段（不重试）
+    breaker.report_success(endpoint_key)
+    try:
+        for raw_line in resp.iter_lines():
+            line = raw_line.strip()
+            if not line or not line.startswith("data: "):
+                continue
+            payload_text = line[6:]
+            if payload_text == "[DONE]":
+                break
+            try:
+                data = json.loads(payload_text)
+            except json.JSONDecodeError:
+                continue
+            choices = data.get("choices", [])
+            delta = choices[0].get("delta", {}).get("content") if choices else None
+            if delta:
+                yield delta
     except httpx.HTTPError as exc:
         breaker.report_failure(endpoint_key)
         _handle_model_error(exc)
+    finally:
+        if resp_ctx is not None:
+            resp_ctx.__exit__(None, None, None)

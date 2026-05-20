@@ -215,11 +215,24 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     # XSS 保护（旧浏览器兼容）
     response.headers["X-XSS-Protection"] = "1; mode=block"
-    # HTTPS 环境下启用 HSTS
-    if request.url.scheme == "https":
+    # HTTPS 环境下启用 HSTS（支持反向代理）
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    if request.url.scheme == "https" or forwarded_proto == "https":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     # 引用来源策略
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
+# ============================================================
+# API 缓存控制中间件
+# ============================================================
+@app.middleware("http")
+async def add_api_cache_headers(request: Request, call_next):
+    """API 响应默认 no-cache；如果路由已自行设置则保留路由的设置。"""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/") and "cache-control" not in response.headers:
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 

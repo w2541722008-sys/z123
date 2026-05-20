@@ -28,7 +28,7 @@ print_header() {
 find_latest_backup() {
   ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
 set -Eeuo pipefail
-latest=$(ls -d /opt/backup_* 2>/dev/null | sort | tail -1)
+latest=$(ls -d /opt/aifriend_backup_* 2>/dev/null | sort | tail -1)
 if [[ -z "$latest" ]]; then
   echo "ERROR:没有找到任何备份" >&2
   exit 1

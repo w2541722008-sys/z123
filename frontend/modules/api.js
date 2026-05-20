@@ -129,7 +129,7 @@
           let dataLine = '';
           for (const line of lines) {
             if (line.startsWith('event: ')) event = line.slice(7).trim();
-            if (line.startsWith('data: ')) dataLine += line.slice(6);
+            if (line.startsWith('data: ')) dataLine += (dataLine ? '\n' : '') + line.slice(6);
           }
           if (!dataLine) continue;
           let payloadData = null;
@@ -163,6 +163,7 @@
     streamMessage,
     guestStreamMessage: (payload, handlers, signal) => streamMessageToUrl(`${API_BASE}/chat/guest-stream`, payload, handlers, signal),
     getGuestQuota: () => request('/chat/guest-quota'),
+    mergeGuestHistory: (payload) => request('/chat/merge-guest-history', { method: 'POST', body: payload }),
     getCharacterState: (characterId) => request(`/character/state?character_id=${encodeURIComponent(characterId)}`),
     getGreetings: (characterId) => request(`/character/greetings?character_id=${encodeURIComponent(characterId)}`),
     regenerateMessage: (payload, handlers, signal) => streamMessageToUrl(`${API_BASE}/chat/regenerate`, payload, handlers, signal),

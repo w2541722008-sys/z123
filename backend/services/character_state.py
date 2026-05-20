@@ -75,15 +75,21 @@ def _get_today_date() -> str:
 # ============================================================
 # 状态读写
 # ============================================================
-def get_character_state(conn: ConnType, user_id: int | str, character_id: str) -> dict[str, Any]:
-    """读取用户对某角色的当前关系状态，不存在时返回默认值。"""
+def get_character_state(conn: ConnType, user_id: int | str, character_id: str, *, for_update: bool = False) -> dict[str, Any]:
+    """读取用户对某角色的当前关系状态，不存在时返回默认值。
+
+    Args:
+        for_update: 若为 True，对 character_states 行加 SELECT ... FOR UPDATE 行级锁，
+                    防止并发请求之间的丢失更新。仅在事务中使用。
+    """
     # 查询角色状态
+    lock_clause = "\nFOR UPDATE" if for_update else ""
     row = conn.execute(
-        """
+        f"""
         SELECT affection, story_phase, mood, custom_vars,
                daily_event_counts, daily_affection_gained, last_event_timestamps, daily_reset_date
         FROM character_states
-        WHERE user_id = %s AND character_id = %s
+        WHERE user_id = %s AND character_id = %s{lock_clause}
         """,
         (user_id, character_id),
     ).fetchone()
@@ -106,7 +112,7 @@ def get_character_state(conn: ConnType, user_id: int | str, character_id: str) -
     
     if not row:
         return {
-            "affection": 30,
+            "affection": 0,
             "story_phase": "stranger",
             "mood": "neutral",
             "custom_vars": {},
@@ -114,7 +120,7 @@ def get_character_state(conn: ConnType, user_id: int | str, character_id: str) -
         }
     
     return {
-        "affection": int(row["affection"] or 30),
+        "affection": int(row["affection"] or 0),
         "story_phase": row["story_phase"] or "stranger",
         "mood": row["mood"] or "neutral",
         "custom_vars": parse_json_object(row["custom_vars"], fallback={}),
@@ -321,7 +327,7 @@ def _resolve_affection_delta(
     读取当前状态、重置每日字段、计算好感度变化量、更新反滥用计数器。
     返回 (current_state, affection, story_phase, mood, custom_vars)。
     """
-    current = get_character_state(conn, user_id, character_id)
+    current = get_character_state(conn, user_id, character_id, for_update=True)
     current = _reset_daily_fields_if_needed(current)
 
     affection = current["affection"]
@@ -386,7 +392,7 @@ def _resolve_story_phase(
             rules_json = parse_json_object(rules_row["affection_rules_json"], fallback={})
             allow_regression = bool(rules_json.get("allow_regression", False))
     except Exception:
-        pass
+        logger.warning("解析 affection_rules_json 失败 character_id=%s", character_id, exc_info=True)
     new_phase = _auto_advance_story_phase(affection, current_phase, allow_regression=allow_regression)
     return new_phase, old_phase
 
@@ -546,7 +552,7 @@ def _handle_storyline_and_events(
                 triggered_events.append({
                     "type": "phase_upgrade",
                     "title": f"关系升级为「{phase_label}」",
-                    "description": "下次打开对话时，角色会主动和你说这句话",
+                    "description": "下次打开对话时，角色会主动和你打招呼",
                 })
                 logger.info(
                     "关系阶段升级: user=%s char=%s %s→%s, 触发语已暂存",

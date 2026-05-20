@@ -57,6 +57,10 @@ const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
    }
 
    function getRefreshToken() {
+      // 页面刷新后从 sessionStorage 恢复 refresh token
+      if (_refreshToken) return _refreshToken;
+      try { _refreshToken = sessionStorage.getItem('aifriend_token_refresh') || ''; } catch (_) {}
+
      return _refreshToken;
    }
 

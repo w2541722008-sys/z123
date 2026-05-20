@@ -26,9 +26,9 @@
      }
      const meta = Chat.getDisplayMeta();
      listEl.innerHTML = messages.map(item => `
-       <div class="history-card">
+       <div class="history-card" style="content-visibility:auto;contain-intrinsic-size:auto 80px">
          <div class="history-role ${item.role === 'user' ? 'user' : ''}">${item.role === 'user' ? '你' : meta.displayName}</div>
-         <div class="history-content">${escapeHtml(item.content || '')}</div>
+         <div class="history-content">${escapeHtml((item.content || '').slice(0, 300))}${(item.content || '').length > 300 ? '…' : ''}</div>
          <div class="history-time">${item.created_at ? formatHistoryTime(item.created_at) : '刚刚'}</div>
        </div>
      `).join('');

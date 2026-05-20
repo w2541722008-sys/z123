@@ -14,15 +14,19 @@ import pytest
 
 from services.prompt_assembler import (
     TokenBudget,
+    _append_post_history_then_user,
     _append_runtime_tail,
     _append_runtime_text_layers,
     _append_world_info_after,
+    _alternate_samples_text,
     _build_character_mode_messages,
+    _build_single_system_prompt,
     _clip,
     _get_field,
     _merge_alternate_greetings,
     _merge_text,
     _mode_sections,
+    _related_assets_text,
     _select_mode_builder,
     _split_last_user_message,
     _world_info_layer_pairs,
@@ -405,3 +409,134 @@ class TestFinalMessagesContract:
         last_user = result[-1]
         assert last_user["role"] == "user"
         assert "请继续说说你的故事" in last_user["content"]
+
+
+# ============================================================
+# 以下测试从 test_prompt_assembler_service.py 合并而来
+# ============================================================
+
+class TestBuildSingleSystemPrompt:
+    """验证 _build_single_system_prompt 的主 prompt + layers 组装逻辑。"""
+
+    def test_primary_only(self):
+        result = _build_single_system_prompt("main prompt", [])
+        assert result == "main prompt"
+
+    def test_with_layers(self):
+        layers = [("Title A", "content A"), ("Title B", "content B")]
+        result = _build_single_system_prompt("main", layers)
+        assert "main" in result
+        assert "Title A" in result
+        assert "content A" in result
+        assert "Title B" in result
+
+    def test_empty_primary_with_layers(self):
+        layers = [("Title A", "content A")]
+        result = _build_single_system_prompt("", layers)
+        assert "Title A" in result
+
+    def test_empty_content_layer_skipped(self):
+        layers = [("Title A", "content A"), ("Title B", "")]
+        result = _build_single_system_prompt("main", layers)
+        assert "Title A" in result
+        assert "Title B" not in result
+
+    def test_layer_without_title(self):
+        layers = [("", "just content")]
+        result = _build_single_system_prompt("main", layers)
+        assert "just content" in result
+
+    def test_truncation_on_large_primary(self):
+        primary = "p" * 50000
+        result = _build_single_system_prompt(primary, [], total_max=100)
+        assert "截断" in result
+
+    def test_with_token_budget(self):
+        from services.token_budget import TokenBudget
+        budget = TokenBudget(context_tokens=4096, output_reserve=512)
+        result = _build_single_system_prompt("main prompt", [], budget=budget)
+        assert "main prompt" in result
+
+
+class TestRelatedAssetsText:
+    def test_no_assets_returns_empty(self):
+        assert _related_assets_text({}) == ""
+        assert _related_assets_text({"related_assets": []}) == ""
+
+    def test_with_assets_includes_names(self):
+        bundle = {
+            "related_assets": [
+                {"asset_type": "scenario", "name": "Quest"},
+                {"asset_type": "character", "name": "Alice"},
+            ]
+        }
+        result = _related_assets_text(bundle)
+        assert "Quest" in result
+        assert "Alice" in result
+        assert "关联资产" in result
+
+    def test_asset_without_name_skipped(self):
+        bundle = {
+            "related_assets": [
+                {"asset_type": "scenario"},
+                {"asset_type": "character", "name": "Alice"},
+            ]
+        }
+        result = _related_assets_text(bundle)
+        assert "Alice" in result
+
+
+class TestAlternateSamplesText:
+    def test_empty_or_none_returns_empty(self):
+        assert _alternate_samples_text([]) == ""
+        assert _alternate_samples_text(None) == ""
+
+    def test_non_list_returns_empty(self):
+        assert _alternate_samples_text("not a list") == ""
+
+    def test_with_samples_includes_content(self):
+        result = _alternate_samples_text(["hello", "world"])
+        assert "hello" in result
+        assert "world" in result
+        assert "开场" in result
+
+    def test_max_two_samples_only(self):
+        result = _alternate_samples_text(["a", "b", "c"])
+        assert "c" not in result
+
+
+class TestAppendPostHistoryThenUser:
+    def test_with_user_msg_appended(self):
+        messages = []
+        _append_post_history_then_user(
+            messages,
+            last_user_message={"role": "user", "content": "hello"},
+        )
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        assert "hello" in messages[0]["content"]
+
+    def test_no_user_msg_no_change(self):
+        messages = []
+        _append_post_history_then_user(messages, last_user_message=None)
+        assert len(messages) == 0
+
+    def test_user_msg_merges_with_previous_user(self):
+        messages = [{"role": "user", "content": "previous"}]
+        _append_post_history_then_user(
+            messages,
+            last_user_message={"role": "user", "content": "hello"},
+        )
+        assert len(messages) == 1
+        assert "previous" in messages[0]["content"]
+        assert "hello" in messages[0]["content"]
+
+    def test_user_msg_after_assistant_not_merged(self):
+        messages = [{"role": "assistant", "content": "hi"}]
+        _append_post_history_then_user(
+            messages,
+            last_user_message={"role": "user", "content": "hello"},
+        )
+        assert len(messages) == 2
+        assert messages[1]["role"] == "user"
+        assert messages[1]["content"] == "hello"

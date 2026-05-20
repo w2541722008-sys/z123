@@ -49,19 +49,23 @@ run_local_checks() {
 
   local failed=0
 
-  # 1. 后端单元测试
-  echo "  → 后端单元测试..."
-  python3 -m pytest ../tests/unit/ -q || failed=1
+  # 1. Fast unit tests (under 30s)
+  echo "  → Fast unit tests..."
+  python3 -m pytest ../tests/unit/ -x -q -m "not slow" || failed=1
 
-  # 2. 前端冒烟测试（新增）
+  # 2. Service + API tests
+  echo "  → Service & API tests..."
+  python3 -m pytest ../tests/services/ ../tests/routers/ ../tests/contracts/ -x -q || failed=1
+
+  # 3. 前端冒烟测试
   echo "  → 前端冒烟测试..."
   node ../tests/frontend_smoke.js || failed=1
 
-  # 3. 前端工具函数测试
+  # 4. 前端工具函数测试
   echo "  → 前端工具函数测试..."
   node ../tests/test_frontend_utils.js || failed=1
 
-  # 4. Admin action 完整性检查
+  # 5. Admin action 完整性检查
   echo "  → Admin action 检查..."
   node ../tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json || failed=1
 
@@ -70,12 +74,8 @@ run_local_checks() {
   if [[ "$failed" -eq 0 ]]; then
     echo "✅ 本地门禁通过"
   else
-    echo "⚠️ 本地门禁失败，是否继续部署？(y/n)"
-    read -r confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-      echo "部署已取消"
-      exit 1
-    fi
+    echo "❌ 本地门禁失败，部署已阻止。请修复错误后重试。"
+    exit 1
   fi
   echo
 }

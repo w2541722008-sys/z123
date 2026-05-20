@@ -22,7 +22,7 @@ from core.config import (
     GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS,
 )
 from core.database import ConnType, get_db_dep
-from core.schemas import ChatSendPayload, ContinuePayload, GuestChatPayload, RegeneratePayload
+from core.schemas import ChatSendPayload, ContinuePayload, GuestChatPayload, MergeGuestHistoryPayload, RegeneratePayload
 from services.chat_send import (
     AIChatError,
     _build_chat_send_response,
@@ -234,6 +234,40 @@ def chat_continue(
         endpoint="/api/chat/continue",
         is_append=True,
     )
+
+
+@router.post("/chat/merge-guest-history")
+def chat_merge_guest_history(
+    payload: MergeGuestHistoryPayload,
+    user: CurrentUser = Depends(get_current_user),
+    conn: ConnType = Depends(get_db_dep),
+):
+    """游客登录后将内存中的聊天历史合并到用户账号。
+
+    仅合并最近 50 条，跳过已存在的内容（按 (user_id, character_id, role, content) 去重）。
+    """
+    from services.chat_send import store_user_message, save_assistant_message
+
+    merged = 0
+    for item in payload.messages:
+        role = (item.get("role") or "").strip()
+        content = (item.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        existing = conn.execute(
+            "SELECT id FROM chat_messages WHERE user_id=%s AND character_id=%s AND role=%s AND content=%s LIMIT 1",
+            (user.id, payload.character_id, role, content),
+        ).fetchone()
+        if existing:
+            continue
+        if role == "user":
+            store_user_message(conn, user.id, payload.character_id, content, commit=False)
+        else:
+            save_assistant_message(conn, user.id, payload.character_id, content, commit=False)
+        merged += 1
+
+    conn.commit()
+    return {"ok": True, "merged": merged}
 
 
 @router.get("/chat/search")

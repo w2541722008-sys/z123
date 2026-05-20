@@ -125,3 +125,134 @@ class TestStoreUserMessage:
         conn = FakeSequenceConn([FakeRow()])
         store_user_message(conn, user_id=1, character_id="c1", content="hello", commit=False)
         assert conn.committed is False
+
+
+# ── 以下测试从 test_chat_send_extra.py 合并而来 ──
+
+class TestBuildMockReplyExtra:
+    def test_fingerprint_deterministic(self):
+        from services.chat_send import build_mock_reply
+        char = {"mock_reply_style": '["A", "B", "C"]'}
+        r1 = build_mock_reply(char, "test message")
+        r2 = build_mock_reply(char, "test message")
+        assert r1 == r2
+
+
+class TestFormatSseExtra:
+    def test_json_encoding_unicode(self):
+        from services.chat_send import format_sse
+        result = format_sse("chunk", {"text": "你好"})
+        data = json.loads(result.split("data: ", 1)[1].strip())
+        assert data["text"] == "你好"
+
+
+class TestBuildPromptContextPayload:
+    def test_assembles_all_fields(self):
+        from services.chat_send import _build_prompt_context_payload
+        result = _build_prompt_context_payload(
+            current_content="",
+            character={"id": "c1"},
+            memory_summary="mem",
+            prompt_messages=[{"role": "user", "content": "hi"}],
+            related_assets=[],
+        )
+        assert result["current_content"] == ""
+        assert result["character"] == {"id": "c1"}
+        assert result["memory_summary"] == "mem"
+        assert len(result["prompt_messages"]) == 1
+
+
+class TestPreparePromptContextResult:
+    def test_with_valid_context(self):
+        from services.chat_send import _prepare_prompt_context_result
+        context_tuple = (
+            {"id": "c1"},
+            "memory summary",
+            [{"role": "user", "content": "hi"}],
+            [],
+        )
+        result = _prepare_prompt_context_result(current_content="", context_tuple=context_tuple)
+        assert result["character"]["id"] == "c1"
+        assert result["memory_summary"] == "memory summary"
+        assert len(result["prompt_messages"]) == 1
+
+    def test_none_messages_uses_fallback(self):
+        from services.chat_send import _prepare_prompt_context_result
+        context_tuple = ({"id": "c1"}, "mem", None, [])
+        result = _prepare_prompt_context_result(
+            current_content="",
+            context_tuple=context_tuple,
+            fallback_prompt_messages=[{"role": "system", "content": "fallback"}],
+        )
+        assert result["prompt_messages"] == [{"role": "system", "content": "fallback"}]
+
+    def test_none_messages_no_fallback_returns_empty(self):
+        from services.chat_send import _prepare_prompt_context_result
+        context_tuple = ({"id": "c1"}, "mem", None, [])
+        result = _prepare_prompt_context_result(current_content="", context_tuple=context_tuple)
+        assert result["prompt_messages"] == []
+
+
+class TestBuildGuestFallbackMessages:
+    def test_builds_system_and_user(self):
+        from services.chat_send import _build_guest_fallback_messages
+        char = {"name": "Alice", "subtitle": "测试角色", "description": "desc"}
+        result = _build_guest_fallback_messages(char, "hello")
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert "Alice" in result[0]["content"]
+        assert result[1]["role"] == "user"
+        assert result[1]["content"] == "hello"
+
+    def test_name_only_sufficient(self):
+        from services.chat_send import _build_guest_fallback_messages
+        char = {"name": "Carol"}
+        result = _build_guest_fallback_messages(char, "hi")
+        assert "Carol" in result[0]["content"]
+
+
+class TestBuildChatSendResponse:
+    def test_includes_all_keys(self):
+        from services.chat_send import _build_chat_send_response
+        result = _build_chat_send_response(
+            reply="hello",
+            history_count=5,
+            character_state={"affection": 50},
+        )
+        assert result["reply"] == "hello"
+        assert result["history_count"] == 5
+        assert result["summary_enabled"] is True
+        assert result["character_state"]["affection"] == 50
+
+
+class TestBuildStreamPrepareResult:
+    def test_minimal_payload(self):
+        from services.chat_send import _build_stream_prepare_result
+        payload = {
+            "stream_messages": [{"role": "user", "content": "hi"}],
+            "ai_config": {"model": "gpt-4"},
+            "estimate": {"chars": 10, "tokens": 5},
+        }
+        result = _build_stream_prepare_result(guest_ip="127.0.0.1", stream_payload=payload)
+        assert result["guest_ip"] == "127.0.0.1"
+        assert result["stream_messages"] == payload["stream_messages"]
+        assert "character" not in result
+
+    def test_with_all_optional_fields(self):
+        from services.chat_send import _build_stream_prepare_result
+        payload = {"stream_messages": [], "ai_config": {}, "estimate": {}}
+        result = _build_stream_prepare_result(
+            guest_ip="127.0.0.1",
+            stream_payload=payload,
+            character={"id": "c1"},
+            clean_text="hello",
+            recent_messages=[],
+            memory_summary="mem",
+            related_assets=[],
+            character_id="c1",
+            current_content="old",
+        )
+        assert result["character"] == {"id": "c1"}
+        assert result["clean_text"] == "hello"
+        assert result["character_id"] == "c1"
+        assert result["current_content"] == "old"

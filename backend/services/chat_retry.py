@@ -21,6 +21,7 @@ from services.prompt_assembler import build_layered_chat_messages
 from services.character_state import apply_state_delta, get_character_state
 from services.memory_service import get_summary_for_prompt
 from services.chat_query import (
+    ensure_opening_message,
     get_character_or_404,
     get_message_for_regenerate_or_continue,
     get_linked_assets,
@@ -430,6 +431,7 @@ def _prepare_regenerate_or_continue_request(
         guest_ip=guest_ip,
         operation=operation,
     )
+    ensure_opening_message(conn, user.id, message_context["character_id"], commit=False)
     return _build_retry_stream_prepare_result(
         conn,
         user=user,

@@ -20,6 +20,43 @@ const AdminAPI = (() => {
   // 不带 /admin 后缀的基础地址（用于 /auth/me 等非 admin 接口）
   const _baseUrl = _apiBase.replace(/\/admin$/, '');
 
+  // Token 刷新（与前台 api.js 保持一致的 dedup promise 模式）
+  const REFRESH_TOKEN_KEY = 'aifriend_token_refresh';
+  let _isRefreshing = false;
+  let _refreshPromise = null;
+
+  async function _tryRefresh() {
+    const refreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY);
+    if (!refreshToken) return false;
+    if (_isRefreshing) return _refreshPromise;
+    _isRefreshing = true;
+    _refreshPromise = (async () => {
+      try {
+        const resp = await fetch(`${_baseUrl}/auth/refresh`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${refreshToken}`,
+          },
+          credentials: 'include',
+        });
+        if (!resp.ok) return false;
+        const data = await resp.json();
+        if (data.access_token) {
+          localStorage.setItem(TOKEN_KEY, data.access_token);
+          return true;
+        }
+        return false;
+      } catch (_) {
+        return false;
+      } finally {
+        _isRefreshing = false;
+        _refreshPromise = null;
+      }
+    })();
+    return _refreshPromise;
+  }
+
   // localStorage key
   const TOKEN_KEY = shared?.STORAGE_KEYS?.TOKEN_KEY || 'aifriend_token';
   const USER_KEY = shared?.STORAGE_KEYS?.USER_KEY || 'aifriend_user';
@@ -48,7 +85,11 @@ const AdminAPI = (() => {
     const res = await fetch(url, { ...opts, headers });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      if (res.status === 401) {
+      if (res.status === 401 && !opts._retried) {
+        const refreshed = await _tryRefresh();
+        if (refreshed) {
+          return apiFetch(url, { ...opts, _retried: true });
+        }
         throw new Error('请先登录普通前台账号，再进入管理后台');
       }
       if (res.status === 403) {

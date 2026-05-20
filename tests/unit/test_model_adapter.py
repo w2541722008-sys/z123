@@ -7,10 +7,16 @@ model_adapter 模块单元测试
   - _get_optional_params: 环境变量可选参数解析
 """
 
+import httpx
+import pytest
+
 from core.model_adapter import (
     DEFAULT_AI_BASE_URL,
     DEFAULT_AI_MODEL,
+    _build_request_headers,
+    _build_request_url,
     _get_optional_params,
+    _handle_model_error,
     build_chat_payload,
     get_ai_config,
 )
@@ -214,3 +220,56 @@ class TestGetOptionalParams:
         finally:
             _os.environ.clear()
             _os.environ.update(old_environ)
+
+
+# ============================================================
+# 以下测试从 test_model_adapter_extra.py 合并而来
+# ============================================================
+
+class TestBuildRequestHeaders:
+    """验证 _build_request_headers 构造正确的请求头。"""
+
+    def test_content_type_and_authorization(self):
+        config = {"api_key": "sk-test123"}
+        headers = _build_request_headers(config)
+        assert headers["Content-Type"] == "application/json"
+        assert headers["Authorization"] == "Bearer sk-test123"
+
+
+class TestBuildRequestUrl:
+    """验证 _build_request_url 拼接正确的 API URL。"""
+
+    def test_basic_url_concatenation(self):
+        config = {"base_url": "https://api.example.com"}
+        url = _build_request_url(config)
+        assert url == "https://api.example.com/chat/completions"
+
+    def test_handles_trailing_slash(self):
+        config = {"base_url": "https://api.example.com/"}
+        url = _build_request_url(config)
+        assert url == "https://api.example.com//chat/completions"
+
+
+class TestHandleModelError:
+    """验证 _handle_model_error 对不同 httpx 异常的映射。"""
+
+    def test_http_status_error_raises_runtime_error(self):
+        response = httpx.Response(429, text="rate limited")
+        exc = httpx.HTTPStatusError("err", request=httpx.Request("POST", "http://x"), response=response)
+        with pytest.raises(RuntimeError, match="模型接口调用失败"):
+            _handle_model_error(exc)
+
+    def test_connect_error_raises_runtime_error(self):
+        exc = httpx.ConnectError("connection refused")
+        with pytest.raises(RuntimeError, match="模型接口连接失败"):
+            _handle_model_error(exc)
+
+    def test_timeout_error_raises_runtime_error(self):
+        exc = httpx.TimeoutException("timed out")
+        with pytest.raises(RuntimeError, match="模型接口请求超时"):
+            _handle_model_error(exc)
+
+    def test_generic_httpx_error_raises_runtime_error(self):
+        exc = httpx.HTTPError("unknown error")
+        with pytest.raises(RuntimeError, match="模型接口请求失败"):
+            _handle_model_error(exc)

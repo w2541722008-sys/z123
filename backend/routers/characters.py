@@ -43,8 +43,13 @@ def _serialize_character_for_client(
 
     avatar_value = (row["avatar_url"] or "").strip()
     cover_value = (row["cover_url"] or "").strip() or avatar_value
-    avatar_img = f"/api/avatar/{char_id}" if avatar_value else ""
-    cover_img = f"/api/cover/{char_id}" if cover_value else ""
+
+    # 图片 URL 版本号：基于路径内容生成，路径不变则版本不变，变更后浏览器自动拉新
+    import hashlib
+    _img_version = hashlib.md5((avatar_value + "|" + cover_value).encode()).hexdigest()[:8]
+
+    avatar_img = f"/api/avatar/{char_id}?v={_img_version}" if avatar_value else ""
+    cover_img = f"/api/cover/{char_id}?v={_img_version}" if cover_value else ""
     opening_message = row["opening_message"] or ""
     required_plan = normalize_required_plan(row["required_plan"] if "required_plan" in row.keys() else "guest")
 

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import logging
 from typing import Any, Callable
@@ -17,7 +18,7 @@ from typing import Any, Callable
 from starlette.responses import StreamingResponse
 
 from core.config import AI_CHAT_MAX_OUTPUT_TOKENS
-from core.database import get_conn
+from core.database import ConnType, get_conn
 from core.model_adapter import stream_chat_completion
 from services.chat_send import (
     format_sse,
@@ -43,12 +44,19 @@ SSE_STREAM_TIMEOUT = 120
 # ============================================================
 
 def _stream_ai_completion(stream_messages: list, ai_config: dict):
-    """流式调用 AI 并生成 SSE chunk 事件。"""
+    """流式调用 AI 并生成 SSE chunk 事件。
+
+    返回值：
+        (cleaned_reply, None, delta_or_none) — 成功时
+        (partial_reply, error_string, None) — 失败时
+    """
     full_reply = ""
-    stream_state = {"buffer": "", "in_think": False, "in_state_update": False}
+    stream_state = {"buffer": "", "in_think": False, "in_state_update": False, "_state_update_parts": []}
     stream_start = time.monotonic()
+    stream_iter = None
     try:
-        for chunk in stream_chat_completion(stream_messages, ai_config, max_tokens=AI_CHAT_MAX_OUTPUT_TOKENS):
+        stream_iter = stream_chat_completion(stream_messages, ai_config, max_tokens=AI_CHAT_MAX_OUTPUT_TOKENS)
+        for chunk in stream_iter:
             if time.monotonic() - stream_start > SSE_STREAM_TIMEOUT:
                 raise TimeoutError(f"SSE 流式响应超时（{SSE_STREAM_TIMEOUT}秒）")
             visible_chunk = sanitize_stream_chunk(chunk, stream_state)
@@ -64,9 +72,14 @@ def _stream_ai_completion(stream_messages: list, ai_config: dict):
         final_reply_raw = normalize_reply_text(full_reply)
         if not final_reply_raw:
             raise RuntimeError("模型返回了空内容")
-        return final_reply_raw, None
+        # 从流式过滤过程中累积的 STATE_UPDATE 标签内容解析状态增量
+        delta = _parse_accumulated_state_update(stream_state.get("_state_update_parts", []))
+        return final_reply_raw, None, delta
     except Exception as exc:
-        return full_reply, str(exc)
+        return full_reply, str(exc), None
+    finally:
+        if stream_iter is not None and hasattr(stream_iter, 'close'):
+            stream_iter.close()
 
 
 def _build_sse_response(event_generator, *, headers: dict[str, str] | None = None) -> StreamingResponse:
@@ -82,6 +95,28 @@ def _default_stream_headers() -> dict[str, str]:
 def _default_stream_error_message() -> str:
     """默认流式错误提示。"""
     return "网络波动，请稍后再试"
+
+
+def _is_circuit_breaker_error(error_msg: str) -> bool:
+    """判断是否为熔断器错误（用于区分用户提示文案）。"""
+    return "circuit" in error_msg.lower() or "熔断" in error_msg or "暂时不可用" in error_msg
+
+
+def _parse_accumulated_state_update(parts: list[str]) -> dict[str, Any] | None:
+    """从流式过滤累积的 STATE_UPDATE 片段中解析状态增量 JSON。
+
+    仅使用首个 STATE_UPDATE 块（与同步路径 parse_state_update_tag 行为一致）。
+    """
+    if not parts:
+        return None
+    raw_json = parts[0].strip()
+    if not raw_json:
+        return None
+    try:
+        delta = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None
+    return delta if isinstance(delta, dict) else None
 
 
 def _build_stream_done_payload(
@@ -136,15 +171,22 @@ def _consume_stream_result(
     stream_error_message: str,
 ):
     """消费流式结果并处理错误。"""
-    final_raw, stream_error = yield from _stream_ai_completion(stream_messages, ai_config)
+    final_raw, stream_error, delta = yield from _stream_ai_completion(stream_messages, ai_config)
     if stream_error:
         _log_failed_chat_request(
             user_id=user_id, guest_ip=guest_ip, character_id=character_id,
             endpoint=endpoint, estimate=estimate, error_detail=stream_error,
             estimated_output_tokens=estimate_text_tokens(final_raw or ""),
         )
-        yield format_error_event(stream_error_message)
+        # 区分熔断器和一般错误，给用户准确的反馈
+        if _is_circuit_breaker_error(stream_error):
+            yield format_error_event("AI 服务暂时繁忙，请稍后重试")
+        else:
+            yield format_error_event(stream_error_message)
         return None
+    # 优先使用流式过滤过程中提取的 delta（避免被 sanitize_stream_chunk 剥离）
+    if delta is not None:
+        return final_raw, delta
     return parse_state_update_tag(final_raw)
 
 
@@ -337,14 +379,112 @@ def _postprocess_regenerate_or_continue_result(
     )
 
 
+# ============================================================
+# 游客状态追踪（会话级内存缓存，不持久化）
+# ============================================================
+
+_guest_state_cache: dict[str, dict[str, Any]] = {}
+_GUEST_STATE_CACHE_TTL = 3600  # 1 小时
+
+
+def _get_guest_state(guest_ip: str, character_id: str) -> dict[str, Any]:
+    """读取或创建游客状态（带 TTL 自动过期）。"""
+    key = f"{guest_ip}:{character_id}"
+    now = time.time()
+    if key in _guest_state_cache:
+        entry = _guest_state_cache[key]
+        if now - entry.get("_cached_at", 0) < _GUEST_STATE_CACHE_TTL:
+            return entry
+    state = {
+        "affection": 0,
+        "story_phase": "stranger",
+        "mood": "neutral",
+        "custom_vars": {},
+        "_daily_event_counts": {},
+        "_daily_affection_gained": 0,
+        "_last_event_timestamps": {},
+        "_daily_reset_date": "",
+        "_cached_at": now,
+    }
+    _guest_state_cache[key] = state
+    return state
+
+
+def _compute_guest_character_state(
+    conn: ConnType,
+    guest_ip: str,
+    character_id: str,
+    delta: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """为游客计算角色状态（使用与登录用户相同的计算逻辑，但不写 DB）。"""
+    if delta is None:
+        state = _get_guest_state(guest_ip, character_id)
+        return {k: v for k, v in state.items() if not k.startswith("_")}
+
+    from services.character_affection import (
+        _get_affection_rules,
+        _get_daily_cap,
+        _calculate_affection_change,
+        _update_anti_abuse_counters,
+        is_affection_enabled,
+    )
+    from services.character_state import (
+        _sanitize_state_delta,
+        _reset_daily_fields_if_needed,
+    )
+    from constants import Mood
+
+    delta = _sanitize_state_delta(delta)
+    state = _get_guest_state(guest_ip, character_id)
+    state = _reset_daily_fields_if_needed(state)
+
+    affection = state["affection"]
+    mood = state["mood"]
+
+    if is_affection_enabled(conn, character_id):
+        if "event" in delta:
+            event_name = str(delta["event"]).strip().lower()
+            rules = _get_affection_rules(conn, character_id)
+            daily_cap = _get_daily_cap(conn, character_id)
+            affection_change, _ = _calculate_affection_change(
+                event_name, rules, state, daily_cap=daily_cap,
+            )
+            state = _update_anti_abuse_counters(state, event_name, affection_change)
+            affection = max(0, min(100, affection + affection_change))
+        elif "affection" in delta:
+            raw = str(delta["affection"]).strip()
+            try:
+                if raw.startswith("+"):
+                    affection = max(0, min(100, affection + int(raw[1:])))
+                elif raw.startswith("-"):
+                    affection = max(0, min(100, affection - int(raw[1:])))
+                else:
+                    affection = max(0, min(100, int(raw)))
+            except ValueError:
+                pass
+
+    if "mood" in delta:
+        val = str(delta["mood"]).strip().lower()
+        if val in [m.value for m in Mood]:
+            mood = val
+
+    state["affection"] = affection
+    state["mood"] = mood
+    state["_cached_at"] = time.time()
+    _guest_state_cache[f"{guest_ip}:{character_id}"] = state
+
+    return {k: v for k, v in state.items() if not k.startswith("_")}
+
+
 def _postprocess_guest_stream_result_impl(
     reply_text: str,
     *,
     guest_ip: str,
     character_id: str,
     estimate: dict[str, int],
+    delta: dict[str, Any] | None = None,
 ):
-    """游客流式后处理实现（仅记录日志）。"""
+    """游客流式后处理实现（记录日志 + 计算会话级角色状态）。"""
     log_conn = get_conn()
     try:
         output_tokens = estimate_text_tokens(reply_text)
@@ -362,7 +502,23 @@ def _postprocess_guest_stream_result_impl(
         log_conn.rollback()
     finally:
         log_conn.close()
-    return {"reply": reply_text, "history_count": 0, "summary_enabled": False, "character_state": None}
+
+    character_state = None
+    state_conn = get_conn()
+    try:
+        character_state = _compute_guest_character_state(
+            state_conn, guest_ip, character_id, delta,
+        )
+    except Exception:
+        logger.warning("游客状态计算失败 guest_ip=%s char=%s", guest_ip, character_id, exc_info=True)
+    finally:
+        state_conn.close()
+    return {
+        "reply": reply_text,
+        "history_count": 0,
+        "summary_enabled": False,
+        "character_state": character_state,
+    }
 
 
 def _postprocess_guest_stream_result(
@@ -374,10 +530,10 @@ def _postprocess_guest_stream_result(
     estimate: dict[str, int],
 ):
     """游客流式后处理。"""
-    _ = delta
     yield format_done_event(
         _postprocess_guest_stream_result_impl(
             final_text, guest_ip=guest_ip, character_id=character_id, estimate=estimate,
+            delta=delta,
         )
     )
 

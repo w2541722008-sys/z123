@@ -110,7 +110,10 @@ def get_avatar(character_id: str, conn: ConnType = Depends(get_db_dep)):
         raise HTTPException(status_code=404, detail="角色不存在")
 
     default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
-    return resolve_media_response(avatar_url or "", fallback_path=default_avatar)
+    resp = resolve_media_response(avatar_url or "", fallback_path=default_avatar)
+    # 重定向可缓存 1 小时，因为目标路径很少变；图片本身由 nginx 提供 7 天缓存
+    resp.headers["Cache-Control"] = "max-age=3600"
+    return resp
 
 
 @router.get("/cover/{character_id}")
@@ -122,7 +125,9 @@ def get_cover(character_id: str, conn: ConnType = Depends(get_db_dep)):
 
     default_avatar = FRONTEND_DIR / "frontend" / "assets" / "default-avatar.png"
     cover_value = (cover_url or "").strip() or (avatar_url or "").strip()
-    return resolve_media_response(cover_value, fallback_path=default_avatar)
+    resp = resolve_media_response(cover_value, fallback_path=default_avatar)
+    resp.headers["Cache-Control"] = "max-age=3600"
+    return resp
 
 
 @router.post("/user/avatar")

@@ -215,6 +215,9 @@ BILLING_PENDING_EXPIRE_MINUTES = _int_env("BILLING_PENDING_EXPIRE_MINUTES", 30, 
 # 请求日志保留天数，避免日志表无限增长
 AI_REQUEST_LOG_RETENTION_DAYS = _int_env("AI_REQUEST_LOG_RETENTION_DAYS", 30, minimum=1, maximum=365)
 
+# 时区偏移（小时），通过 TIMEZONE_OFFSET 环境变量配置，默认 +8 (UTC+8)
+TIMEZONE_OFFSET = _int_env("TIMEZONE_OFFSET", 8, minimum=-12, maximum=14)
+
 
 # ============================================================
 # AI 模型默认配置
@@ -269,8 +272,8 @@ def validate_production_config() -> list[str]:
     
     # 检查 CORS 配置
     origins = os.environ.get("ALLOWED_ORIGINS", "").strip()
-    if not origins or "localhost" in origins.lower():
-        missing.append("ALLOWED_ORIGINS - 生产环境必须设置真实域名（不能是 localhost）")
+    if not origins or origins == "*" or "localhost" in origins.lower():
+        missing.append("ALLOWED_ORIGINS - 生产环境必须设置真实域名（不能是 * 或 localhost）")
     
     # 检查邮件服务配置（SMTP 或 Resend 至少一个）
     smtp_configured = bool(os.environ.get("SMTP_HOST", "").strip() and os.environ.get("SMTP_USER", "").strip())
