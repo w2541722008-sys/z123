@@ -16,7 +16,7 @@ from constants.story_phase import STORY_PHASE_LABELS, SCENARIO_PHASE_LABELS
 from constants.prompt_templates import STATE_UPDATE_INSTRUCTION, SCENARIO_STATE_UPDATE_INSTRUCTION
 from core.config import TIMEZONE_OFFSET
 from core.database import ConnType
-from services.character_state import is_affection_enabled as _check_affection
+from services.character_affection import is_affection_enabled as _check_affection
 from services.prompt_builder import _get_behavior_tendency
 from services.runtime_bundle import _get_field
 from utils.json_utils import parse_json_object

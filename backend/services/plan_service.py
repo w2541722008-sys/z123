@@ -8,8 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import HTTPException
-
+from core.exceptions import ForbiddenError
 from core.plan_constants import (
     GUEST_PLAN,
     SVIP_PLAN,
@@ -38,8 +37,7 @@ def ensure_plan_access(
     required = normalize_required_plan(required_plan)
     if can_access_required_plan(viewer_plan, required):
         return
-    raise HTTPException(
-        status_code=403,
+    raise ForbiddenError(
         detail=detail or f"当前内容仅 {plan_display_name(required)} 可访问",
     )
 

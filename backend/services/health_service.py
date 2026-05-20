@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from core.config import FRONTEND_DIR, PROJECT_DIR
-from core.database import get_db
+from core.database import get_conn
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +30,12 @@ def check_db_health() -> bool:
     if now - _db_health_cache["ts"] < _DB_HEALTH_TTL:
         return bool(_db_health_cache["ok"])
     try:
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
+        conn = get_conn()
+        try:
+            conn.execute("SELECT 1")
             _db_health_cache["ok"] = True
+        finally:
+            conn.close()
     except Exception:
         _db_health_cache["ok"] = False
     finally:
@@ -79,7 +81,8 @@ def check_media_health(*, force: bool = False) -> dict[str, object]:
 
     missing: list[str] = []
     try:
-        with get_db() as conn:
+        conn = get_conn()
+        try:
             rows = conn.execute(
                 "SELECT id, avatar_url, cover_url FROM characters"
             ).fetchall()
@@ -91,6 +94,8 @@ def check_media_health(*, force: bool = False) -> dict[str, object]:
                         continue
                     if not media_path_exists(value):
                         missing.append(f"{character_id}:{field}:{value}")
+        finally:
+            conn.close()
     except Exception as exc:
         logging.warning("媒体资源健康检查失败: %s", exc, exc_info=True)
         _media_health_cache["ok"] = False

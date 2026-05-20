@@ -340,6 +340,38 @@ def health() -> dict[str, str | bool | int]:
 
 
 # ============================================================
+# 领域异常 → HTTP 映射
+# ============================================================
+from core.exceptions import AifriendError, BadRequestError, BudgetExceededError, ForbiddenError, NotFoundError, RateLimitError
+
+
+@app.exception_handler(NotFoundError)
+async def not_found_handler(request: Request, exc: NotFoundError) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": exc.detail})
+
+
+@app.exception_handler(BadRequestError)
+async def bad_request_handler(request: Request, exc: BadRequestError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": exc.detail})
+
+
+@app.exception_handler(ForbiddenError)
+async def forbidden_handler(request: Request, exc: ForbiddenError) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"detail": exc.detail})
+
+
+@app.exception_handler(RateLimitError)
+async def rate_limit_handler(request: Request, exc: RateLimitError) -> JSONResponse:
+    headers: dict[str, str] | None = getattr(exc, "headers", None)
+    return JSONResponse(status_code=429, content={"detail": exc.detail}, headers=headers)
+
+
+@app.exception_handler(BudgetExceededError)
+async def budget_exceeded_handler(request: Request, exc: BudgetExceededError) -> JSONResponse:
+    return JSONResponse(status_code=429, content={"detail": exc.detail})
+
+
+# ============================================================
 # 全局异常处理
 # ============================================================
 @app.exception_handler(Exception)

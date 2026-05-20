@@ -3,6 +3,7 @@ Schema 契约测试 - 验证 Pydantic 模型输入校验与规范化
 """
 
 import pytest
+from pydantic import ValidationError
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone
 
@@ -14,31 +15,31 @@ class TestInputValidation:
         """注册接口必须验证邮箱格式。"""
         from core.schemas import RegisterPayload
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             RegisterPayload(email="", password="test123")
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             RegisterPayload(email="not-an-email", password="test123")
 
     def test_register_payload_password_min_length(self):
         """注册接口密码应有最小长度要求。"""
         from core.schemas import RegisterPayload
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             RegisterPayload(email="test@example.com", password="123")
 
     def test_login_payload_validation(self):
         """登录接口应验证必填字段。"""
         from core.schemas import LoginPayload
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             LoginPayload(email="", password="")
 
     def test_chat_payload_message_not_empty(self):
         """聊天接口消息不能为空。"""
         from core.schemas import ChatSendPayload
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ChatSendPayload(character_id="char_1", message="   ")
 
     def test_register_payload_normalizes_email(self):
@@ -53,10 +54,10 @@ class TestInputValidation:
         """重新生成与继续生成请求都应要求 message_id。"""
         from core.schemas import ContinuePayload, RegeneratePayload
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             RegeneratePayload(message_id="")
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ContinuePayload(message_id="")
 
         assert RegeneratePayload(message_id="msg-1").message_id == "msg-1"
@@ -78,7 +79,7 @@ class TestInputValidation:
         """共享 character_id 基类应统一处理去空白与必填约束。"""
         from core.schemas import CharacterActionPayload, CharacterProfileUpdatePayload, ClearChatPayload
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             CharacterActionPayload(character_id="   ")
 
         profile = CharacterProfileUpdatePayload(character_id="  char_1  ")

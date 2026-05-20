@@ -18,6 +18,7 @@ from typing import Any
 from core.config import RECENT_MESSAGE_WINDOW, SUMMARY_MAX_TOKENS, SUMMARY_TRIGGER_COUNT, logger, utc_now
 from core.database import ConnType, get_conn
 from core.model_adapter import get_ai_config, request_chat_completion
+from services.runtime_bundle import build_runtime_bundle, _get_field
 from utils.stream_filter import normalize_reply_text
 
 
@@ -410,6 +411,72 @@ def _release_summary_job(user_id: int | str, character_id: str) -> None:
         _SUMMARY_RUNNING_KEYS.discard(key)
 
 
+def build_memory_summary_messages(
+    character: Any,
+    existing_summary: str,
+    unsummarized_messages: list[Any],
+    related_assets: list[Any] | None = None,
+) -> list[dict[str, str]]:
+    """让长期记忆摘要链路也复用同一套运行时上下文，而不是走旧的单角色 prompt。"""
+    runtime_bundle = build_runtime_bundle(character, related_assets=related_assets)
+    message_lines = []
+    for row in unsummarized_messages:
+        role = _get_field(row, "role", "")
+        content = _get_field(row, "content", "")
+        if role and content:
+            message_lines.append(f"{role}: {content}")
+    conversation_text = "\n".join(message_lines)
+    related_assets_text = "\n".join(
+        f"- {item['asset_type']}: {item['name']}" for item in runtime_bundle.get("related_assets") or [] if item.get("name")
+    ) or "- 无"
+
+    runtime_context_blocks = [
+        ("【当前主资产类型】", runtime_bundle.get("asset_type") or "hybrid"),
+        ("【角色底稿】", runtime_bundle.get("base_profile") or _get_field(character, "description", "")),
+        ("【性格与表达风格】", runtime_bundle.get("personality") or ""),
+        ("【当前剧情场景】", runtime_bundle.get("scenario") or ""),
+        ("【世界规则/补充设定】", runtime_bundle.get("world_rules") or ""),
+        ("【回复约束】", runtime_bundle.get("post_history_rules") or ""),
+    ]
+    runtime_context = "\n\n".join(f"{title}\n{content}" for title, content in runtime_context_blocks if str(content).strip())
+
+    system_prompt = """你是角色扮演对话的长期记忆整理器。请把聊天内容整理成结构化长期记忆，供后续继续聊天时使用。
+
+输出规则：
+1. 必须按以下五个标题输出：
+[用户画像]
+[用户偏好]
+[近期事件]
+[关系状态]
+[待跟进事项]
+2. 每个标题下使用简洁中文要点列表，每行一个要点，统一以"- "开头。
+3. 没有信息的分区也要保留标题，但下面可以写"- 暂无稳定信息"。
+4. 只保留未来会影响互动的长期信息，不写流水账。
+5. "待跟进事项"只记录后续值得主动提起、兑现承诺或继续推进的话题，不要把普通寒暄塞进去。
+6. 你在整理时必须参考当前运行时设定，尤其要区分角色关系、剧情状态、世界规则，不要把不稳定的临时台词误写成长期事实。
+7. 不编造，不解释过程，不输出多余文字。"""
+
+    user_prompt = f"""当前角色：{_get_field(character, 'name', '未命名角色')}
+当前已有长期记忆：
+{existing_summary or '（暂无）'}
+
+当前已激活关联资产：
+{related_assets_text}
+
+当前运行时上下文：
+{runtime_context or '（暂无额外上下文）'}
+
+这次需要整理进长期记忆的新对话：
+{conversation_text}
+
+请输出更新后的结构化长期记忆。"""
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 def refresh_memory_summary(
     conn: ConnType,
     user_id: int | str,
@@ -425,7 +492,6 @@ def refresh_memory_summary(
     if len(summary_target_rows) < RECENT_MESSAGE_WINDOW:
         return
 
-    from services.prompt_assembler import build_memory_summary_messages
     existing_summary = get_summary_text(conn, user_id, character_id)
     prompt_messages = build_memory_summary_messages(character, existing_summary, summary_target_rows)
 

@@ -1,3 +1,10 @@
+"""
+Prompt 构建器 — 将运行时上下文组装为 LLM messages 列表。
+
+注意：本模块函数均使用 `_` 前缀，表示"services 层内部函数"而非文件私有。
+这些函数被 prompt_assembler、state_snapshot 等模块跨文件调用。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Callable

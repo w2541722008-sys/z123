@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from fastapi import HTTPException
+from core.exceptions import ForbiddenError
 
 
 # ── ensure_plan_access ────────────────────────────────
@@ -16,9 +16,8 @@ class TestEnsurePlanAccess:
 
     def test_free_user_cannot_access_vip_content(self):
         from services.plan_service import ensure_plan_access
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ForbiddenError):
             ensure_plan_access("free", "vip")
-        assert exc_info.value.status_code == 403
 
     def test_vip_can_access_vip(self):
         from services.plan_service import ensure_plan_access
@@ -31,7 +30,7 @@ class TestEnsurePlanAccess:
 
     def test_none_viewer_denied_for_non_guest(self):
         from services.plan_service import ensure_plan_access
-        with pytest.raises(HTTPException):
+        with pytest.raises(ForbiddenError):
             ensure_plan_access(None, "vip")
 
     def test_none_viewer_allowed_for_guest(self):
@@ -40,7 +39,7 @@ class TestEnsurePlanAccess:
 
     def test_custom_detail_in_exception(self):
         from services.plan_service import ensure_plan_access
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(ForbiddenError) as exc_info:
             ensure_plan_access("free", "vip", detail="自定义消息")
         assert exc_info.value.detail == "自定义消息"
 

@@ -16,7 +16,9 @@ from collections import deque
 from threading import Lock
 from time import monotonic
 
-from fastapi import HTTPException, Request
+from fastapi import Request
+
+from core.exceptions import RateLimitError
 
 
 class _InMemoryRateLimiter:
@@ -122,8 +124,7 @@ def enforce_rate_limit(
     retry_after = _RATE_LIMITER.hit(key, limit=limit, window_seconds=window_seconds)
     if retry_after is None:
         return
-    raise HTTPException(
-        status_code=429,
+    raise RateLimitError(
         detail=f"{detail}，请 {retry_after} 秒后再试",
         headers={"Retry-After": str(retry_after)},
     )

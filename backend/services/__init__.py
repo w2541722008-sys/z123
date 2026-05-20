@@ -16,5 +16,5 @@ Services 包 - 业务逻辑层
     from services.chat_query import get_character_or_404, ensure_opening_message
     from services.plan_service import get_plan_policy, ensure_plan_access
     from utils.stream_filter import normalize_reply_text, sanitize_stream_chunk, parse_state_update_tag
-    from repositories.character_memory_repository import fetch_character_memories, fetch_character_post_rules
+    from services.world_info_service import resolve_triggered_memories, resolve_post_rules
 """

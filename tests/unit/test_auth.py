@@ -91,12 +91,12 @@ class TestPasswordSha256Legacy:
     """旧版 SHA-256 密码验证（向后兼容）。"""
 
     def test_sha256_verify_correct(self):
-        with patch("core.auth.APP_SECRET", "test_secret_key"):
+        with patch("core.auth._password.APP_SECRET", "test_secret_key"):
             hashed = _sha256_hash_password("mypassword")
             assert verify_password("mypassword", hashed, "sha256") is True
 
     def test_sha256_verify_wrong(self):
-        with patch("core.auth.APP_SECRET", "test_secret_key"):
+        with patch("core.auth._password.APP_SECRET", "test_secret_key"):
             hashed = _sha256_hash_password("mypassword")
             assert verify_password("wrongpass", hashed, "sha256") is False
 
@@ -117,7 +117,7 @@ class TestSlidingExtendToken:
         token_h = sample_token_hash()
         expires_at = (NOW_UTC + timedelta(days=3)).isoformat()
 
-        with patch("core.auth.get_conn", return_value=conn):
+        with patch("core.auth._token.get_conn", return_value=conn):
             _sliding_extend_token(token_h, expires_at, NOW_UTC)
 
         assert len(conn.executed_sql) >= 1
@@ -130,7 +130,7 @@ class TestSlidingExtendToken:
         token_h = sample_token_hash()
         expires_at = (NOW_UTC + timedelta(days=15)).isoformat()
 
-        with patch("core.auth.get_conn", return_value=conn):
+        with patch("core.auth._token.get_conn", return_value=conn):
             _sliding_extend_token(token_h, expires_at, NOW_UTC)
 
         update_sqls = [s for s, _ in conn.executed_sql if "UPDATE" in s]
@@ -143,26 +143,32 @@ class TestSlidingExtendToken:
         update_sqls = [s for s, _ in conn.executed_sql if "UPDATE" in s]
         assert len(update_sqls) == 0
 
-    def test_should_not_crash_on_invalid_date_format(self):
+    def test_should_not_extend_on_invalid_date_format(self):
         conn = make_fake_conn()
-        with patch("core.auth.get_conn", return_value=conn):
+        with patch("core.auth._token.get_conn", return_value=conn):
             _sliding_extend_token(sample_token_hash(), "not-a-date", NOW_UTC)
             _sliding_extend_token(sample_token_hash(), "", NOW_UTC)
             _sliding_extend_token(sample_token_hash(), "2026-13-45", NOW_UTC)
 
-    def test_should_handle_get_conn_exception_gracefully(self):
+        update_sqls = [s for s, _ in conn.executed_sql if "UPDATE" in s]
+        assert len(update_sqls) == 0
+
+    def test_should_suppress_get_conn_exception(self):
         token_h = sample_token_hash()
         expires_at = sample_expires_soon()
 
-        with patch("core.auth.get_conn", side_effect=Exception("DB connection failed")):
-            _sliding_extend_token(token_h, expires_at, NOW_UTC)
+        with patch("core.auth._token.get_conn", side_effect=Exception("DB connection failed")):
+            try:
+                _sliding_extend_token(token_h, expires_at, NOW_UTC)
+            except Exception:
+                pytest.fail("_sliding_extend_token should not propagate get_conn exceptions")
 
     def test_extend_should_use_30_day_window(self):
         conn = make_fake_conn()
         token_h = sample_token_hash()
         expires_at = sample_expires_soon()
 
-        with patch("core.auth.get_conn", return_value=conn):
+        with patch("core.auth._token.get_conn", return_value=conn):
             _sliding_extend_token(token_h, expires_at, NOW_UTC)
 
         update_sqls = [(s, p) for s, p in conn.executed_sql if "UPDATE" in s]
@@ -175,7 +181,7 @@ class TestSlidingExtendToken:
         conn = make_fake_conn()
         exact_threshold = (NOW_UTC + timedelta(days=7)).isoformat()
 
-        with patch("core.auth.get_conn", return_value=conn):
+        with patch("core.auth._token.get_conn", return_value=conn):
             _sliding_extend_token(sample_token_hash(), exact_threshold, NOW_UTC)
 
         update_sqls = [s for s, _ in conn.executed_sql if "UPDATE" in s]
@@ -185,7 +191,7 @@ class TestSlidingExtendToken:
         conn = make_fake_conn()
         just_under = (NOW_UTC + timedelta(days=7, seconds=-1)).isoformat()
 
-        with patch("core.auth.get_conn", return_value=conn):
+        with patch("core.auth._token.get_conn", return_value=conn):
             _sliding_extend_token(sample_token_hash(), just_under, NOW_UTC)
 
         update_sqls = [s for s, _ in conn.executed_sql if "UPDATE" in s]
@@ -194,15 +200,15 @@ class TestSlidingExtendToken:
 
 class TestIsAdminEmail:
     def test_known_admin_email(self):
-        with patch("core.auth.ADMIN_EMAILS", {"admin@example.com"}):
+        with patch("core.auth._dependencies.ADMIN_EMAILS", {"admin@example.com"}):
             assert _is_admin_email("admin@example.com") is True
 
     def test_non_admin_email(self):
-        with patch("core.auth.ADMIN_EMAILS", {"admin@example.com"}):
+        with patch("core.auth._dependencies.ADMIN_EMAILS", {"admin@example.com"}):
             assert _is_admin_email("user@example.com") is False
 
     def test_case_insensitive(self):
-        with patch("core.auth.ADMIN_EMAILS", {"admin@example.com"}):
+        with patch("core.auth._dependencies.ADMIN_EMAILS", {"admin@example.com"}):
             assert _is_admin_email("Admin@Example.COM") is True
 
     def test_empty_string_returns_false(self):
@@ -212,7 +218,7 @@ class TestIsAdminEmail:
         assert _is_admin_email(None) is False
 
     def test_whitespace_trimmed(self):
-        with patch("core.auth.ADMIN_EMAILS", {"admin@example.com"}):
+        with patch("core.auth._dependencies.ADMIN_EMAILS", {"admin@example.com"}):
             assert _is_admin_email("  admin@example.com  ") is True
 
 
@@ -246,7 +252,7 @@ class TestVerifyPasswordBranches:
         assert verify_password("pass", "hash", "unknown") is False
 
     def test_sha256_compare_uses_constant_time(self):
-        with patch("core.auth.APP_SECRET", "test_secret_key"):
+        with patch("core.auth._password.APP_SECRET", "test_secret_key"):
             hashed = _sha256_hash_password("mypassword")
             assert hmac.compare_digest(hashed, _sha256_hash_password("mypassword")) is True
 
@@ -261,10 +267,19 @@ class TestVerifyPasswordBranches:
         conn.commit = MagicMock()
         conn.close = MagicMock()
 
-        with patch("core.auth.get_conn", return_value=conn):
+        with patch("core.auth._token.get_conn", return_value=conn):
             _sliding_extend_token(sample_token_hash(), sample_expires_soon(), NOW_UTC)
 
         conn.close.assert_called_once()
+
+
+def _make_mock_cache(get=None, set=None, delete=None):
+    """构造模拟 cache dict，供依赖注入测试使用。"""
+    return {
+        "get": get or (lambda k: None),
+        "set": set or MagicMock(),
+        "delete": delete or MagicMock(),
+    }
 
 
 class _AuthQueryResult:
@@ -302,16 +317,15 @@ class TestAuthDependencies:
 
     def test_get_optional_user_returns_none_when_token_not_found(self):
         conn = _AuthConn(None)
-        with patch("core.auth.get_conn", return_value=conn), patch(
-            "core.auth._cache_get", return_value=None
-        ):
+        mock_cache = _make_mock_cache()
+        with patch("core.auth._dependencies.get_conn", return_value=conn), \
+             patch("core.auth._dependencies._cache", mock_cache):
             user = get_optional_user(MagicMock(cookies={}), "Bearer token_x")
         assert user is None
         assert conn.closed is True
 
     def test_get_optional_user_returns_user_and_triggers_sliding_extend(self):
         """用户验证成功时，_sliding_extend_token 被调用且 conn 参数被传入。"""
-        # 使用即将过期的 token（3 天后过期），确保触发续期
         soon_expires = (NOW_UTC + timedelta(days=3)).isoformat()
         row = {
             "id": 1,
@@ -323,11 +337,10 @@ class TestAuthDependencies:
             "expires_at": soon_expires,
         }
         conn = _AuthConn(row)
-        with patch("core.auth.get_conn", return_value=conn), patch(
-            "core.auth._sliding_extend_token"
-        ) as mock_extend_token, patch("core.auth._cache_get", return_value=None), patch(
-            "core.auth._cache_set"
-        ):
+        mock_cache = _make_mock_cache()
+        with patch("core.auth._dependencies.get_conn", return_value=conn), \
+             patch("core.auth._dependencies._sliding_extend_token") as mock_extend_token, \
+             patch("core.auth._dependencies._cache", mock_cache):
             user = get_optional_user(MagicMock(cookies={}), "Bearer raw_token_123")
 
         assert user is not None
@@ -335,13 +348,12 @@ class TestAuthDependencies:
         assert user.email == "vip@example.com"
         assert user.nickname == "vip"
         assert conn.closed is True
-        # 验证 _sliding_extend_token 被调用，且传入了 conn 参数
         mock_extend_token.assert_called_once()
         call_kwargs = mock_extend_token.call_args
         assert call_kwargs[1]["conn"] is conn
 
     def test_get_current_user_raises_401_when_optional_user_missing(self):
-        with patch("core.auth.get_optional_user", return_value=None):
+        with patch("core.auth._dependencies.get_optional_user", return_value=None):
             with pytest.raises(Exception) as exc:
                 get_current_user(MagicMock(cookies={}), "Bearer bad")
         assert exc.value.status_code == 401
@@ -349,13 +361,13 @@ class TestAuthDependencies:
 
     def test_get_current_user_returns_user_when_optional_user_exists(self):
         expected = CurrentUser(id=99, email="ok@example.com", nickname="ok")
-        with patch("core.auth.get_optional_user", return_value=expected):
+        with patch("core.auth._dependencies.get_optional_user", return_value=expected):
             actual = get_current_user(MagicMock(cookies={}), "Bearer ok")
         assert actual is expected
 
     def test_get_admin_user_raises_403_when_user_not_admin(self):
         user = CurrentUser(id=3, email="u@example.com", nickname="u", is_admin=False)
-        with patch("core.auth.get_current_user", return_value=user):
+        with patch("core.auth._dependencies.get_current_user", return_value=user):
             with pytest.raises(Exception) as exc:
                 get_admin_user("Bearer token")
         assert exc.value.status_code == 403
@@ -363,7 +375,7 @@ class TestAuthDependencies:
 
     def test_get_admin_user_returns_current_user_when_admin(self):
         user = CurrentUser(id=4, email="admin@example.com", nickname="admin", is_admin=True)
-        with patch("core.auth.get_current_user", return_value=user):
+        with patch("core.auth._dependencies.get_current_user", return_value=user):
             actual = get_admin_user("Bearer token")
         assert actual is user
 
@@ -404,7 +416,8 @@ class TestAuthCacheIntegration:
         cached_data = CurrentUser(
             id=1, email="cached@example.com", nickname="Cached",
         ).to_dict()
-        with patch("core.auth._cache_get", return_value=cached_data):
+        mock_cache = _make_mock_cache(get=lambda k: cached_data)
+        with patch("core.auth._dependencies._cache", mock_cache):
             user = get_optional_user(MagicMock(cookies={}), "Bearer some_token")
         assert user is not None
         assert user.email == "cached@example.com"
@@ -417,15 +430,14 @@ class TestAuthCacheIntegration:
             "expires_at": (NOW_UTC + timedelta(days=15)).isoformat(),
         }
         conn = _AuthConn(row)
-        with patch("core.auth.get_conn", return_value=conn), patch(
-            "core.auth._cache_get", return_value=None
-        ) as mock_cache_get, patch("core.auth._cache_set") as mock_cache_set:
+        mock_cache = _make_mock_cache(set=MagicMock())
+        with patch("core.auth._dependencies.get_conn", return_value=conn), \
+             patch("core.auth._dependencies._cache", mock_cache):
             user = get_optional_user(MagicMock(cookies={}), "Bearer token_y")
 
         assert user is not None
-        mock_cache_set.assert_called_once()
-        # 验证缓存 key 格式
-        cache_key = mock_cache_set.call_args[0][0]
+        mock_cache["set"].assert_called_once()
+        cache_key = mock_cache["set"].call_args[0][0]
         assert cache_key.startswith("auth_token:")
 
     def test_verify_token_clears_cache_on_corrupt_data(self):
@@ -437,17 +449,13 @@ class TestAuthCacheIntegration:
         }
         conn = _AuthConn(row)
         corrupt_cache = {"id": 1}  # 缺少必要字段
-
-        with patch("core.auth.get_conn", return_value=conn), patch(
-            "core.auth._cache_get", return_value=corrupt_cache
-        ), patch("core.auth._cache_delete") as mock_cache_del, patch(
-            "core.auth._cache_set"
-        ):
+        mock_cache = _make_mock_cache(get=lambda k: corrupt_cache)
+        with patch("core.auth._dependencies.get_conn", return_value=conn), \
+             patch("core.auth._dependencies._cache", mock_cache):
             user = get_optional_user(MagicMock(cookies={}), "Bearer token_z")
 
         assert user is not None
-        # 损坏缓存应被清除
-        mock_cache_del.assert_called_once()
+        mock_cache["delete"].assert_called_once()
 
 
 class TestSlidingExtendWithConn:
@@ -459,12 +467,10 @@ class TestSlidingExtendWithConn:
         token_h = sample_token_hash()
         expires_at = sample_expires_soon()
 
-        with patch("core.auth.get_conn") as mock_get_conn:
+        with patch("core.auth._token.get_conn") as mock_get_conn:
             _sliding_extend_token(token_h, expires_at, NOW_UTC, conn=conn)
 
-        # 不应获取新连接
         mock_get_conn.assert_not_called()
-        # 应通过传入的连接执行 UPDATE
         update_sqls = [s for s, _ in conn.executed_sql if "UPDATE" in s]
         assert len(update_sqls) == 1
 
@@ -474,9 +480,8 @@ class TestSlidingExtendWithConn:
         token_h = sample_token_hash()
         expires_at = sample_expires_soon()
 
-        with patch("core.auth.get_conn", return_value=conn):
+        with patch("core.auth._token.get_conn", return_value=conn):
             _sliding_extend_token(token_h, expires_at, NOW_UTC)
 
-        # 应获取了连接并执行 UPDATE
         update_sqls = [s for s, _ in conn.executed_sql if "UPDATE" in s]
         assert len(update_sqls) == 1

@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import HTTPException
-
+from core.exceptions import BudgetExceededError
 from core.config import COST_ESTIMATE_CHARS_PER_TOKEN
 from core.database import ConnType
 
@@ -104,7 +103,7 @@ def enforce_daily_budget(
     """检查今日预算，超限时抛出 429。"""
     usage = get_daily_usage(conn, user_id=user_id, guest_ip=guest_ip)
     if token_limit > 0 and usage["total_tokens"] + planned_tokens > token_limit:
-        raise HTTPException(status_code=429, detail=token_limit_detail)
+        raise BudgetExceededError(detail=token_limit_detail)
     return usage
 
 

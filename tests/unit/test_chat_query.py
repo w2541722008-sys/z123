@@ -23,16 +23,15 @@ class TestNormalizeNonEmptyMessage:
 
     def test_empty_raises_400(self):
         from services.chat_query import _normalize_non_empty_message
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException) as exc:
+        from core.exceptions import BadRequestError
+        with pytest.raises(BadRequestError) as exc:
             _normalize_non_empty_message("   ")
-        assert exc.value.status_code == 400
         assert "消息不能为空" in exc.value.detail
 
     def test_empty_string_raises_400(self):
         from services.chat_query import _normalize_non_empty_message
-        from fastapi import HTTPException
-        with pytest.raises(HTTPException):
+        from core.exceptions import BadRequestError
+        with pytest.raises(BadRequestError):
             _normalize_non_empty_message("")
 
 
@@ -90,13 +89,12 @@ class TestGetMessageForRegenerateOrContinue:
 
     def test_not_found_raises_404(self):
         from services.chat_query import get_message_for_regenerate_or_continue
-        from fastapi import HTTPException
+        from core.exceptions import NotFoundError
         conn = FakeSequenceConn([FakeQueryResult(one=None)])
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(NotFoundError) as exc:
             get_message_for_regenerate_or_continue(
                 conn, user_id=1, message_id="999", operation="regenerate",
             )
-        assert exc.value.status_code == 404
         assert "不存在" in exc.value.detail
 
 
@@ -125,12 +123,11 @@ class TestGetCharacterOr404:
 
     def test_not_found_raises_404(self):
         from services.chat_query import get_character_or_404
-        from fastapi import HTTPException
+        from core.exceptions import NotFoundError
         with patch("services.chat_query.get_character", return_value=None):
             conn = FakeSequenceConn([FakeQueryResult(one=None)])
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(NotFoundError):
                 get_character_or_404(conn, "nonexistent")
-            assert exc.value.status_code == 404
 
     def test_db_fallback_when_cache_miss(self):
         from services.chat_query import get_character_or_404
@@ -144,10 +141,9 @@ class TestGetCharacterOr404:
 
     def test_vip_character_blocked_for_free_user(self):
         from services.chat_query import get_character_or_404
-        from fastapi import HTTPException
+        from core.exceptions import ForbiddenError
         char_row = FakeRow({"id": "c3", "name": "VIPChar", "is_visible": 1, "required_plan": "vip"})
         with patch("services.chat_query.get_character", return_value=None):
             conn = FakeSequenceConn([FakeQueryResult(one=char_row)])
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises(ForbiddenError):
                 get_character_or_404(conn, "c3", viewer_plan="free")
-            assert exc.value.status_code in (403, 402)

@@ -107,7 +107,7 @@ def test_forgot_password_success_commits_and_sends_email(app_client):
     ])
 
     with override_db(app, conn), patch("routers.auth.enforce_rate_limit"), \
-         patch("routers.auth.generate_reset_code", return_value="123456"), \
+         patch("services.password_reset_service.generate_reset_code", return_value="123456"), \
          patch("routers.auth.send_reset_code_email", return_value=True) as mock_send_email:
         response = client.post("/api/auth/forgot-password", json={"email": "user@example.com"})
 
@@ -189,7 +189,7 @@ def test_reset_password_success_updates_password_and_marks_code_used(app_client)
     ])
 
     with override_db(app, conn), patch("routers.auth.enforce_rate_limit"), \
-         patch("routers.auth.hash_password_bcrypt", return_value="new_hash"):
+         patch("services.password_reset_service.hash_password_bcrypt", return_value="new_hash"):
         response = client.post(
             "/api/auth/reset-password",
             json={"email": "user@example.com", "code": "223344", "new_password": "newpass123"},

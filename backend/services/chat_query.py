@@ -12,15 +12,33 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import HTTPException
-
+from core.exceptions import BadRequestError, NotFoundError
 from core.config import logger
 from core.database import ConnType
 from services.cache_service import get_character, set_character
 from core.plan_constants import plan_display_name
 from services.plan_service import ensure_plan_access
-from services.character_state import get_character_state
+from services.character_state import get_character_state, get_greeting_for_phase
 from services.memory_service import get_recent_messages, get_summary_for_prompt
+
+
+# ============================================================
+# 消息投影工具（供 chat_send / chat_retry 共用）
+# ============================================================
+def message_projection(role: Any, content: Any) -> dict[str, Any]:
+    """将 role/content 组装为消息字典。"""
+    return {
+        "role": role,
+        "content": content,
+    }
+
+
+def _message_with_id_projection(message_id: Any, role: Any, content: Any) -> dict[str, Any]:
+    return {
+        "id": str(message_id),
+        "role": role,
+        "content": content,
+    }
 
 
 # ============================================================
@@ -44,7 +62,7 @@ def get_character_or_404(
             (character_id,),
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="角色不存在")
+            raise NotFoundError(detail="角色不存在")
         # 存入缓存
         set_character(character_id, row)
     
@@ -56,75 +74,6 @@ def get_character_or_404(
             detail=f"该角色仅 {plan_display_name(required_plan)} 可访问",
         )
     return row
-
-
-# ============================================================
-# 开场白
-# ============================================================
-def get_greeting_for_phase(
-    conn: ConnType,
-    character_id: str,
-    story_phase: str = "stranger",
-    storyline_id: int | None = None,
-) -> tuple[int | None, str | None]:
-    """
-    根据关系阶段获取对应的开场白。
-    
-    优先级：
-    1. 从 character_greetings 表中查询匹配当前阶段和剧情线的开场白
-    2. 如果没有匹配，返回 characters.opening_message
-    
-    返回：
-        (greeting_id, 开场白内容)
-        - 命中 character_greetings 时返回真实 greeting_id
-        - 回退到 characters.opening_message 时返回 (None, content)
-    """
-    # 1. 尝试从多阶段开场白表中获取
-    row = None
-    if storyline_id:
-        storyline_id_str = str(storyline_id)
-        row = conn.execute(
-            """
-            SELECT id, content FROM character_greetings
-            WHERE character_id = %s AND story_phase = %s AND is_active = 1
-              AND (storyline_id = %s OR storyline_id IS NULL)
-            ORDER BY 
-                CASE WHEN storyline_id = %s THEN 0 ELSE 1 END,
-                priority ASC, RANDOM()
-            LIMIT 1
-            """,
-            (character_id, story_phase, storyline_id_str, storyline_id_str),
-        ).fetchone()
-        
-        if not row:
-            logger.info(
-                "未找到剧情线 %s 的开场白，将尝试通用开场白",
-                storyline_id,
-            )
-    
-    # 2. 如果没有指定剧情线，或指定剧情线未匹配到，尝试通用开场白
-    if not row:
-        row = conn.execute(
-            """
-            SELECT id, content FROM character_greetings
-            WHERE character_id = %s AND story_phase = %s AND is_active = 1
-              AND storyline_id IS NULL
-            ORDER BY priority ASC, RANDOM()
-            LIMIT 1
-            """,
-            (character_id, story_phase),
-        ).fetchone()
-    
-    if row and row["content"]:
-        return row["id"], row["content"]
-    
-    # 3. 回退到角色的默认开场白
-    row = conn.execute(
-        "SELECT opening_message FROM characters WHERE id = %s",
-        (character_id,),
-    ).fetchone()
-    
-    return None, (row["opening_message"] if row else None)
 
 
 def ensure_opening_message(
@@ -215,7 +164,7 @@ def ensure_opening_message(
 def _normalize_non_empty_message(user_message: str) -> str:
     clean_text = user_message.strip()
     if not clean_text:
-        raise HTTPException(status_code=400, detail="消息不能为空")
+        raise BadRequestError(detail="消息不能为空")
     return clean_text
 
 
@@ -320,6 +269,6 @@ def get_message_for_regenerate_or_continue(
     ).fetchone()
 
     if not row:
-        raise HTTPException(status_code=404, detail="消息不存在或无权操作")
+        raise NotFoundError(detail="消息不存在或无权操作")
 
     return dict(row), row["character_id"]

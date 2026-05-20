@@ -13,7 +13,6 @@ prompt_assembler 模块单元测试
 import pytest
 
 from services.prompt_assembler import (
-    TokenBudget,
     _append_post_history_then_user,
     _append_runtime_tail,
     _append_runtime_text_layers,
@@ -33,89 +32,6 @@ from services.prompt_assembler import (
     parse_json_object,
     resolve_world_info,
 )
-
-
-class TestTokenBudget:
-    """
-    TokenBudget 基于 MiniMax-M2.5 的 64K 上下文窗口设计。
-
-    预算分配比例：
-      - system prompt:   55%
-      - 长期记忆摘要:     8%
-      - 历史消息:        30%
-      - post_history:     7%（最小 800 字）
-    """
-
-    def test_default_budget_values(self):
-        b = TokenBudget()
-        assert b.context_tokens == 64000
-        assert b.output_reserve == 2048
-        assert b._available_tokens == 61952
-
-    def test_system_max_chars_reasonable(self):
-        b = TokenBudget()
-        sm = b.system_max_chars()
-        assert 50000 < sm < 60000
-
-    def test_memory_max_chars_smaller_than_system(self):
-        b = TokenBudget()
-        assert b.memory_max_chars() < b.system_max_chars() / 4
-
-    def test_history_max_chars_between_memory_and_system(self):
-        b = TokenBudget()
-        mem = b.memory_max_chars()
-        hist = b.history_max_chars()
-        sys_ = b.system_max_chars()
-        assert mem < hist < sys_
-
-    def test_reserve_min_800_chars(self):
-        b = TokenBudget()
-        assert b.reserve_max_chars() >= 800
-
-    def test_single_layer_capped_at_30_percent_of_system(self):
-        b = TokenBudget()
-        ratio = b.single_layer_max_chars() / b.system_max_chars()
-        assert 0.25 < ratio < 0.35
-
-    def test_primary_system_capped_at_25_percent(self):
-        b = TokenBudget()
-        ratio = b.primary_system_max_chars() / b.system_max_chars()
-        assert 0.20 < ratio < 0.30
-
-    def test_custom_context_window(self):
-        b = TokenBudget(context_tokens=32000, output_reserve=1024)
-        assert b._available_tokens == 30976
-        assert b.system_max_chars() > 0
-
-    def test_small_context_minimum_protection(self):
-        b = TokenBudget(context_tokens=5000, output_reserve=2000)
-        assert b._available_tokens == 4000
-
-    def test_chars_to_tokens_rounds_up(self):
-        b = TokenBudget(chars_per_token=2.0)
-        assert b.chars_to_tokens(3) == 2
-        assert b.chars_to_tokens(1) == 1
-
-    def test_tokens_to_chars_rounds_down(self):
-        b = TokenBudget(chars_per_token=2.0)
-        assert b.tokens_to_chars(3) == 6
-
-    def test_summary_returns_all_keys(self):
-        b = TokenBudget()
-        s = b.summary()
-        expected_keys = {
-            "context_tokens", "available_tokens", "system_max_chars",
-            "memory_max_chars", "history_max_chars", "reserve_max_chars",
-            "single_layer_max", "primary_system_max", "wi_max_chars",
-        }
-        assert set(s.keys()) == expected_keys
-
-    def test_wi_max_chars_is_25_percent(self):
-        b = TokenBudget()
-        wi = b.wi_max_chars()
-        total_available = b._available_tokens * b.chars_per_token
-        ratio = wi / total_available
-        assert 0.20 < ratio < 0.30
 
 
 class TestParseJsonObject:

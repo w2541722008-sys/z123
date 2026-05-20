@@ -15,7 +15,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import HTTPException
+from core.exceptions import RateLimitError
 
 from services.rate_limit import (
     _InMemoryRateLimiter,
@@ -141,7 +141,7 @@ class TestEnforceRateLimit:
             )
 
         # 第 4 次应抛出 429
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(RateLimitError) as exc_info:
             enforce_rate_limit(
                 scope="test2",
                 identifier="user2",
@@ -149,7 +149,6 @@ class TestEnforceRateLimit:
                 window_seconds=60,
                 detail="请求过于频繁",
             )
-        assert exc_info.value.status_code == 429
         assert "请求过于频繁" in exc_info.value.detail
         assert "Retry-After" in exc_info.value.headers
 
@@ -166,7 +165,7 @@ class TestEnforceRateLimit:
             window_seconds=60,
             detail="限流",
         )
-        with pytest.raises(HTTPException):
+        with pytest.raises(RateLimitError):
             enforce_rate_limit(
                 scope="test3",
                 identifier="user1",

@@ -71,8 +71,13 @@ from core.schemas import (
 )
 from repositories import auth_repository as auth_repo
 from repositories import user_repository as user_repo
-from services.email import generate_reset_code, send_reset_code_email
+from services.email import send_reset_code_email
 from core.plan_constants import serialize_plan_info
+from services.password_reset_service import (
+    execute_password_reset,
+    request_password_reset,
+    verify_reset_code as verify_password_reset_code,
+)
 from services.rate_limit import enforce_rate_limit, get_request_client_ip
 
 router = APIRouter()
@@ -99,36 +104,6 @@ def _build_user_payload(
         **plan_info,
     }
 
-
-
-_RESET_CODE_MAX_ATTEMPTS = 5  # 单个验证码最大错误尝试次数
-
-
-def _get_latest_valid_reset_code(conn: ConnType, normalized_email: str, now: datetime) -> dict[str, Any] | None:
-    return auth_repo.get_latest_valid_reset_code(conn, normalized_email, now)
-
-
-def _verify_reset_code_or_raise(
-    reset_code: dict[str, Any] | None,
-    input_code: str,
-    *,
-    conn: ConnType | None = None,
-    invalid_detail: str,
-) -> None:
-    if not reset_code:
-        raise HTTPException(status_code=400, detail=invalid_detail)
-    # 检查单码最大尝试次数
-    attempts = reset_code.get("attempt_count", 0) or 0
-    if attempts >= _RESET_CODE_MAX_ATTEMPTS:
-        # 标记为已使用，防止继续尝试
-        if conn is not None:
-            auth_repo.mark_reset_code_used(conn, reset_code["id"])
-        raise HTTPException(status_code=400, detail="验证码已失效，请重新获取")
-    if not hmac.compare_digest(str(reset_code["code"]), str(input_code)):
-        # 递增尝试计数
-        if conn is not None:
-            auth_repo.increment_reset_code_attempts(conn, reset_code["id"])
-        raise HTTPException(status_code=400, detail=invalid_detail)
 
 
 @router.post("/auth/register")
@@ -436,33 +411,10 @@ def auth_logout_others(
 
 @router.post("/auth/forgot-password")
 def forgot_password(payload: ForgotPasswordPayload, request: Request, background_tasks: BackgroundTasks, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
-    """
-    发送密码重置验证码。
-
-    流程：
-        1. 检查邮箱是否已注册
-        2. 检查 60 秒内是否已发送过（防刷）
-        3. 生成 6 位数字验证码
-        4. 存入数据库（10 分钟过期）
-        5. 提交事务
-        6. 后台异步发送邮件
-
-    Args:
-        payload: 包含邮箱的请求体
-
-    Returns:
-        成功标记和提示信息
-
-    Raises:
-        HTTPException: 429 请求过于频繁
-
-    安全说明：
-        - 即使邮箱不存在，也返回统一成功提示，避免枚举用户
-    """
+    """发送密码重置验证码。统一返回成功提示，防止邮箱枚举。"""
     client_ip = get_request_client_ip(request)
     enforce_rate_limit(
-        "auth_forgot_password_ip",
-        client_ip,
+        "auth_forgot_password_ip", client_ip,
         limit=PASSWORD_RESET_RATE_LIMIT_COUNT,
         window_seconds=PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS,
         detail="找回密码请求过于频繁",
@@ -470,46 +422,11 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request, background
     normalized_email = _normalize_email(payload.email)
 
     try:
-        # 步骤 1：检查邮箱是否存在
-        user = user_repo.find_user_by_email(conn, normalized_email)
-        # find_user_by_email 返回完整字段，但我们只需 id 和 email
-        if not user:
-            logger.info("密码重置请求：邮箱不存在或未命中用户 %s", normalized_email)
-            return {"ok": True, "message": "如果该邮箱已注册，验证码会发送至您的邮箱，10 分钟内有效"}
-
-        now = datetime.now(timezone.utc)
-
-        # 步骤 2：检查 60 秒内是否已发送过验证码（防刷机制）
-        recent_code = auth_repo.check_recent_reset_code(
-            conn, normalized_email, (now - timedelta(seconds=60)).isoformat()
-        )
-
-        if recent_code:
-            raise HTTPException(
-                status_code=429,
-                detail="请求过于频繁，请 60 秒后再试"
-            )
-
-        # 步骤 3：生成验证码
-        code = generate_reset_code()
-
-        # 步骤 4：计算过期时间（10 分钟后）
-        expires_at = now + timedelta(minutes=10)
-
-        # 步骤 5：存入数据库
-        auth_repo.insert_reset_code(
-            conn,
-            email=normalized_email,
-            code=code,
-            expires_at=expires_at,
-        )
-
-        # 步骤 6：提交验证码后异步发送邮件（不阻塞响应）
+        user_found, user_email, code = request_password_reset(conn, normalized_email)
         conn.commit()
-        background_tasks.add_task(send_reset_code_email, user["email"], code)
-        logger.info("密码重置验证码已生成: %s", user["email"])
-        return {"ok": True, "message": "验证码已发送至您的邮箱，10 分钟内有效"}
-
+        if user_found and user_email and code:
+            background_tasks.add_task(send_reset_code_email, user_email, code)
+        return {"ok": True, "message": "如果该邮箱已注册，验证码会发送至您的邮箱，10 分钟内有效"}
     except Exception:
         conn.rollback()
         raise
@@ -517,78 +434,26 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request, background
 
 @router.post("/auth/verify-code")
 def verify_reset_code(payload: VerifyCodePayload, request: Request, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
-    """
-    验证密码重置验证码。
-
-    验证规则：
-        - 验证码必须存在且未使用
-        - 验证码未过期（10 分钟有效期）
-        - 验证码必须匹配
-
-    Args:
-        payload: 包含邮箱和验证码的请求体
-
-    Returns:
-        成功标记
-
-    Raises:
-        HTTPException: 400 验证码过期或错误
-
-    说明：
-        邮箱会先做统一小写归一化，再查找验证码。
-    """
+    """验证密码重置验证码。"""
     client_ip = get_request_client_ip(request)
     enforce_rate_limit(
-        "auth_verify_code_ip",
-        client_ip,
+        "auth_verify_code_ip", client_ip,
         limit=VERIFY_CODE_RATE_LIMIT_COUNT,
         window_seconds=VERIFY_CODE_RATE_LIMIT_WINDOW_SECONDS,
         detail="验证码校验过于频繁",
     )
     normalized_email = _normalize_email(payload.email)
-
-    now = datetime.now(timezone.utc)
-
-    reset_code = _get_latest_valid_reset_code(conn, normalized_email, now)
-    _verify_reset_code_or_raise(
-        reset_code,
-        payload.code,
-        conn=conn,
-        invalid_detail="验证码已过期或无效",
-    )
+    verify_password_reset_code(conn, normalized_email, payload.code)
     conn.commit()
     return {"ok": True, "message": "验证通过"}
 
 
 @router.post("/auth/reset-password")
 def reset_password(payload: ResetPasswordPayload, request: Request, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
-    """
-    重置密码。
-
-    流程：
-        1. 验证验证码（有效且未过期）
-        2. 查找用户
-        3. 生成新密码哈希（bcrypt）
-        4. 更新用户密码
-        5. 标记验证码已使用
-        6. 清理该邮箱其他未使用验证码
-
-    Args:
-        payload: 包含邮箱、验证码、新密码的请求体
-
-    Returns:
-        成功标记和提示信息
-
-    Raises:
-        HTTPException: 400 验证码无效或用户不存在
-
-    说明：
-        邮箱会先做统一小写归一化，再查找用户和验证码。
-    """
+    """重置密码。"""
     client_ip = get_request_client_ip(request)
     enforce_rate_limit(
-        "auth_reset_password_ip",
-        client_ip,
+        "auth_reset_password_ip", client_ip,
         limit=VERIFY_CODE_RATE_LIMIT_COUNT,
         window_seconds=VERIFY_CODE_RATE_LIMIT_WINDOW_SECONDS,
         detail="重置密码请求过于频繁",
@@ -596,46 +461,14 @@ def reset_password(payload: ResetPasswordPayload, request: Request, conn: ConnTy
     normalized_email = _normalize_email(payload.email)
 
     try:
-        now = datetime.now(timezone.utc).isoformat()
-
-        # 步骤 1：查找并验证验证码
-        reset_code = _get_latest_valid_reset_code(conn, normalized_email, now)
-        _verify_reset_code_or_raise(
-            reset_code,
-            payload.code,
-            conn=conn,
-            invalid_detail="验证码无效或已过期",
-        )
-        if reset_code is None:
-            raise HTTPException(status_code=400, detail="验证码无效或已过期")
-
-        # 步骤 2：查找用户
-        user = user_repo.find_user_by_email(conn, normalized_email)
-
-        if not user:
-            raise HTTPException(status_code=400, detail="用户不存在")
-
-        # 步骤 3：生成新密码哈希
-        new_hash = hash_password_bcrypt(payload.new_password)
-
-        # 步骤 4：更新密码
-        user_repo.update_password(conn, user["id"], new_hash)
-
-        # 步骤 5：标记验证码已使用
-        auth_repo.mark_reset_code_used(conn, reset_code["id"])
-
-        # 步骤 6：清理该邮箱其他未使用的验证码
-        auth_repo.delete_other_reset_codes(conn, normalized_email, reset_code["id"])
-
+        user_id, user_email = execute_password_reset(conn, normalized_email, payload.code, payload.new_password)
         conn.commit()
 
-        # 清除用户缓存，确保后续查询获取最新数据
         from services.cache_service import invalidate_user
-        invalidate_user(str(user["id"]))
+        invalidate_user(str(user_id))
 
-        logger.info("密码重置成功: %s", user["email"])
+        logger.info("密码重置成功: %s", user_email)
         return {"ok": True, "message": "密码重置成功，请使用新密码登录"}
-
     except Exception:
         conn.rollback()
         raise

@@ -13,7 +13,7 @@ from constants.prompt_templates import (
 )
 from core.config import RECENT_MESSAGE_WINDOW
 from core.database import ConnType
-from repositories.character_memory_repository import fetch_character_memories, fetch_character_post_rules
+from services.world_info_service import resolve_triggered_memories, resolve_post_rules
 from services.token_budget import (
     TokenBudget,
     DEFAULT_BUDGET as _DEFAULT_BUDGET,
@@ -31,6 +31,7 @@ from services.runtime_bundle import (
     _merge_text,
     _merge_alternate_greetings,
 )
+from services.state_snapshot import inject_state_snapshot
 from services.prompt_builder import (
     _clip,
     _build_single_system_prompt,
@@ -294,7 +295,7 @@ def _resolve_world_info_triggers(
 
     if conn is not None:
         current_storyline_id = (character_state or {}).get("storyline_id")
-        db_before, db_after, new_sticky, new_cooldown = fetch_character_memories(
+        db_before, db_after, new_sticky, new_cooldown = resolve_triggered_memories(
             conn, char_id, ctx_text,
             max_triggered=_wi_max_triggered(_budget),
             max_per_entry=_wi_max_chars_per_entry(_budget),
@@ -375,7 +376,7 @@ def _inject_post_history_rules(
 ) -> None:
     """阶段4：从数据库查询后置规则，合并到 runtime_bundle。"""
     if conn is not None:
-        db_post_rules = fetch_character_post_rules(
+        db_post_rules = resolve_post_rules(
             conn, char_id,
             storyline_id=character_state.get("storyline_id") if character_state else None,
             story_phase=character_state.get("story_phase") if character_state else None,
@@ -403,7 +404,6 @@ def _inject_state_snapshot(
     char_id: str,
 ) -> None:
     """阶段5：委托 services/state_snapshot.py 构建状态快照并注入 world_info_after。"""
-    from services.state_snapshot import inject_state_snapshot
     inject_state_snapshot(conn, character, runtime_bundle, character_state, _budget, card_type, last_chat_time, user_id, char_id)
 
 
@@ -456,72 +456,6 @@ def build_layered_chat_messages(
         recent_message_window,
         budget=_budget,
     )
-
-
-def build_memory_summary_messages(
-    character: Any,
-    existing_summary: str,
-    unsummarized_messages: list[Any],
-    related_assets: list[Any] | None = None,
-) -> list[dict[str, str]]:
-    """让长期记忆摘要链路也复用同一套运行时上下文，而不是走旧的单角色 prompt。"""
-    runtime_bundle = build_runtime_bundle(character, related_assets=related_assets)
-    message_lines = []
-    for row in unsummarized_messages:
-        role = _get_field(row, "role", "")
-        content = _get_field(row, "content", "")
-        if role and content:
-            message_lines.append(f"{role}: {content}")
-    conversation_text = "\n".join(message_lines)
-    related_assets_text = "\n".join(
-        f"- {item['asset_type']}: {item['name']}" for item in runtime_bundle.get("related_assets") or [] if item.get("name")
-    ) or "- 无"
-
-    runtime_context_blocks = [
-        ("【当前主资产类型】", runtime_bundle.get("asset_type") or "hybrid"),
-        ("【角色底稿】", runtime_bundle.get("base_profile") or _get_field(character, "description", "")),
-        ("【性格与表达风格】", runtime_bundle.get("personality") or ""),
-        ("【当前剧情场景】", runtime_bundle.get("scenario") or ""),
-        ("【世界规则/补充设定】", runtime_bundle.get("world_rules") or ""),
-        ("【回复约束】", runtime_bundle.get("post_history_rules") or ""),
-    ]
-    runtime_context = "\n\n".join(f"{title}\n{content}" for title, content in runtime_context_blocks if str(content).strip())
-
-    system_prompt = """你是角色扮演对话的长期记忆整理器。请把聊天内容整理成结构化长期记忆，供后续继续聊天时使用。
-
-输出规则：
-1. 必须按以下五个标题输出：
-[用户画像]
-[用户偏好]
-[近期事件]
-[关系状态]
-[待跟进事项]
-2. 每个标题下使用简洁中文要点列表，每行一个要点，统一以"- "开头。
-3. 没有信息的分区也要保留标题，但下面可以写"- 暂无稳定信息"。
-4. 只保留未来会影响互动的长期信息，不写流水账。
-5. "待跟进事项"只记录后续值得主动提起、兑现承诺或继续推进的话题，不要把普通寒暄塞进去。
-6. 你在整理时必须参考当前运行时设定，尤其要区分角色关系、剧情状态、世界规则，不要把不稳定的临时台词误写成长期事实。
-7. 不编造，不解释过程，不输出多余文字。"""
-
-    user_prompt = f"""当前角色：{_get_field(character, 'name', '未命名角色')}
-当前已有长期记忆：
-{existing_summary or '（暂无）'}
-
-当前已激活关联资产：
-{related_assets_text}
-
-当前运行时上下文：
-{runtime_context or '（暂无额外上下文）'}
-
-这次需要整理进长期记忆的新对话：
-{conversation_text}
-
-请输出更新后的结构化长期记忆。"""
-
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
 
 
 def build_message_preview(

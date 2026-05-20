@@ -1,10 +1,10 @@
 """chat_stream_service 单元测试。
 
 覆盖 SSE 响应构建、Done payload 序列化安全、流后处理绑定等纯逻辑。
-移除了仅验证 dict 拼装的浅薄测试，替换为验证业务逻辑的深度测试。
 """
 
 import json
+from unittest.mock import patch
 
 from services.chat_stream_service import (
     _build_stream_done_payload,
@@ -163,52 +163,76 @@ class TestBindStreamPostprocess:
 # Stream Postprocess Builders — 三种后处理工厂
 # ============================================================
 class TestStreamPostprocessBuilders:
-    def test_main_postprocess_returns_callable(self):
-        fn = _build_main_stream_postprocess(
-            user_id=1,
-            guest_ip="127.0.0.1",
-            character_id="c1",
-            estimate={"chars": 10, "tokens": 5},
-            user_message="hi",
-            character={},
-        )
-        assert callable(fn)
+    """验证三种 builder 返回可调用对象，且调用时将 kwargs 正确传递给底层函数。"""
 
-    def test_guest_postprocess_returns_callable(self):
-        fn = _build_guest_stream_postprocess(
-            guest_ip="127.0.0.1",
-            character_id="c1",
-            estimate={"chars": 10, "tokens": 5},
-        )
-        assert callable(fn)
+    def test_main_builder_invokes_postprocess_with_merged_kwargs(self):
+        with patch(
+            "services.chat_stream._postprocess_main_stream_result"
+        ) as mock_post:
+            mock_post.return_value = iter(["ok"])
+            fn = _build_main_stream_postprocess(
+                user_id=1, guest_ip="127.0.0.1", character_id="c1",
+                estimate={"chars": 10, "tokens": 5}, user_message="hi", character={"name": "Test"},
+            )
+            result = list(fn("hello", delta={"mood": "warm"}))
+            assert result == ["ok"]
+            call_kwargs = mock_post.call_args.kwargs
+            assert call_kwargs["final_text"] == "hello"
+            assert call_kwargs["delta"] == {"mood": "warm"}
+            assert call_kwargs["user_id"] == 1
+            assert call_kwargs["character_id"] == "c1"
+            assert call_kwargs["user_message"] == "hi"
+            assert call_kwargs["character"] == {"name": "Test"}
 
-    def test_retry_postprocess_returns_callable(self):
-        fn = _build_retry_stream_postprocess(
-            user_id=1,
-            guest_ip="127.0.0.1",
-            character_id="c1",
-            message_id="m1",
-            endpoint="/api/chat/regenerate",
-            estimate={"chars": 10, "tokens": 5},
-            is_append=False,
-            base_reply="old",
-            operation="regenerate",
-        )
-        assert callable(fn)
+    def test_guest_builder_invokes_postprocess_with_merged_kwargs(self):
+        with patch(
+            "services.chat_stream._postprocess_guest_stream_result"
+        ) as mock_post:
+            mock_post.return_value = iter(["ok"])
+            fn = _build_guest_stream_postprocess(
+                guest_ip="10.0.0.1", character_id="c2",
+                estimate={"chars": 5, "tokens": 2},
+            )
+            list(fn("hi"))
+            call_kwargs = mock_post.call_args.kwargs
+            assert call_kwargs["final_text"] == "hi"
+            assert call_kwargs["guest_ip"] == "10.0.0.1"
+            assert call_kwargs["character_id"] == "c2"
 
-    def test_all_builders_return_callable(self):
-        main_fn = _build_main_stream_postprocess(
-            user_id=1, guest_ip="127.0.0.1", character_id="c1",
-            estimate={"chars": 10, "tokens": 5}, user_message="hi", character={},
-        )
-        guest_fn = _build_guest_stream_postprocess(
-            guest_ip="127.0.0.1", character_id="c1",
-            estimate={"chars": 10, "tokens": 5},
-        )
-        retry_fn = _build_retry_stream_postprocess(
-            user_id=1, guest_ip="127.0.0.1", character_id="c1",
-            message_id="m1", endpoint="/api/chat/regenerate",
-            estimate={"chars": 10, "tokens": 5},
-            is_append=False, base_reply="old", operation="regenerate",
-        )
-        assert all(callable(f) for f in [main_fn, guest_fn, retry_fn])
+    def test_retry_builder_invokes_postprocess_with_merged_kwargs(self):
+        with patch(
+            "services.chat_stream._postprocess_regenerate_or_continue_result"
+        ) as mock_post:
+            mock_post.return_value = iter(["ok"])
+            fn = _build_retry_stream_postprocess(
+                user_id=1, guest_ip="127.0.0.1", character_id="c3",
+                message_id="m99", endpoint="/api/chat/regenerate",
+                estimate={"chars": 10, "tokens": 5},
+                is_append=True, base_reply="old reply", operation="regenerate",
+            )
+            list(fn("new reply", delta={"affection": 5}))
+            call_kwargs = mock_post.call_args.kwargs
+            assert call_kwargs["final_text"] == "new reply"
+            assert call_kwargs["delta"] == {"affection": 5}
+            assert call_kwargs["message_id"] == "m99"
+            assert call_kwargs["is_append"] is True
+            assert call_kwargs["base_reply"] == "old reply"
+            assert call_kwargs["operation"] == "regenerate"
+
+    def test_bound_fn_preserves_kwargs_across_multiple_calls(self):
+        """多次调用同一 bound 函数时，kwargs 在每次调用中保持一致。"""
+        with patch(
+            "services.chat_stream._postprocess_main_stream_result"
+        ) as mock_post:
+            mock_post.return_value = iter(["a"])
+            fn = _build_main_stream_postprocess(
+                user_id=42, guest_ip="127.0.0.1", character_id="c1",
+                estimate={"chars": 10, "tokens": 5}, user_message="hi", character={},
+            )
+            list(fn("first"))
+            list(fn("second"))
+            assert mock_post.call_count == 2
+            assert mock_post.call_args_list[0].kwargs["final_text"] == "first"
+            assert mock_post.call_args_list[1].kwargs["final_text"] == "second"
+            assert mock_post.call_args_list[0].kwargs["user_id"] == 42
+            assert mock_post.call_args_list[1].kwargs["user_id"] == 42

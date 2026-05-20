@@ -45,15 +45,19 @@ class TestGetCharacterById:
 
 
 class TestGetAvatarUrl:
-    def test_found(self, db_conn):
+    def test_returns_db_value(self, db_conn):
         from repositories.character_repository import list_visible_characters, get_avatar_url
         chars = list_visible_characters(db_conn)
         if not chars:
             pytest.skip("No characters in test DB")
         char_id = chars[0]["id"]
+        # 直接从 DB 获取真实值作为预期
+        row = db_conn.execute(
+            "SELECT avatar_url FROM characters WHERE id = %s", (char_id,)
+        ).fetchone()
+        expected = row["avatar_url"] if row else None
         result = get_avatar_url(db_conn, char_id)
-        # avatar_url 可能为 None（取决于测试数据）
-        assert result is None or isinstance(result, str)
+        assert result == expected
 
     def test_not_found(self, db_conn):
         from repositories.character_repository import get_avatar_url

@@ -235,26 +235,30 @@ class TestSanitizeStateDelta:
 class TestResetDailyFieldsIfNeeded:
     def test_same_day_no_reset(self):
         from services.character_state import _get_today_date
+        from core.character_state_snapshot import CharacterStateSnapshot
         today = _get_today_date()
-        state = {
-            "_daily_reset_date": today,
-            "_daily_event_counts": {"light_chat": 3},
-            "_daily_affection_gained": 10,
-        }
-        result = _reset_daily_fields_if_needed(state)
-        assert result["_daily_event_counts"] == {"light_chat": 3}
-        assert result["_daily_affection_gained"] == 10
+        snapshot = CharacterStateSnapshot(
+            user_id=1, character_id="c1",
+            daily_reset_date=today,
+            daily_event_counts={"light_chat": 3},
+            daily_affection_gained=10,
+        )
+        result = _reset_daily_fields_if_needed(snapshot)
+        assert result.daily_event_counts == {"light_chat": 3}
+        assert result.daily_affection_gained == 10
 
     def test_different_day_resets(self):
-        state = {
-            "_daily_reset_date": "2020-01-01",
-            "_daily_event_counts": {"light_chat": 5},
-            "_daily_affection_gained": 15,
-        }
-        result = _reset_daily_fields_if_needed(state)
-        assert result["_daily_event_counts"] == {}
-        assert result["_daily_affection_gained"] == 0
-        assert result["_daily_reset_date"] != "2020-01-01"
+        from core.character_state_snapshot import CharacterStateSnapshot
+        snapshot = CharacterStateSnapshot(
+            user_id=1, character_id="c1",
+            daily_reset_date="2020-01-01",
+            daily_event_counts={"light_chat": 5},
+            daily_affection_gained=15,
+        )
+        result = _reset_daily_fields_if_needed(snapshot)
+        assert result.daily_event_counts == {}
+        assert result.daily_affection_gained == 0
+        assert result.daily_reset_date != "2020-01-01"
 
 
 # ============================================================

@@ -69,15 +69,11 @@ class TestCircuitBreakerStateMachine:
         assert state["failure_count"] == 0
 
     def test_half_open_failure_transitions_back_to_open(self):
-        cb = CircuitBreaker(failure_threshold=2, open_timeout_seconds=0)
+        cb = CircuitBreaker(failure_threshold=2, open_timeout_seconds=0, half_open_max_requests=2)
         for _ in range(2):
             cb.report_failure("ep1")
-        cb.before_request("ep1")  # 进入 HALF_OPEN + 消耗一个请求配额
-        cb.before_request("ep1")  # 第二个 half_open 请求被拒绝 (CircuitBreakerOpenError 被捕获)
-        try:
-            cb.report_failure("ep1")
-        except Exception:
-            pass
+        cb.before_request("ep1")  # OPEN→HALF_OPEN（消耗探测配额 1/2）
+        cb.report_failure("ep1")  # 探测失败 → 回到 OPEN
         state = cb.get_state("ep1")
         assert state["state"] == "open"
 

@@ -13,8 +13,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import HTTPException
-
 from core.config import RECENT_MESSAGE_WINDOW, logger, utc_now
 from core.database import ConnType
 from services.prompt_assembler import build_layered_chat_messages
@@ -25,31 +23,14 @@ from services.chat_query import (
     get_character_or_404,
     get_message_for_regenerate_or_continue,
     get_linked_assets,
+    message_projection,
+    _message_with_id_projection,
 )
 from services.chat_send import (
     _build_user_stream_messages_and_budget,
     _build_stream_prepare_result,
     _prepare_prompt_context_result,
 )
-
-
-# ============================================================
-# 消息投影
-# ============================================================
-def message_projection(role: Any, content: Any) -> dict[str, Any]:
-    """将 role/content 组装为消息字典。供 chat_send 和 chat_retry 共用。"""
-    return {
-        "role": role,
-        "content": content,
-    }
-
-
-def _message_with_id_projection(message_id: Any, role: Any, content: Any) -> dict[str, Any]:
-    return {
-        "id": str(message_id),
-        "role": role,
-        "content": content,
-    }
 
 
 # ============================================================

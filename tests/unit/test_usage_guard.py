@@ -175,13 +175,13 @@ class TestEnforceDailyBudget:
         assert usage["total_tokens"] == 5000
 
     def test_over_budget_raises_429(self):
-        from fastapi import HTTPException
+        from core.exceptions import BudgetExceededError
 
         result = FakeQueryResult(
             one=FakeRow({"request_count": 10, "total_tokens": 9000})
         )
         conn = FakeSequenceConn([result])
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(BudgetExceededError) as exc_info:
             enforce_daily_budget(
                 conn,
                 user_id=1,
@@ -189,7 +189,6 @@ class TestEnforceDailyBudget:
                 token_limit=10000,
                 token_limit_detail="每日额度已用完",
             )
-        assert exc_info.value.status_code == 429
         assert "每日额度已用完" in exc_info.value.detail
 
     def test_exact_budget_passes(self):

@@ -40,6 +40,7 @@ from services.chat_query import (
     get_linked_assets,
     count_chat_messages,
     get_last_chat_time,
+    message_projection,
 )
 
 
@@ -321,7 +322,6 @@ def _build_guest_stream_messages(
     message_text: str,
     guest_history: list[Any],
 ) -> tuple[str, list[dict[str, str]]]:
-    from services.chat_retry import message_projection
     clean_text = _normalize_non_empty_message(message_text)
     fake_history = [
         message_projection(item.role, item.content)
