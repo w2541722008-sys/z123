@@ -30,12 +30,6 @@ fi
 # ============================================================
 
 # --- Git 危险操作 ---
-if echo "$COMMAND" | grep -qE '\bgit push\b'; then
-    echo "⛔ 安全护栏拦截：git push 被禁止。请手动在终端执行推送操作。"
-    echo "   如需自动化推送，请在 settings.json 中移除本护栏或添加例外规则。"
-    exit 2
-fi
-
 if echo "$COMMAND" | grep -qE '\bgit reset --hard\b'; then
     echo "⛔ 安全护栏拦截：git reset --hard 会不可逆地丢失本地修改。"
     echo "   请改用 git stash 或手动确认后到终端执行。"
