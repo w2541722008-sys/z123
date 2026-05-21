@@ -5,16 +5,16 @@
 ## 项目现状
 
 - 用户端：`index.html` + `frontend/modules/`（18 个 JS 模块）
-- 管理后台：`frontend/admin/index.html` + `frontend/admin/js/`（17 个 JS 模块）
+- 管理后台：`frontend/admin/index.html` + `frontend/admin/js/`（18 个 JS 模块）
 - 后端 API：`/api/*`（FastAPI，路由 → 服务 → 仓库 三层架构）
 - 健康检查：`/api/health`
 
 ## 技术栈
 
 - 后端：Python 3.10+、FastAPI、Uvicorn、httpx、psycopg2（ThreadedConnectionPool）
-- 数据库：PostgreSQL（Supabase）+ Alembic 迁移（13 个版本）
+- 数据库：PostgreSQL（Supabase）+ Alembic 迁移（14 个版本）
 - 前端：原生 HTML/CSS/JavaScript（IIFE 模块模式）
-- 测试：pytest（843 tests）+ Node.js 脚本
+- 测试：pytest（~1077 tests）+ Node.js 脚本
 
 ## 本地开发
 
@@ -39,7 +39,7 @@ pip install -r requirements.txt
 cd backend && python3 -m alembic upgrade head
 ```
 
-当前迁移版本（13 个）：001~012 + 一个命名版本（`5f37709aff83_add_life_profile`）。
+当前迁移版本（14 个）：001~014。
 
 ### 4) 启动后端
 

@@ -12,8 +12,9 @@
 
 - 配置与工具：`config.js`、`utils.js`
 - API 与认证：`api.js`、`auth.js`
-- 业务主流程：`app.js`、`chat.js`、`chat-menu.js`、`chat-status-panel.js`
-- 页面能力：`char-detail.js`、`greeting-select.js`
+- 业务主流程：`app.js`、`chat.js`、`chat-actions.js`、`chat-menu.js`、`chat-status-panel.js`
+- 聊天渲染与搜索：`chat-render.js`、`chat-stream.js`、`chat-search.js`
+- 页面能力：`char-detail.js`、`forgot-password.js`、`greeting-select.js`
 - UI 与启动：`ui.js`、`error-boundary.js`、`init.js`
 
 API 基地址：生产环境默认 `/api`（Nginx 同源代理），开发环境通过 `shared-utils.resolveApiBase()` 适配。

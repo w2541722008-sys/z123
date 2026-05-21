@@ -7,7 +7,7 @@
 
 ## 前端模块结构
 
-当前后台 JS 模块共 17 个（`frontend/admin/js/`）：
+当前后台 JS 模块共 18 个（`frontend/admin/js/`）：
 
 - `utils.js`
 - `api.js`

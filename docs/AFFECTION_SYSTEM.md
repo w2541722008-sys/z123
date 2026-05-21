@@ -214,7 +214,7 @@ AI 只判断"发生了什么事"，不判断"加多少分"：
 
 ### 7.2 手动配置方式
 
-目前需要手动通过 SQL 或 Python 脚本写入，后续可在 `cli/card_analyze.py` 里自动从 `character_book` 词条提取。
+目前需要手动通过 SQL 或 Python 脚本写入，后续可从 `character_book` 词条自动提取。
 
 **示例（PostgreSQL 直接写）**：
 ```sql

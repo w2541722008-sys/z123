@@ -19,13 +19,12 @@
 
 ## 数据库
 
-- **Schema 管理**：使用 Alembic 迁移框架（`backend/alembic/versions/`，共 13 个版本）
+- **Schema 管理**：使用 Alembic 迁移框架（`backend/alembic/versions/`，共 14 个版本）
 - **初始化**：`cd backend && python3 -m alembic upgrade head`
 
 ## 历史记录
 
-- **[聊天性能修复规划](聊天性能修复规划.md)** — 2026-05-18 性能审查与修复记录
-- **[旗舰产品上线修复路线](旗舰产品上线修复路线.md)** — 2026-05-18 三阶段修复全记录（已完成）
+- 历史修复记录和规划文档已归档至 commit 历史，详见 `git log`。
 
 ---
 
