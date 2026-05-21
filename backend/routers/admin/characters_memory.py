@@ -5,32 +5,23 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
 from core.schemas import MemoryCategoryPayload, MemoryEntryPayload
+from repositories import character_admin_repository as admin_repo
+from repositories import character_repository as char_repo
 
 from ._helpers import _assert_memory_category_owned
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
 
-@router.get("/admin/character/{character_id}/memories")
-def list_memories(character_id: str, conn: ConnType = Depends(get_db_dep)) -> list[dict[str, object]]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
+def _require_character(conn: ConnType, character_id: str) -> None:
+    if not char_repo.check_character_exists(conn, character_id):
         raise HTTPException(status_code=404, detail="角色不存在")
 
-    rows = conn.execute(
-        """
-        SELECT id, keywords, trigger_logic, content, category_id, position,
-               priority, is_active, comment, selective, constant, sticky, cooldown,
-               created_at, updated_at
-        FROM character_memories
-        WHERE character_id = %s
-        ORDER BY priority ASC, id ASC
-        """,
-        (character_id,),
-    ).fetchall()
 
+@router.get("/admin/character/{character_id}/memories")
+def list_memories(character_id: str, conn: ConnType = Depends(get_db_dep)) -> list[dict[str, object]]:
+    _require_character(conn, character_id)
+    rows = admin_repo.admin_list_memories(conn, character_id)
     return [
         {
             "id": row["id"],
@@ -59,39 +50,25 @@ def create_memory(
     body: MemoryEntryPayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
-        raise HTTPException(status_code=404, detail="角色不存在")
-
+    _require_character(conn, character_id)
     _assert_memory_category_owned(conn, character_id, body.category_id)
 
-    cur = conn.execute(
-        """
-        INSERT INTO character_memories
-        (character_id, keywords, trigger_logic, content, category_id, position,
-         priority, is_active, comment, selective, constant, sticky, cooldown)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """,
-        (
-            character_id,
-            body.keywords,
-            body.trigger_logic,
-            body.content,
-            body.category_id,
-            body.position,
-            body.priority,
-            body.is_active,
-            body.comment,
-            body.selective,
-            body.constant,
-            body.sticky,
-            body.cooldown,
-        ),
+    new_id = admin_repo.admin_create_memory(
+        conn,
+        character_id,
+        keywords=body.keywords,
+        trigger_logic=body.trigger_logic,
+        content=body.content,
+        category_id=body.category_id,
+        position=body.position,
+        priority=body.priority,
+        is_active=body.is_active,
+        comment=body.comment,
+        selective=body.selective,
+        constant=body.constant,
+        sticky=body.sticky,
+        cooldown=body.cooldown,
     )
-    new_id = cur.fetchone()["id"]
     conn.commit()
     return {"id": new_id, "ok": True}
 
@@ -103,51 +80,27 @@ def update_memory(
     body: MemoryEntryPayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
-    mem = conn.execute(
-        "SELECT id FROM character_memories WHERE id = %s AND character_id = %s",
-        (memory_id, character_id),
-    ).fetchone()
-    if not mem:
+    if not admin_repo.admin_get_memory(conn, memory_id, character_id):
         raise HTTPException(status_code=404, detail="记忆条目不存在")
-
     _assert_memory_category_owned(conn, character_id, body.category_id)
 
-    conn.execute(
-        """
-        UPDATE character_memories SET
-            keywords = %s,
-            trigger_logic = %s,
-            content = %s,
-            category_id = %s,
-            position = %s,
-            priority = %s,
-            is_active = %s,
-            comment = %s,
-            selective = %s,
-            constant = %s,
-            sticky = %s,
-            cooldown = %s,
-            updated_at = now()
-        WHERE id = %s
-        """,
-        (
-            body.keywords,
-            body.trigger_logic,
-            body.content,
-            body.category_id,
-            body.position,
-            body.priority,
-            body.is_active,
-            body.comment,
-            body.selective,
-            body.constant,
-            body.sticky,
-            body.cooldown,
-            memory_id,
-        ),
+    admin_repo.admin_update_memory(
+        conn,
+        memory_id,
+        keywords=body.keywords,
+        trigger_logic=body.trigger_logic,
+        content=body.content,
+        category_id=body.category_id,
+        position=body.position,
+        priority=body.priority,
+        is_active=body.is_active,
+        comment=body.comment,
+        selective=body.selective,
+        constant=body.constant,
+        sticky=body.sticky,
+        cooldown=body.cooldown,
     )
     conn.commit()
-
     return {"ok": True}
 
 
@@ -157,40 +110,18 @@ def delete_memory(
     memory_id: str,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
-    mem = conn.execute(
-        "SELECT id FROM character_memories WHERE id = %s AND character_id = %s",
-        (memory_id, character_id),
-    ).fetchone()
-    if not mem:
+    if not admin_repo.admin_get_memory(conn, memory_id, character_id):
         raise HTTPException(status_code=404, detail="记忆条目不存在")
 
-    conn.execute(
-        "DELETE FROM character_memories WHERE id = %s",
-        (memory_id,),
-    )
+    admin_repo.admin_delete_memory(conn, memory_id)
     conn.commit()
-
     return {"ok": True}
 
 
 @router.get("/admin/character/{character_id}/memory-categories")
 def list_memory_categories(character_id: str, conn: ConnType = Depends(get_db_dep)) -> list[dict[str, object]]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
-        raise HTTPException(status_code=404, detail="角色不存在")
-
-    rows = conn.execute(
-        """
-        SELECT id, name, description, color, sort_order, created_at, updated_at
-        FROM memory_categories
-        WHERE character_id = %s
-        ORDER BY sort_order ASC, id ASC
-        """,
-        (character_id,),
-    ).fetchall()
-
+    _require_character(conn, character_id)
+    rows = admin_repo.admin_list_memory_categories(conn, character_id)
     return [
         {
             "id": row["id"],
@@ -211,28 +142,16 @@ def create_memory_category(
     body: MemoryCategoryPayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
-        raise HTTPException(status_code=404, detail="角色不存在")
+    _require_character(conn, character_id)
 
-    cur = conn.execute(
-        """
-        INSERT INTO memory_categories
-        (character_id, name, description, color, sort_order)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id
-        """,
-        (
-            character_id,
-            body.name,
-            body.description,
-            body.color,
-            body.sort_order,
-        ),
+    new_id = admin_repo.admin_create_memory_category(
+        conn,
+        character_id,
+        name=body.name,
+        description=body.description,
+        color=body.color,
+        sort_order=body.sort_order,
     )
-    new_id = cur.fetchone()["id"]
     conn.commit()
     return {"ok": True, "id": new_id}
 
@@ -244,33 +163,18 @@ def update_memory_category(
     body: MemoryCategoryPayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
-    cat = conn.execute(
-        "SELECT id FROM memory_categories WHERE id = %s AND character_id = %s",
-        (category_id, character_id),
-    ).fetchone()
-    if not cat:
+    if not admin_repo.admin_get_memory_category(conn, category_id, character_id):
         raise HTTPException(status_code=404, detail="记忆分类不存在")
 
-    conn.execute(
-        """
-        UPDATE memory_categories SET
-            name = %s,
-            description = %s,
-            color = %s,
-            sort_order = %s,
-            updated_at = now()
-        WHERE id = %s
-        """,
-        (
-            body.name,
-            body.description,
-            body.color,
-            body.sort_order,
-            category_id,
-        ),
+    admin_repo.admin_update_memory_category(
+        conn,
+        category_id,
+        name=body.name,
+        description=body.description,
+        color=body.color,
+        sort_order=body.sort_order,
     )
     conn.commit()
-
     return {"ok": True}
 
 
@@ -280,30 +184,18 @@ def delete_memory_category(
     category_id: str,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
-    cat = conn.execute(
-        "SELECT id FROM memory_categories WHERE id = %s AND character_id = %s",
-        (category_id, character_id),
-    ).fetchone()
-    if not cat:
+    if not admin_repo.admin_get_memory_category(conn, category_id, character_id):
         raise HTTPException(status_code=404, detail="记忆分类不存在")
 
-    mem_count = conn.execute(
-        "SELECT COUNT(*) FROM character_memories WHERE category_id = %s",
-        (category_id,),
-    ).fetchone()["count"]
-
+    mem_count = admin_repo.admin_count_memories_in_category(conn, category_id)
     if mem_count > 0:
         raise HTTPException(
             status_code=400,
             detail=f"该分类下还有 {mem_count} 个记忆条目，请先移除或修改这些条目",
         )
 
-    conn.execute(
-        "DELETE FROM memory_categories WHERE id = %s",
-        (category_id,),
-    )
+    admin_repo.admin_delete_memory_category(conn, category_id)
     conn.commit()
-
     return {"ok": True}
 
 
@@ -313,26 +205,11 @@ def memory_category_delete_impact(
     category_id: str,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
-    category = conn.execute(
-        """
-        SELECT id, name
-        FROM memory_categories
-        WHERE id = %s AND character_id = %s
-        """,
-        (category_id, character_id),
-    ).fetchone()
+    category = admin_repo.admin_get_memory_category_for_impact(conn, category_id, character_id)
     if not category:
         raise HTTPException(status_code=404, detail="记忆分类不存在")
 
-    memories = conn.execute(
-        """
-        SELECT id, keywords, comment
-        FROM character_memories
-        WHERE character_id = %s AND category_id = %s
-        ORDER BY priority ASC, id ASC
-        """,
-        (character_id, category_id),
-    ).fetchall()
+    memories = admin_repo.admin_list_memories_in_category(conn, character_id, category_id)
 
     return {
         "character_id": character_id,

@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.auth import CurrentUser, get_admin_user, get_current_user
 from core.database import ConnType, get_db_dep
 from core.schemas import GreetingPayload, StorylinePayload
+from repositories import character_admin_repository as admin_repo
+from repositories import character_repository as char_repo
 from utils.json_utils import to_json_string
 
 from ._helpers import _write_audit_log, _assert_storyline_owned
@@ -14,25 +16,15 @@ from ._helpers import _write_audit_log, _assert_storyline_owned
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
 
-@router.get("/admin/character/{character_id}/greetings")
-def list_greetings(character_id: str, conn: ConnType = Depends(get_db_dep)) -> list[dict[str, Any]]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
+def _require_character(conn: ConnType, character_id: str) -> None:
+    if not char_repo.check_character_exists(conn, character_id):
         raise HTTPException(status_code=404, detail="角色不存在")
 
-    rows = conn.execute(
-        """
-        SELECT id, story_phase, mood, content, storyline_id,
-               priority, is_active, use_count, comment, created_at, updated_at
-        FROM character_greetings
-        WHERE character_id = %s
-        ORDER BY story_phase, priority ASC, id ASC
-        """,
-        (character_id,),
-    ).fetchall()
 
+@router.get("/admin/character/{character_id}/greetings")
+def list_greetings(character_id: str, conn: ConnType = Depends(get_db_dep)) -> list[dict[str, Any]]:
+    _require_character(conn, character_id)
+    rows = admin_repo.admin_list_greetings(conn, character_id)
     return [
         {
             "id": row["id"],
@@ -57,34 +49,20 @@ def create_greeting(
     body: GreetingPayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
-        raise HTTPException(status_code=404, detail="角色不存在")
-
+    _require_character(conn, character_id)
     _assert_storyline_owned(conn, character_id, body.storyline_id)
 
-    cur = conn.execute(
-        """
-        INSERT INTO character_greetings
-        (character_id, story_phase, mood, content, storyline_id,
-         priority, is_active, comment)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """,
-        (
-            character_id,
-            body.story_phase,
-            body.mood,
-            body.content,
-            body.storyline_id,
-            body.priority,
-            body.is_active,
-            body.comment,
-        ),
+    new_id = admin_repo.admin_create_greeting(
+        conn,
+        character_id,
+        story_phase=body.story_phase,
+        mood=body.mood,
+        content=body.content,
+        storyline_id=body.storyline_id,
+        priority=body.priority,
+        is_active=body.is_active,
+        comment=body.comment,
     )
-    new_id = cur.fetchone()["id"]
     conn.commit()
     return {"id": new_id, "ok": True}
 
@@ -96,41 +74,22 @@ def update_greeting(
     body: GreetingPayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    g = conn.execute(
-        "SELECT id FROM character_greetings WHERE id = %s AND character_id = %s",
-        (greeting_id, character_id),
-    ).fetchone()
-    if not g:
+    if not admin_repo.admin_get_greeting(conn, greeting_id, character_id):
         raise HTTPException(status_code=404, detail="开场白不存在")
-
     _assert_storyline_owned(conn, character_id, body.storyline_id)
 
-    conn.execute(
-        """
-        UPDATE character_greetings SET
-            story_phase = %s,
-            mood = %s,
-            content = %s,
-            storyline_id = %s,
-            priority = %s,
-            is_active = %s,
-            comment = %s,
-            updated_at = now()
-        WHERE id = %s
-        """,
-        (
-            body.story_phase,
-            body.mood,
-            body.content,
-            body.storyline_id,
-            body.priority,
-            body.is_active,
-            body.comment,
-            greeting_id,
-        ),
+    admin_repo.admin_update_greeting(
+        conn,
+        greeting_id,
+        story_phase=body.story_phase,
+        mood=body.mood,
+        content=body.content,
+        storyline_id=body.storyline_id,
+        priority=body.priority,
+        is_active=body.is_active,
+        comment=body.comment,
     )
     conn.commit()
-
     return {"ok": True}
 
 
@@ -140,42 +99,18 @@ def delete_greeting(
     greeting_id: str,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    g = conn.execute(
-        "SELECT id FROM character_greetings WHERE id = %s AND character_id = %s",
-        (greeting_id, character_id),
-    ).fetchone()
-    if not g:
+    if not admin_repo.admin_get_greeting(conn, greeting_id, character_id):
         raise HTTPException(status_code=404, detail="开场白不存在")
 
-    conn.execute(
-        "DELETE FROM character_greetings WHERE id = %s",
-        (greeting_id,),
-    )
+    admin_repo.admin_delete_greeting(conn, greeting_id)
     conn.commit()
-
     return {"ok": True}
 
 
 @router.get("/admin/character/{character_id}/storylines")
 def list_storylines(character_id: str, conn: ConnType = Depends(get_db_dep)) -> list[dict[str, Any]]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
-        raise HTTPException(status_code=404, detail="角色不存在")
-
-    rows = conn.execute(
-        """
-        SELECT id, storyline_id, title, name, description, unlock_score,
-               unlock_condition, stages, is_default,
-               is_active, sort_order, created_at, updated_at
-        FROM character_storylines
-        WHERE character_id = %s
-        ORDER BY sort_order ASC, id ASC
-        """,
-        (character_id,),
-    ).fetchall()
-
+    _require_character(conn, character_id)
+    rows = admin_repo.admin_list_storylines(conn, character_id)
     return [
         {
             "id": row["id"],
@@ -202,42 +137,25 @@ def create_storyline(
     body: StorylinePayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
-        raise HTTPException(status_code=404, detail="角色不存在")
+    _require_character(conn, character_id)
 
     if body.is_default:
-        conn.execute(
-            "UPDATE character_storylines SET is_default = 0 WHERE character_id = %s",
-            (character_id,),
-        )
+        admin_repo.admin_clear_default_storyline(conn, character_id)
 
-    cur = conn.execute(
-        """
-        INSERT INTO character_storylines
-        (character_id, storyline_id, title, name, description,
-         unlock_score, unlock_condition, stages,
-         is_default, is_active, sort_order)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """,
-        (
-            character_id,
-            body.storyline_id,
-            body.title,
-            body.name,
-            body.description,
-            body.unlock_score,
-            body.unlock_condition,
-            to_json_string(body.stages),
-            body.is_default,
-            body.is_active,
-            body.sort_order,
-        ),
+    new_id = admin_repo.admin_create_storyline(
+        conn,
+        character_id,
+        storyline_id=body.storyline_id,
+        title=body.title,
+        name=body.name,
+        description=body.description,
+        unlock_score=body.unlock_score,
+        unlock_condition=body.unlock_condition,
+        stages_json=to_json_string(body.stages),
+        is_default=body.is_default,
+        is_active=body.is_active,
+        sort_order=body.sort_order,
     )
-    new_id = cur.fetchone()["id"]
     conn.commit()
     return {"id": new_id, "ok": True}
 
@@ -249,52 +167,27 @@ def update_storyline(
     body: StorylinePayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    sl = conn.execute(
-        "SELECT id FROM character_storylines WHERE id = %s AND character_id = %s",
-        (storyline_id, character_id),
-    ).fetchone()
-    if not sl:
+    if not admin_repo.admin_get_storyline(conn, storyline_id, character_id):
         raise HTTPException(status_code=404, detail="剧情线不存在")
 
     if body.is_default:
-        conn.execute(
-            """UPDATE character_storylines SET is_default = 0
-               WHERE character_id = %s AND id != %s""",
-            (character_id, storyline_id),
-        )
+        admin_repo.admin_clear_default_storyline(conn, character_id, exclude_id=storyline_id)
 
-    conn.execute(
-        """
-        UPDATE character_storylines SET
-            storyline_id = %s,
-            title = %s,
-            name = %s,
-            description = %s,
-            unlock_score = %s,
-            unlock_condition = %s,
-            stages = %s,
-            is_default = %s,
-            is_active = %s,
-            sort_order = %s,
-            updated_at = now()
-        WHERE id = %s
-        """,
-        (
-            body.storyline_id,
-            body.title,
-            body.name,
-            body.description,
-            body.unlock_score,
-            body.unlock_condition,
-            to_json_string(body.stages),
-            body.is_default,
-            body.is_active,
-            body.sort_order,
-            storyline_id,
-        ),
+    admin_repo.admin_update_storyline(
+        conn,
+        storyline_id,
+        storyline_id_field=body.storyline_id,
+        title=body.title,
+        name=body.name,
+        description=body.description,
+        unlock_score=body.unlock_score,
+        unlock_condition=body.unlock_condition,
+        stages_json=to_json_string(body.stages),
+        is_default=body.is_default,
+        is_active=body.is_active,
+        sort_order=body.sort_order,
     )
     conn.commit()
-
     return {"ok": True}
 
 
@@ -305,30 +198,12 @@ def delete_storyline(
     current_user: CurrentUser = Depends(get_current_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    sl = conn.execute(
-        "SELECT id, name FROM character_storylines WHERE id = %s AND character_id = %s",
-        (storyline_id, character_id),
-    ).fetchone()
+    sl = admin_repo.admin_get_storyline(conn, storyline_id, character_id)
     if not sl:
         raise HTTPException(status_code=404, detail="剧情线不存在")
 
-    conn.execute(
-        "UPDATE character_greetings SET storyline_id = NULL WHERE storyline_id = %s",
-        (storyline_id,),
-    )
-    conn.execute(
-        "UPDATE character_post_rules SET storyline_id = NULL WHERE storyline_id = %s",
-        (storyline_id,),
-    )
-    conn.execute(
-        "UPDATE story_events SET unlocked_storyline_id = NULL WHERE unlocked_storyline_id = %s",
-        (storyline_id,),
-    )
-
-    conn.execute(
-        "DELETE FROM character_storylines WHERE id = %s",
-        (storyline_id,),
-    )
+    admin_repo.admin_detach_storyline_refs(conn, storyline_id)
+    admin_repo.admin_delete_storyline(conn, storyline_id)
 
     _write_audit_log(
         conn,
@@ -342,9 +217,7 @@ def delete_storyline(
             "storyline_name": sl["name"],
         },
     )
-
     conn.commit()
-
     return {"ok": True}
 
 
@@ -354,44 +227,13 @@ def storyline_delete_impact(
     storyline_id: str,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    storyline = conn.execute(
-        """
-        SELECT id, name, is_default
-        FROM character_storylines
-        WHERE id = %s AND character_id = %s
-        """,
-        (storyline_id, character_id),
-    ).fetchone()
+    storyline = admin_repo.admin_get_storyline_for_impact(conn, storyline_id, character_id)
     if not storyline:
         raise HTTPException(status_code=404, detail="剧情线不存在")
 
-    greetings = conn.execute(
-        """
-        SELECT id, story_phase, content
-        FROM character_greetings
-        WHERE character_id = %s AND storyline_id = %s
-        ORDER BY id ASC
-        """,
-        (character_id, storyline_id),
-    ).fetchall()
-    post_rules = conn.execute(
-        """
-        SELECT id, name
-        FROM character_post_rules
-        WHERE character_id = %s AND storyline_id = %s
-        ORDER BY id ASC
-        """,
-        (character_id, storyline_id),
-    ).fetchall()
-    unlock_events = conn.execute(
-        """
-        SELECT id, title
-        FROM story_events
-        WHERE character_id = %s AND unlocked_storyline_id = %s
-        ORDER BY id ASC
-        """,
-        (character_id, storyline_id),
-    ).fetchall()
+    greetings = admin_repo.admin_list_greetings_for_storyline(conn, character_id, storyline_id)
+    post_rules = admin_repo.admin_list_post_rules_for_storyline(conn, character_id, storyline_id)
+    unlock_events = admin_repo.admin_list_story_events_for_storyline(conn, character_id, storyline_id)
 
     return {
         "character_id": character_id,

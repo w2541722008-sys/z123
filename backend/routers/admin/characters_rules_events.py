@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
 from core.schemas import PostRulePayload, StoryEventPayload
+from repositories import character_admin_repository as admin_repo
+from repositories import character_repository as char_repo
 
 from ._helpers import (
     _assert_story_event_unlock_refs_owned,
@@ -17,25 +19,15 @@ from ._helpers import (
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
 
-@router.get("/admin/character/{character_id}/post-rules")
-def list_post_rules(character_id: str, conn: ConnType = Depends(get_db_dep)) -> list[dict[str, Any]]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
+def _require_character(conn: ConnType, character_id: str) -> None:
+    if not char_repo.check_character_exists(conn, character_id):
         raise HTTPException(status_code=404, detail="角色不存在")
 
-    rows = conn.execute(
-        """
-        SELECT id, name, content, storyline_id, story_phase,
-               priority, is_active, created_at, updated_at
-        FROM character_post_rules
-        WHERE character_id = %s
-        ORDER BY priority ASC, id ASC
-        """,
-        (character_id,),
-    ).fetchall()
 
+@router.get("/admin/character/{character_id}/post-rules")
+def list_post_rules(character_id: str, conn: ConnType = Depends(get_db_dep)) -> list[dict[str, Any]]:
+    _require_character(conn, character_id)
+    rows = admin_repo.admin_list_post_rules(conn, character_id)
     return [
         {
             "id": row["id"],
@@ -58,34 +50,19 @@ def create_post_rule(
     body: PostRulePayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
-        raise HTTPException(status_code=404, detail="角色不存在")
-
+    _require_character(conn, character_id)
     _assert_storyline_owned(conn, character_id, body.storyline_id)
 
-    story_phase_val = body.story_phase if body.story_phase else ""
-    cur = conn.execute(
-        """
-        INSERT INTO character_post_rules
-        (character_id, name, content, storyline_id, story_phase,
-         priority, is_active)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """,
-        (
-            character_id,
-            body.name,
-            body.content,
-            body.storyline_id,
-            story_phase_val,
-            body.priority,
-            body.is_active,
-        ),
+    new_id = admin_repo.admin_create_post_rule(
+        conn,
+        character_id,
+        name=body.name,
+        content=body.content,
+        storyline_id=body.storyline_id,
+        story_phase=body.story_phase if body.story_phase else "",
+        priority=body.priority,
+        is_active=body.is_active,
     )
-    new_id = cur.fetchone()["id"]
     conn.commit()
     return {"ok": True, "id": new_id}
 
@@ -97,40 +74,21 @@ def update_post_rule(
     body: PostRulePayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    rule = conn.execute(
-        "SELECT id FROM character_post_rules WHERE id = %s AND character_id = %s",
-        (rule_id, character_id),
-    ).fetchone()
-    if not rule:
+    if not admin_repo.admin_get_post_rule(conn, rule_id, character_id):
         raise HTTPException(status_code=404, detail="后置规则不存在")
-
     _assert_storyline_owned(conn, character_id, body.storyline_id)
 
-    story_phase_val = body.story_phase if body.story_phase else ""
-    conn.execute(
-        """
-        UPDATE character_post_rules SET
-            name = %s,
-            content = %s,
-            storyline_id = %s,
-            story_phase = %s,
-            priority = %s,
-            is_active = %s,
-            updated_at = now()
-        WHERE id = %s
-        """,
-        (
-            body.name,
-            body.content,
-            body.storyline_id,
-            story_phase_val,
-            body.priority,
-            body.is_active,
-            rule_id,
-        ),
+    admin_repo.admin_update_post_rule(
+        conn,
+        rule_id,
+        name=body.name,
+        content=body.content,
+        storyline_id=body.storyline_id,
+        story_phase=body.story_phase if body.story_phase else "",
+        priority=body.priority,
+        is_active=body.is_active,
     )
     conn.commit()
-
     return {"ok": True}
 
 
@@ -140,42 +98,18 @@ def delete_post_rule(
     rule_id: str,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    rule = conn.execute(
-        "SELECT id FROM character_post_rules WHERE id = %s AND character_id = %s",
-        (rule_id, character_id),
-    ).fetchone()
-    if not rule:
+    if not admin_repo.admin_get_post_rule(conn, rule_id, character_id):
         raise HTTPException(status_code=404, detail="后置规则不存在")
 
-    conn.execute(
-        "DELETE FROM character_post_rules WHERE id = %s",
-        (rule_id,),
-    )
+    admin_repo.admin_delete_post_rule(conn, rule_id)
     conn.commit()
-
     return {"ok": True}
 
 
 @router.get("/admin/character/{character_id}/story-events")
 def list_story_events(character_id: str, conn: ConnType = Depends(get_db_dep)) -> list[dict[str, Any]]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
-        raise HTTPException(status_code=404, detail="角色不存在")
-
-    rows = conn.execute(
-        """
-        SELECT id, title, description, trigger_score, trigger_custom_key,
-               unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
-               event_content, sort_order, is_active, created_at, updated_at
-        FROM story_events
-        WHERE character_id = %s
-        ORDER BY trigger_score ASC, sort_order ASC, id ASC
-        """,
-        (character_id,),
-    ).fetchall()
-
+    _require_character(conn, character_id)
+    rows = admin_repo.admin_list_story_events(conn, character_id)
     return [
         {
             "id": row["id"],
@@ -202,46 +136,27 @@ def create_story_event(
     body: StoryEventPayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    char = conn.execute(
-        "SELECT id FROM characters WHERE id = %s", (character_id,)
-    ).fetchone()
-    if not char:
-        raise HTTPException(status_code=404, detail="角色不存在")
-
+    _require_character(conn, character_id)
     _assert_story_event_unlock_refs_owned(
+        conn, character_id,
+        body.unlocked_memory_ids, body.unlocked_greeting_ids, body.unlocked_storyline_id,
+    )
+
+    new_id = admin_repo.admin_create_story_event(
         conn,
         character_id,
-        body.unlocked_memory_ids,
-        body.unlocked_greeting_ids,
-        body.unlocked_storyline_id,
+        event_id=str(uuid.uuid4()),
+        title=body.title,
+        description=body.description,
+        trigger_score=body.trigger_score,
+        trigger_custom_key=body.trigger_custom_key or "",
+        unlocked_memory_ids=body.unlocked_memory_ids or "",
+        unlocked_greeting_ids=body.unlocked_greeting_ids or "",
+        unlocked_storyline_id=body.unlocked_storyline_id if body.unlocked_storyline_id else None,
+        event_content=body.event_content or "",
+        sort_order=body.sort_order,
+        is_active=body.is_active,
     )
-
-    unlocked_sl_id = body.unlocked_storyline_id if body.unlocked_storyline_id else None
-    cur = conn.execute(
-        """
-        INSERT INTO story_events
-        (character_id, event_id, title, description, trigger_score, trigger_custom_key,
-         unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
-         event_content, sort_order, is_active)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """,
-        (
-            character_id,
-            str(uuid.uuid4()),
-            body.title,
-            body.description,
-            body.trigger_score,
-            body.trigger_custom_key or "",
-            body.unlocked_memory_ids or "",
-            body.unlocked_greeting_ids or "",
-            unlocked_sl_id,
-            body.event_content or "",
-            body.sort_order,
-            body.is_active,
-        ),
-    )
-    new_id = cur.fetchone()["id"]
     conn.commit()
     return {"ok": True, "id": new_id}
 
@@ -253,54 +168,28 @@ def update_story_event(
     body: StoryEventPayload,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    event = conn.execute(
-        "SELECT id FROM story_events WHERE id = %s AND character_id = %s",
-        (event_id, character_id),
-    ).fetchone()
-    if not event:
+    if not admin_repo.admin_get_story_event(conn, event_id, character_id):
         raise HTTPException(status_code=404, detail="剧情事件不存在")
-
     _assert_story_event_unlock_refs_owned(
-        conn,
-        character_id,
-        body.unlocked_memory_ids,
-        body.unlocked_greeting_ids,
-        body.unlocked_storyline_id,
+        conn, character_id,
+        body.unlocked_memory_ids, body.unlocked_greeting_ids, body.unlocked_storyline_id,
     )
 
-    unlocked_sl_id = body.unlocked_storyline_id if body.unlocked_storyline_id else None
-    conn.execute(
-        """
-        UPDATE story_events SET
-            title = %s,
-            description = %s,
-            trigger_score = %s,
-            trigger_custom_key = %s,
-            unlocked_memory_ids = %s,
-            unlocked_greeting_ids = %s,
-            unlocked_storyline_id = %s,
-            event_content = %s,
-            sort_order = %s,
-            is_active = %s,
-            updated_at = now()
-        WHERE id = %s
-        """,
-        (
-            body.title,
-            body.description,
-            body.trigger_score,
-            body.trigger_custom_key or "",
-            body.unlocked_memory_ids or "",
-            body.unlocked_greeting_ids or "",
-            unlocked_sl_id,
-            body.event_content or "",
-            body.sort_order,
-            body.is_active,
-            event_id,
-        ),
+    admin_repo.admin_update_story_event(
+        conn,
+        event_id,
+        title=body.title,
+        description=body.description,
+        trigger_score=body.trigger_score,
+        trigger_custom_key=body.trigger_custom_key or "",
+        unlocked_memory_ids=body.unlocked_memory_ids or "",
+        unlocked_greeting_ids=body.unlocked_greeting_ids or "",
+        unlocked_storyline_id=body.unlocked_storyline_id if body.unlocked_storyline_id else None,
+        event_content=body.event_content or "",
+        sort_order=body.sort_order,
+        is_active=body.is_active,
     )
     conn.commit()
-
     return {"ok": True}
 
 
@@ -310,17 +199,9 @@ def delete_story_event(
     event_id: str,
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
-    event = conn.execute(
-        "SELECT id FROM story_events WHERE id = %s AND character_id = %s",
-        (event_id, character_id),
-    ).fetchone()
-    if not event:
+    if not admin_repo.admin_get_story_event(conn, event_id, character_id):
         raise HTTPException(status_code=404, detail="剧情事件不存在")
 
-    conn.execute(
-        "DELETE FROM story_events WHERE id = %s",
-        (event_id,),
-    )
+    admin_repo.admin_delete_story_event(conn, event_id)
     conn.commit()
-
     return {"ok": True}
