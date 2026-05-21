@@ -16,7 +16,8 @@ from repositories.character_repository import check_character_exists
 from services.prompt_assembler import build_message_preview
 from utils.json_utils import parse_json_object
 
-router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
+# 认证依赖由父路由 _router.py 统一提供
+router = APIRouter(tags=["admin"])
 
 
 @router.get("/admin/character/{character_id}/config-summary")

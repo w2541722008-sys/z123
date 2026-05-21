@@ -13,7 +13,8 @@ from utils.json_utils import to_json_string
 
 from ._helpers import _write_audit_log, _assert_storyline_owned
 
-router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
+# 认证依赖由父路由 _router.py 统一提供
+router = APIRouter(tags=["admin"])
 
 
 def _require_character(conn: ConnType, character_id: str) -> None:

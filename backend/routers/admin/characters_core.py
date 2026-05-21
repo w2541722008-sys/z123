@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from core.auth import CurrentUser, get_admin_user, get_current_user
 from core.database import ConnType, get_db_dep
+from core.plan_constants import DEFAULT_CARD_TYPE, VALID_CARD_TYPES
 from core.schemas import AdminUpdatePayload
 from repositories import character_repository as char_repo
 from services.cache_service import cache_delete, invalidate_character, invalidate_character_affection_rules, invalidate_character_list_all
@@ -14,7 +15,8 @@ from utils.json_utils import parse_json_list, parse_json_object, to_json_string
 
 from ._helpers import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
 
-router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
+# 认证依赖由父路由 _router.py 统一提供
+router = APIRouter(tags=["admin"])
 
 
 @router.get("/admin/characters")
@@ -30,7 +32,7 @@ def admin_list_characters(conn: ConnType = Depends(get_db_dep)) -> list[dict[str
             "avatar_url": row["avatar_url"] or "",
             "description": (row["description"] or "")[:100] + "..." if row["description"] else "",
             "tags": parse_json_list(row["tags"]),
-            "card_type": row["card_type"] or "intimate",
+            "card_type": row["card_type"] or DEFAULT_CARD_TYPE,
             "required_plan": row["required_plan"] or "guest",
             "is_visible": bool(row["is_visible"]),
             "home_priority": row["home_priority"],
@@ -69,7 +71,7 @@ def admin_create_character(
         description = body.get("description", "").strip()
         opening_message = body.get("opening_message", "").strip()
         tags = body.get("tags", "[]")
-        card_type = body.get("card_type", "intimate")
+        card_type = body.get("card_type", DEFAULT_CARD_TYPE)
         required_plan = body.get("required_plan", "guest")
         avatar_url = body.get("avatar_url", "").strip()
         cover_url = body.get("cover_url", "").strip()
@@ -83,7 +85,7 @@ def admin_create_character(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="tags格式错误，必须是有效的JSON")
 
-        valid_card_types = ["intimate", "scenario"]
+        valid_card_types = list(VALID_CARD_TYPES)
         valid_plans = ["guest", "free", "vip", "svip"]
         if card_type not in valid_card_types:
             raise HTTPException(status_code=400, detail=f"card_type必须是以下之一: {', '.join(valid_card_types)}")
@@ -155,7 +157,7 @@ def admin_get_character(character_id: str, conn: ConnType = Depends(get_db_dep))
         "sort_order": row["sort_order"],
         "is_visible": bool(row["is_visible"]),
         "home_priority": row["home_priority"],
-        "card_type": row["card_type"] or "intimate",
+        "card_type": row["card_type"] or DEFAULT_CARD_TYPE,
         "required_plan": row["required_plan"] or "guest",
         "affection_enabled": bool(row["affection_enabled"]),
         "affection_rules_json": to_json_string(row["affection_rules_json"], default_on_error='{}'),

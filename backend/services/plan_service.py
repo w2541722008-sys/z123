@@ -15,16 +15,12 @@ from core.plan_constants import (
     VIP_PLAN,
     FREE_PLAN,
     PLAN_MODEL_PROFILES,
-    FREE_DAILY_TOKEN_LIMIT,
-    GUEST_DAILY_TOKEN_LIMIT,
-    SVIP_DAILY_TOKEN_LIMIT,
-    VIP_DAILY_TOKEN_LIMIT,
     can_access_required_plan,
     normalize_required_plan,
     plan_display_name,
 )
 
-from core.config import AI_CHAT_MAX_OUTPUT_TOKENS
+from core.config import AI_CHAT_MAX_OUTPUT_TOKENS, FREE_DAILY_TOKEN_LIMIT, GUEST_DAILY_TOKEN_LIMIT, SVIP_DAILY_TOKEN_LIMIT, VIP_DAILY_TOKEN_LIMIT
 
 
 def ensure_plan_access(

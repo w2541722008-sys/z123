@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from constants import Mood, StoryPhase
+from core.plan_constants import DEFAULT_CARD_TYPE
 from services.token_budget import (
     TokenBudget,
     LAYER_MAX_CHARS as _LAYER_MAX_CHARS,
@@ -73,7 +74,7 @@ def _get_behavior_tendency(
     phase: str,
     mood: str,
     *,
-    card_type: str = "intimate",
+    card_type: str = DEFAULT_CARD_TYPE,
     phase_behaviors: dict | None = None,
 ) -> str:
     # 角色卡自定义行为规则优先

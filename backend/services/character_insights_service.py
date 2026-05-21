@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from core.plan_constants import VALID_CARD_TYPES
+
 from core.database import ConnType
 from repositories.character_repository import (
     check_character_exists,
@@ -95,7 +97,7 @@ def compute_advanced_warnings(
         warnings.append("开场白阶段覆盖偏少，建议至少覆盖 2 个关系阶段")
     if stats["post_rule_count"] > 0 and stats["post_rule_active"] == 0:
         warnings.append("存在后置规则，但全部处于禁用状态")
-    if character.get("card_type") in {"intimate", "scenario"} and stats["greeting_count"] == 0:
+    if character.get("card_type") in VALID_CARD_TYPES and stats["greeting_count"] == 0:
         warnings.append("当前角色还没有多阶段开场白，首次体验会偏单一")
 
     empty_unlock_event_count = 0

@@ -25,6 +25,10 @@ def register_circuit_breaker(cb_fn: Callable[..., Any]) -> None:
 # 常量定义
 DEFAULT_TIMEOUT = 60
 STREAM_TIMEOUT = 120
+_MAX_ATTEMPTS = 3  # 总共 3 次尝试（1 次原始 + 2 次重试）
+_RETRY_BACKOFF_BASE = 0.5  # 指数退避基数（秒）
+_MAX_STREAM_ATTEMPTS = 2  # 流式连接最多 2 次尝试
+_STREAM_RETRY_DELAY = 0.5  # 流式重试前固定延迟（秒）
 
 # 全局 httpx.Client 复用（避免每次请求新建实例）
 _http_client: httpx.Client | None = None
@@ -219,7 +223,7 @@ def request_chat_completion(
     headers = _build_request_headers(config)
 
     body = ""
-    for attempt in range(3):  # 最多 3 次尝试（1 次原始 + 2 次重试）
+    for attempt in range(_MAX_ATTEMPTS):
         try:
             client = _get_http_client()
             resp = client.post(url, json=payload, headers=headers)
@@ -227,11 +231,11 @@ def request_chat_completion(
             body = resp.text
             break
         except httpx.HTTPError as exc:
-            if attempt < 2 and _is_retriable(exc):
-                wait = 0.5 * (2 ** attempt)  # 0.5s → 1.0s → 2.0s
+            if attempt < (_MAX_ATTEMPTS - 1) and _is_retriable(exc):
+                wait = _RETRY_BACKOFF_BASE * (2 ** attempt)
                 logger.warning(
-                    "模型调用失败，%.1f秒后重试(%s/3): %s",
-                    wait, attempt + 2, exc,
+                    "模型调用失败，%.1f秒后重试(%s/%s): %s",
+                    wait, attempt + 2, _MAX_ATTEMPTS, exc,
                 )
                 time.sleep(wait)
                 # 重试前再次检查熔断器
@@ -283,7 +287,7 @@ def stream_chat_completion(
 
     # 连接建立阶段（可重试）
     resp_ctx = None
-    for attempt in range(2):  # 最多 2 次尝试
+    for attempt in range(_MAX_STREAM_ATTEMPTS):
         try:
             client = _get_stream_client()
             resp_ctx = client.stream("POST", url, json=payload, headers=headers)
@@ -297,9 +301,9 @@ def stream_chat_completion(
                 except Exception:
                     pass
                 resp_ctx = None
-            if attempt == 0 and _is_retriable(exc):
-                logger.warning("流式连接建立失败，0.5秒后重试: %s", exc)
-                time.sleep(0.5)
+            if attempt < (_MAX_STREAM_ATTEMPTS - 1) and _is_retriable(exc):
+                logger.warning("流式连接建立失败，%.1f秒后重试: %s", _STREAM_RETRY_DELAY, exc)
+                time.sleep(_STREAM_RETRY_DELAY)
                 breaker.before_request(endpoint_key)
                 continue
             breaker.report_failure(endpoint_key)

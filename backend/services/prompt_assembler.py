@@ -13,6 +13,7 @@ from constants.prompt_templates import (
 )
 from core.config import RECENT_MESSAGE_WINDOW
 from core.database import ConnType
+from core.plan_constants import DEFAULT_CARD_TYPE
 from services.world_info_service import resolve_triggered_memories, resolve_post_rules
 from services.token_budget import (
     TokenBudget,
@@ -236,7 +237,7 @@ def _init_runtime_context(
     _budget = budget if budget is not None else _DEFAULT_BUDGET
     runtime_bundle = build_runtime_bundle(character, related_assets=related_assets)
     asset_type = runtime_bundle.get("asset_type") or _get_field(character, "asset_type", "hybrid")
-    card_type = _get_field(character, "card_type", "intimate") or "intimate"
+    card_type = _get_field(character, "card_type", DEFAULT_CARD_TYPE) or DEFAULT_CARD_TYPE
     char_name = _get_field(character, "name", "") or ""
     char_id = _get_field(character, "id", "")
     runtime_bundle = _expand_bundle_macros(runtime_bundle, char_name=char_name, user_name=user_name)

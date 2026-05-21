@@ -19,6 +19,12 @@ SVIP_PLAN = "svip"
 USER_PLAN_VALUES = (FREE_PLAN, VIP_PLAN, SVIP_PLAN)
 CHARACTER_PLAN_VALUES = (GUEST_PLAN, FREE_PLAN, VIP_PLAN, SVIP_PLAN)
 
+# 角色卡类型常量
+CARD_TYPE_INTIMATE = "intimate"
+CARD_TYPE_SCENARIO = "scenario"
+DEFAULT_CARD_TYPE = CARD_TYPE_INTIMATE
+VALID_CARD_TYPES = (CARD_TYPE_INTIMATE, CARD_TYPE_SCENARIO)
+
 PLAN_LEVELS = {
     GUEST_PLAN: 0,
     FREE_PLAN: 1,
@@ -40,19 +46,8 @@ PLAN_MODEL_PROFILES = {
     SVIP_PLAN: "svip",
 }
 
-# 各档位每日 token 预算（可通过环境变量覆盖）
-import os as _os
-
-def _int_env(key: str, default: int) -> int:
-    try:
-        return int(_os.environ.get(key, default))
-    except (ValueError, TypeError):
-        return default
-
-FREE_DAILY_TOKEN_LIMIT  = _int_env("FREE_DAILY_TOKEN_LIMIT",  180000)
-GUEST_DAILY_TOKEN_LIMIT = _int_env("GUEST_DAILY_TOKEN_LIMIT",  40000)
-VIP_DAILY_TOKEN_LIMIT   = _int_env("VIP_DAILY_TOKEN_LIMIT",   450000)
-SVIP_DAILY_TOKEN_LIMIT  = _int_env("SVIP_DAILY_TOKEN_LIMIT",  900000)
+# 各档位每日 token 预算 → 已迁移至 core/config.py，通过 _int_env(minimum=, maximum=) 提供边界校验
+# 如需引用请从 core.config 导入：from core.config import FREE_DAILY_TOKEN_LIMIT, ...
 
 
 # ── 纯数据转换函数 ────────────────────────────────────────────

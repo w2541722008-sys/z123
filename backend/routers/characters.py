@@ -22,6 +22,7 @@ from utils.json_utils import parse_json_list, parse_json_object
 from services.cache_service import cache_get, cache_set
 from core.plan_constants import (
     GUEST_PLAN,
+    DEFAULT_CARD_TYPE,
     can_access_required_plan,
     normalize_required_plan,
     plan_display_name,
@@ -69,7 +70,7 @@ def _serialize_character_for_client(
         "opening_message": opening_message,
         "first_message": opening_message,
         "tags": parse_json_list(row["tags"]),
-        "card_type": row["card_type"] or "intimate",
+        "card_type": row["card_type"] or DEFAULT_CARD_TYPE,
         "required_plan": required_plan,
         "required_plan_label": plan_display_name(required_plan),
         "home_priority": row["home_priority"],
