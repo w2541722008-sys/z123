@@ -62,8 +62,8 @@ gh issue view <number> --comments
 #### A. 是否涉及高风险模块？
 检查 issue 是否触及以下 8 个区域：
 - `routers/admin/`、`routers/billing.py`
-- `services/chat_stream_service.py`、`services/chat_send.py`
-- `core/auth.py`、`core/database.py`
+- `services/chat_stream/`、`services/chat_send.py`
+- `core/auth/`、`core/database.py`
 - `repositories/`、`alembic/versions/`
 
 → 如果涉及 → 标记 `ready-for-human`（高风险模块必须人工审查）

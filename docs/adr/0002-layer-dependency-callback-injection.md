@@ -5,14 +5,14 @@
 
 ## 背景
 
-项目的分层架构定义了严格的单向依赖：`routers/ → services/ → repositories/ → core/ + constants/`。但 core/ 层（特别是 `auth.py`）有时需要访问 services/ 层的功能（如缓存服务），直接 import 会破坏分层纪律，可能造成循环依赖。
+项目的分层架构定义了严格的单向依赖：`routers/ → services/ → repositories/ → core/ + constants/`。但 core/ 层（特别是 `auth/` 子包）有时需要访问 services/ 层的功能（如缓存服务），直接 import 会破坏分层纪律，可能造成循环依赖。
 
 ## 决策
 
 使用**回调注入**模式解耦：core/ 层定义回调接口，由 `main.py` 在应用启动（lifespan）时将 services/ 层的具体实现注册进去。
 
 ```python
-# core/auth.py — 定义回调接口
+# core/auth/__init__.py — 定义回调接口（注：已重构为 _cache dict 模式，见源文件）
 _cache_get_callback = None
 _cache_set_callback = None
 
@@ -55,4 +55,4 @@ register_cache_callbacks(on_get=get_cached_user, on_set=set_cached_user)
 - CLAUDE.md "分层依赖"规则
 - `.out-of-scope/no-core-imports-services.md`
 - `backend/main.py` — lifespan 注册点
-- `backend/core/auth.py` — 回调定义
+- `backend/core/auth/` — 回调定义（子包）

@@ -31,7 +31,7 @@ register_cache_callbacks(
 ```
 
 ```python
-# core/auth.py 中通过回调调用
+# core/auth/__init__.py 中通过回调调用
 _cache_get_callback = None
 
 def register_cache_callbacks(on_get, on_set):

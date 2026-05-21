@@ -100,9 +100,9 @@ GREEN：写最小代码让测试通过 → 运行 → 通过
 
 1. `routers/admin/`
 2. `routers/billing.py`
-3. `services/chat_stream_service.py`
+3. `services/chat_stream/`
 4. `services/chat_send.py`
-5. `core/auth.py`
+5. `core/auth/`
 6. `core/database.py`
 7. `repositories/`
 8. `alembic/versions/`（migration 本身不可测，但触发的代码变更必须测）

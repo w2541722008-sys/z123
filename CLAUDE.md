@@ -36,15 +36,15 @@ routers/ → services/ → repositories/ → core/ + constants/
 ```
 
 - `backend/main.py` — FastAPI 应用入口，注册所有路由到 `/api`，托管前端静态文件
-- `backend/core/` — 基础设施层：`auth.py`（JWT + 缓存回调注入）、`database.py`（ThreadedConnectionPool）、`config.py`、`schemas.py`（Pydantic 模型）、`model_adapter.py`（AI 模型适配）、`plan_constants.py`（会员档位常量）
-- `backend/services/` — 业务逻辑层（22 个模块）。核心服务：`chat_send.py`、`chat_stream_service.py`、`prompt_assembler.py`、`prompt_builder.py`、`runtime_bundle.py`、`token_budget.py`、`character_state.py`、`character_affection.py`、`character_session_service.py`、`story_event_service.py`、`memory_service.py`、`plan_service.py`、`billing_order_service.py`、`chat_query.py`、`chat_retry.py`、`cache_service.py`、`rate_limit.py`、`usage_guard.py`、`circuit_breaker.py`、`health_service.py`、`email.py`、`db_monitor.py`
+- `backend/core/` — 基础设施层：`auth/`（JWT + 缓存回调注入，6 文件子包）、`schemas/`（Pydantic 模型，8 文件子包）、`database.py`（ThreadedConnectionPool）、`config.py`、`exceptions.py`（领域异常）、`character_state_snapshot.py`、`model_adapter.py`（AI 模型适配）、`plan_constants.py`（会员档位常量）
+- `backend/services/` — 业务逻辑层（27 个模块）。核心服务：`chat_send.py`、`chat_stream/`（流式子包，3 文件）、`chat_query.py`、`chat_retry.py`、`prompt_assembler.py`、`prompt_builder.py`、`runtime_bundle.py`、`token_budget.py`、`character_state.py`、`character_affection.py`、`character_insights_service.py`、`character_session_service.py`、`story_event_service.py`、`memory_service.py`、`state_snapshot.py`、`world_info_service.py`、`password_reset_service.py`、`plan_service.py`、`billing_order_service.py`、`cache_service.py`、`rate_limit.py`、`usage_guard.py`、`circuit_breaker.py`、`health_service.py`、`email.py`、`db_monitor.py`
 - `backend/routers/` — 路由层：`auth.py`、`billing.py`、`characters.py`、`chat/`（包式路由，含 `_route_builders.py`）、`media.py`、`admin/`（按域拆分：`_router.py` + `_helpers.py` + `characters_core.py`、`characters_insights.py`、`characters_memory.py`、`characters_rules_events.py`、`characters_story.py` + `users.py` + `orders.py` + `dashboard.py`）
 - `backend/repositories/` — 纯 SQL 层（6 个模块）：`character_repository.py`、`character_memory_repository.py`、`chat_repository.py`、`user_repository.py`、`billing_repository.py`、`auth_repository.py`
 - `backend/constants/` — 枚举常量：`mood.py`（Mood 枚举 + 中英文标签映射）、`story_phase.py`（StoryPhase 枚举 + 标签映射，含 scenario 卡专用语义）
 - `backend/utils/` — 通用工具：`card_text.py`、`json_utils.py`、`stream_filter.py`
 - `frontend/modules/` — 原生 JS IIFE 模块（用户端聊天 UI，18 个模块）
 - `frontend/admin/js/` — 管理后台 JS 模块（17 个模块）
-- `tests/` — `unit/`（26 文件）、`services/`（6 文件）、`routers/`（7 文件）、`contracts/`（6 文件）、`integration/`（需真实 DB，3 文件）、`regression/`（1 文件）
+- `tests/` — `unit/`（30 文件）、`services/`（7 文件）、`routers/`（7 文件）、`contracts/`（4 文件）、`integration/`（需真实 DB，3 文件）、`regression/`（1 文件）、`load/`（1 文件）
 
 ## 协作规则（必须严格遵守）
 
@@ -81,7 +81,7 @@ routers/ → services/ → repositories/ → core/ + constants/
 
 **测试 Mock**：`FakeSequenceConn` 模拟 DB。修改路由/服务 SQL 后，必须同步更新对应测试的 `FakeQueryResult`。
 
-**高风险模块**（需单独开分支）：`routers/admin/`、`routers/billing.py`、`services/chat_stream_service.py`、`services/chat_send.py`、`core/auth.py`、`core/database.py`、`repositories/`、`alembic/versions/`
+**高风险模块**（需单独开分支）：`routers/admin/`、`routers/billing.py`、`services/chat_stream/`、`services/chat_send.py`、`core/auth/`、`core/database.py`、`repositories/`、`alembic/versions/`
 
 **分层依赖**：`core/` 不能导入 `services/`——通过回调注入解耦（见 `main.py` lifespan 中的 `register_cache_callbacks`）。
 

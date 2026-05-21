@@ -56,7 +56,7 @@
 
 **token_budget（Token 预算）**：管理每次 AI 调用中 token 消耗的服务，确保 prompt + 回复不超过模型上下文窗口限制。
 
-**stream（流式响应）**：AI 回复的逐字推送机制，由 `chat_stream_service.py` 实现，通过 SSE（Server-Sent Events）推送到前端。
+**stream（流式响应）**：AI 回复的逐字推送机制，由 `services/chat_stream/` 子包实现，通过 SSE（Server-Sent Events）推送到前端。
 
 ---
 
@@ -82,9 +82,9 @@
 
 1. `routers/admin/` — 管理后台路由
 2. `routers/billing.py` — 付费路由
-3. `services/chat_stream_service.py` — 流式聊天服务
+3. `services/chat_stream/` — 流式聊天服务（子包）
 4. `services/chat_send.py` — 聊天发送服务
-5. `core/auth.py` — 认证模块
+5. `core/auth/` — 认证模块（子包）
 6. `core/database.py` — 数据库连接管理
 7. `repositories/` — 数据访问层（全部 6 个模块）
 8. `alembic/versions/` — 数据库迁移脚本

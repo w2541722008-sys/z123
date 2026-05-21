@@ -46,4 +46,4 @@ aifriend 使用 FastAPI（异步框架）+ PostgreSQL。需要选择数据库连
 ## 相关
 - CLAUDE.md "游标生命周期"规则
 - `backend/core/database.py`
-- `backend/core/auth.py` — get_db_dep 定义
+- `backend/core/auth/_dependencies.py` — get_db_dep 定义

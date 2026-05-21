@@ -63,7 +63,7 @@ state = CharacterStateFactory.at_phase("friend", affection=55)
 | `character_affection.py` | 90% |
 | `circuit_breaker.py` | 90% |
 | `prompt_builder.py` | 85% |
-| `schemas.py` | 95% |
+| `schemas/` (子包) | 95% |
 | `character_state.py` | 80% |
 | `chat_query.py` | 80% |
 
