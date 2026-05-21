@@ -18,45 +18,9 @@ from services.world_info_service import (
 
 
 # ── FakeSequenceConn / FakeRow 辅助 ─────────────────────────
+# 统一使用 conftest.py 中定义的测试辅助类，避免重复定义
 
-
-class FakeRow(dict):
-    """模拟 psycopg2 RealDictRow，支持 row.key 和 row["key"] 两种访问。"""
-
-    def __getattr__(self, name: str):
-        if name in self:
-            return self[name]
-        raise AttributeError(name)
-
-
-class FakeQueryResult:
-    """模拟 cursor 查询结果，提供 fetchall()。"""
-
-    def __init__(self, rows: list):
-        self._rows = rows
-
-    def fetchall(self):
-        return self._rows
-
-
-class FakeSequenceConn:
-    """模拟 DB 连接，按序列返回预设结果。"""
-
-    def __init__(self, results: list):
-        self._results = list(results)
-        self._committed = False
-        self._cursor = None
-
-    def execute(self, sql, params=None):
-        if not self._results:
-            raise IndexError("FakeSequenceConn: 没有更多预设结果")
-        return self._results.pop(0)
-
-    def commit(self):
-        self._committed = True
-
-    def rollback(self):
-        pass
+from conftest import FakeRow, FakeQueryResult, FakeSequenceConn
 
 
 # ── 记忆条目工厂 ─────────────────────────────────────────────

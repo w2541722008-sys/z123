@@ -90,9 +90,14 @@ class FakeQueryResult:
     commit 后调用 _invalidate()，fetchone/fetchall 将抛出 RuntimeError。
     """
 
-    def __init__(self, *, one=None, many=None, rowcount=0):
-        self._one = one
-        self._many = many or []
+    def __init__(self, rows=None, *, one=None, many=None, rowcount=0):
+        # 兼容位置参数 FakeQueryResult([row_list]) 的旧调用方式
+        if rows is not None:
+            self._one = None
+            self._many = rows
+        else:
+            self._one = one
+            self._many = many or []
         self.rowcount = rowcount
         self._invalidated = False
 

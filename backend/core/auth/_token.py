@@ -15,6 +15,8 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import psycopg2
+
 from core.config import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     REFRESH_TOKEN_EXPIRE_DAYS,
@@ -99,7 +101,7 @@ def create_token(
         )
         if commit:
             conn.commit()
-    except Exception:
+    except psycopg2.Error:
         if commit:
             conn.rollback()
         raise
@@ -285,7 +287,7 @@ def delete_token(token: str, *, commit: bool = True) -> int:
         if commit:
             conn.commit()
         return int(cursor.rowcount)
-    except Exception:
+    except psycopg2.Error:
         if commit:
             conn.rollback()
         raise
@@ -317,7 +319,7 @@ def _sliding_extend_token(token_hash: str, expires_at_str: str | None, now: date
                 (new_expires, token_hash),
             )
             logging.info("Token 已自动续期: user_id=***")
-        except Exception as e:
+        except (psycopg2.Error, psycopg2.OperationalError) as e:
             logging.warning("Token 自动续期失败: %s", e, exc_info=True)
     else:
         extend_conn = None

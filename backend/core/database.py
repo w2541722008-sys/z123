@@ -105,7 +105,7 @@ class ConnWrapper:
         for cur in self._open_cursors:
             try:
                 cur.close()
-            except Exception:
+            except psycopg2.Error:
                 logger.warning("游标关闭失败", exc_info=True)
         self._open_cursors.clear()
         try:
@@ -221,7 +221,7 @@ def get_db_dep() -> Generator[ConnType, None, None]:
     conn = get_conn()
     try:
         yield conn
-    except Exception:
+    except psycopg2.Error:
         conn.rollback()
         raise
     finally:

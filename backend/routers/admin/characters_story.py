@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.auth import CurrentUser, get_admin_user, get_current_user
 from core.database import ConnType, get_db_dep
 from core.schemas import GreetingPayload, StorylinePayload
-from repositories import character_admin_repository as admin_repo
+from repositories import character_admin_story_repository as admin_repo
 from repositories import character_repository as char_repo
 from utils.json_utils import to_json_string
 

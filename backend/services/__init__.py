@@ -10,8 +10,8 @@ Services 包 - 业务逻辑层
 
 公共 API（推荐直接从子模块导入）：
     from services.character_state import get_character_state, apply_state_delta, is_affection_enabled
-    from services.memory_core import get_recent_messages, get_summary_text, get_summary_for_prompt
-    from services.memory_background import refresh_memory_summary, run_memory_summary_background
+    from services.memory_service import get_recent_messages, get_summary_text, get_summary_for_prompt
+    from services.memory_service import refresh_memory_summary, run_memory_summary_background
     from services.chat_send import build_reply_with_fallback, save_assistant_message
     from services.chat_query import get_character_or_404, ensure_opening_message
     from services.plan_service import get_plan_policy, ensure_plan_access

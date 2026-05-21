@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
 from core.schemas import MemoryCategoryPayload, MemoryEntryPayload
-from repositories import character_admin_repository as admin_repo
+from repositories import character_admin_memory_repository as admin_repo
 from repositories import character_repository as char_repo
 
 from ._helpers import _assert_memory_category_owned
