@@ -13,7 +13,19 @@ import logging
 import time
 from typing import Any
 
+from constants import Mood
 from core.database import get_conn
+from services.character_affection import (
+    _calculate_affection_change,
+    _get_affection_rules,
+    _get_daily_cap,
+    _update_anti_abuse_counters,
+    is_affection_enabled,
+)
+from services.character_state import (
+    _reset_daily_fields_if_needed,
+    _sanitize_state_delta,
+)
 from services.chat_send import (
     format_done_event,
     format_error_event,
@@ -197,19 +209,6 @@ def _compute_guest_character_state(
     if delta is None:
         state = _get_guest_state(guest_ip, character_id)
         return {k: v for k, v in state.items() if not k.startswith("_")}
-
-    from services.character_affection import (
-        _get_affection_rules,
-        _get_daily_cap,
-        _calculate_affection_change,
-        _update_anti_abuse_counters,
-        is_affection_enabled,
-    )
-    from services.character_state import (
-        _sanitize_state_delta,
-        _reset_daily_fields_if_needed,
-    )
-    from constants import Mood
 
     delta = _sanitize_state_delta(delta)
     state = _get_guest_state(guest_ip, character_id)
