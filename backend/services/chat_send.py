@@ -297,12 +297,7 @@ def _prepare_prompt_context_result(
     )
 
 
-# 游客流式函数已移入 services.chat_stream._guest，此处保留向后兼容 re-export
-from services.chat_stream._guest import (  # noqa: F401
-    build_guest_fallback_messages as _build_guest_fallback_messages,
-    build_guest_stream_messages as _build_guest_stream_messages,
-    build_guest_quota_payload as _build_guest_quota_payload,
-)
+# 游客流式函数已移入 services.chat_stream._guest，请直接从该模块导入
 
 # ============================================================
 # 用户流式构建

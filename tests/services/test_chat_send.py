@@ -195,7 +195,7 @@ class TestPreparePromptContextResult:
 
 class TestBuildGuestFallbackMessages:
     def test_builds_system_and_user(self):
-        from services.chat_send import _build_guest_fallback_messages
+        from services.chat_stream._guest import build_guest_fallback_messages as _build_guest_fallback_messages
         char = {"name": "Alice", "subtitle": "测试角色", "description": "desc"}
         result = _build_guest_fallback_messages(char, "hello")
         assert len(result) == 2
@@ -205,7 +205,7 @@ class TestBuildGuestFallbackMessages:
         assert result[1]["content"] == "hello"
 
     def test_name_only_sufficient(self):
-        from services.chat_send import _build_guest_fallback_messages
+        from services.chat_stream._guest import build_guest_fallback_messages as _build_guest_fallback_messages
         char = {"name": "Carol"}
         result = _build_guest_fallback_messages(char, "hi")
         assert "Carol" in result[0]["content"]

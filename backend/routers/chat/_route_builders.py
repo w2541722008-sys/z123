@@ -16,11 +16,11 @@ from fastapi.responses import StreamingResponse
 from core.auth import CurrentUser
 from core.schemas import ChatSendPayload, GuestChatPayload
 from services.chat_send import (
-    _build_guest_stream_messages,
     _build_stream_prepare_result,
     _prepare_ai_budget,
     _prepare_user_chat_request,
 )
+from services.chat_stream._guest import build_guest_stream_messages as _build_guest_stream_messages
 from services.chat_query import get_character_or_404
 from services.chat_retry import _prepare_regenerate_or_continue_request as _retry_prepare_request
 from core.plan_constants import GUEST_PLAN
