@@ -158,7 +158,6 @@
     getCharacterProfile: (characterId) => request(`/character/profile?character_id=${encodeURIComponent(characterId)}`),
     updateCharacterProfile: (payload) => request('/character/profile', { method: 'POST', body: payload }),
     clearChatWithGreeting: (payload) => request('/chat/clear', { method: 'POST', body: payload }),
-    searchMessages: (q, characterId, page = 1, pageSize = 20) => request(`/chat/search?q=${encodeURIComponent(q)}&character_id=${encodeURIComponent(characterId || '')}&page=${page}&page_size=${pageSize}`),
     sendMessage: (payload) => request('/chat/send', { method: 'POST', body: payload }),
     streamMessage,
     guestStreamMessage: (payload, handlers, signal) => streamMessageToUrl(`${API_BASE}/chat/guest-stream`, payload, handlers, signal),

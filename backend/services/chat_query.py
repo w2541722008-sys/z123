@@ -180,35 +180,6 @@ def _load_recent_messages_and_summary(
     return recent_messages, memory_summary
 
 
-# ============================================================
-# 消息统计
-# ============================================================
-def search_chat_messages(
-    conn: ConnType,
-    user_id: int | str,
-    query: str,
-    *,
-    character_id: str | None = None,
-    limit: int = 20,
-    offset: int = 0,
-) -> list[dict[str, Any]]:
-    """全文搜索聊天消息（委托 repository 层执行 tsquery 查询）。"""
-    from repositories.chat_repository import search_messages
-    return search_messages(conn, user_id, query, character_id=character_id, limit=limit, offset=offset)
-
-
-def count_chat_search_results(
-    conn: ConnType,
-    user_id: int | str,
-    query: str,
-    *,
-    character_id: str | None = None,
-) -> int:
-    """统计搜索结果总数（委托 repository 层）。"""
-    from repositories.chat_repository import count_search_results
-    return count_search_results(conn, user_id, query, character_id=character_id)
-
-
 def count_chat_messages(conn: ConnType, user_id: int | str, character_id: str) -> int:
     """统计用户和某角色的聊天消息总数。"""
     return chat_repo.count_chat_history(conn, user_id, character_id)

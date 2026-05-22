@@ -462,11 +462,6 @@ const Chat = (() => {
 
   function toggleStatusPanel() { ChatStatusPanel.toggle(); }
 
-  function openSearch() {
-    if (!ChatState.currentChar) return;
-    ChatSearch.open(ChatState.currentChar.id);
-  }
-
   /** 后台异步将游客聊天历史持久化到用户账号 */
   async function _persistGuestHistory(charId, historyMessages) {
     try {
@@ -481,7 +476,7 @@ const Chat = (() => {
 
   /* ── 公开 API ────────────────────────────────────────── */
   return {
-    enterChat, send, toggleStatusPanel, openSearch,
+    enterChat, send, toggleStatusPanel,
     regenerateMessage: Actions.regenerateMessage,
     continueMessage: Actions.continueMessage,
     refreshCurrentCharacterProfile, applyCharacterProfile, clearCurrentChat,

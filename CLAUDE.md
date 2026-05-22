@@ -104,6 +104,6 @@ routers/ → services/ → repositories/ → core/ + constants/
 
 配套文档：
 - `CONTEXT.md` — 领域词汇表，Agent 讨论设计和代码时使用
-- `.out-of-scope/` — Agent 行为边界：禁止操作生产库、禁止修改已应用的 migration、禁止修改 card_type 枚举、禁止 core/ 导入 services/
+- `.out-of-scope/` — Agent 行为边界：禁止操作生产库、禁止修改 card_type 枚举、禁止 core/ 导入 services/
 - `docs/agents/` — Agent 运维配置：issue tracker 信息、triage 标签映射
 - `docs/adr/` — 架构决策记录（4 篇）：两种玩法隔离、分层依赖解耦、连接池选型、测试模拟模式

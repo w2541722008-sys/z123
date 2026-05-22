@@ -79,38 +79,3 @@ class TestCountChatHistory:
         assert result == 0
 
 
-class TestSearchMessages:
-    def test_returns_matching_messages(self):
-        from repositories.chat_repository import search_messages
-        rows = [
-            FakeRow({
-                "id": 1, "user_id": 1, "character_id": "c1",
-                "role": "user", "content": "hello world",
-                "created_at": "2026-05-01", "is_summarized": 0, "rank": 0.5,
-            }),
-        ]
-        conn = FakeSequenceConn([rows])
-        result = search_messages(conn, user_id=1, query="hello", character_id="c1")
-        assert len(result) == 1
-        assert "hello" in result[0]["content"]
-
-    def test_no_matches_returns_empty(self):
-        from repositories.chat_repository import search_messages
-        conn = FakeSequenceConn([[]])
-        result = search_messages(conn, user_id=1, query="zzz", character_id="c1")
-        assert result == []
-
-    def test_query_param_passed_correctly(self):
-        from repositories.chat_repository import search_messages
-        conn = FakeSequenceConn([[]])
-        search_messages(conn, user_id=1, query="test", character_id="c1")
-        sql, params = conn.executed[0]
-        assert params[1] == "test"
-
-
-class TestCountSearchResults:
-    def test_returns_total(self):
-        from repositories.chat_repository import count_search_results
-        conn = FakeSequenceConn([FakeRow({"total": 3})])
-        result = count_search_results(conn, user_id=1, query="word", character_id="c1")
-        assert result == 3
