@@ -4,12 +4,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
-from core.auth import CurrentUser, get_admin_user, get_current_user
+from core.auth import CurrentUser, get_admin_user
 from core.database import ConnType, get_db_dep
 from core.schemas import (
     AdminUserPlanUpdatePayload,
@@ -17,19 +16,17 @@ from core.schemas import (
     AdminBatchPlanPayload,
 )
 from repositories import user_repository as user_repo
+from repositories import admin_audit_repository as audit_repo
 from services.cache_service import invalidate_user
 from core.plan_constants import plan_display_name, serialize_plan_info
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
 from ._helpers import (
-    _ADMIN_EDITABLE_FIELDS,
     _build_where_clause,
     _count_with_where,
     _normalize_pagination,
-    _transaction,
     _validate_pagination_params,
-    _write_audit_log,
 )
 
 @router.get("/admin/users")
@@ -190,7 +187,7 @@ def admin_edit_user(
     user_repo.update_user_fields(conn, user_id, updates)
 
     # 写入审计日志
-    _write_audit_log(
+    audit_repo.insert_audit_log(
         conn,
         operator_id=current_user.id,
         operator_email=current_user.email,
@@ -235,7 +232,7 @@ def admin_delete_user(
     user_repo.delete_user_cascade(conn, user_id)
 
     # 写入审计日志
-    _write_audit_log(
+    audit_repo.insert_audit_log(
         conn,
         operator_id=current_user.id,
         operator_email=current_user.email,
@@ -274,7 +271,7 @@ def admin_batch_update_plan(
         invalidate_user(str(uid))
         updated += 1
 
-    _write_audit_log(
+    audit_repo.insert_audit_log(
         conn,
         operator_id=current_user.id,
         operator_email=current_user.email,
@@ -316,7 +313,7 @@ def admin_update_user_plan(
     user_repo.update_user_plan(conn, user_id, body.plan_type, plan_expires_at)
 
     # 记录审计日志
-    _write_audit_log(
+    audit_repo.insert_audit_log(
         conn,
         operator_id=current_user.id,
         operator_email=current_user.email,

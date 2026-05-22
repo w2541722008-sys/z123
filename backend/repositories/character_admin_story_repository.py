@@ -55,7 +55,7 @@ def admin_create_greeting(
         """,
         (
             character_id, story_phase, mood, content, storyline_id,
-            priority, is_active, comment,
+            priority, 1 if is_active else 0, comment,
         ),
     )
     return cur.fetchone()["id"]
@@ -91,7 +91,7 @@ def admin_update_greeting(
         """,
         (
             story_phase, mood, content, storyline_id,
-            priority, is_active, comment, greeting_id,
+            priority, 1 if is_active else 0, comment, greeting_id,
         ),
     )
 
@@ -160,7 +160,7 @@ def admin_create_storyline(
         (
             character_id, storyline_id, title, name, description,
             unlock_score, unlock_condition, stages_json,
-            is_default, is_active, sort_order,
+            1 if is_default else 0, 1 if is_active else 0, sort_order,
         ),
     )
     return cur.fetchone()["id"]
@@ -202,7 +202,7 @@ def admin_update_storyline(
         (
             storyline_id_field, title, name, description,
             unlock_score, unlock_condition, stages_json,
-            is_default, is_active, sort_order, storyline_id,
+            1 if is_default else 0, 1 if is_active else 0, sort_order, storyline_id,
         ),
     )
 
@@ -320,7 +320,7 @@ def admin_create_post_rule(
         """,
         (
             character_id, name, content, storyline_id, story_phase,
-            priority, is_active,
+            priority, 1 if is_active else 0,
         ),
     )
     return cur.fetchone()["id"]
@@ -355,7 +355,7 @@ def admin_update_post_rule(
         """,
         (
             name, content, storyline_id, story_phase,
-            priority, is_active, rule_id,
+            priority, 1 if is_active else 0, rule_id,
         ),
     )
 
@@ -410,7 +410,7 @@ def admin_create_story_event(
         (
             character_id, event_id, title, description, trigger_score,
             trigger_custom_key, unlocked_memory_ids, unlocked_greeting_ids,
-            unlocked_storyline_id, event_content, sort_order, is_active,
+            unlocked_storyline_id, event_content, sort_order, 1 if is_active else 0,
         ),
     )
     return cur.fetchone()["id"]
@@ -453,7 +453,7 @@ def admin_update_story_event(
         (
             title, description, trigger_score, trigger_custom_key,
             unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
-            event_content, sort_order, is_active, event_id,
+            event_content, sort_order, 1 if is_active else 0, event_id,
         ),
     )
 

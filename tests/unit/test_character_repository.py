@@ -132,8 +132,8 @@ class TestDeleteCharacterCascade:
     def test_found_deletes_all_and_returns_name(self):
         from repositories.character_repository import delete_character_cascade
         row = FakeRow({"id": "c1", "name": "TestChar"})
-        # 9 个 DELETE + 1 个 SELECT = 10 个结果
-        conn = FakeSequenceConn([row] + [FakeRow()] * 9)
+        # 12 个 DELETE + 1 个 SELECT = 13 个结果
+        conn = FakeSequenceConn([row] + [FakeRow()] * 12)
         result = delete_character_cascade(conn, "c1")
         assert result == {"id": "c1", "name": "TestChar"}
         # 验证 DELETE 顺序

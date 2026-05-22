@@ -16,6 +16,7 @@ import threading
 from typing import Any
 
 from core.config import RECENT_MESSAGE_WINDOW, SUMMARY_MAX_TOKENS, SUMMARY_TRIGGER_COUNT, logger, utc_now
+from repositories import chat_repository as chat_repo
 from core.database import ConnType, get_conn
 from core.model_adapter import get_ai_config, request_chat_completion
 from services.runtime_bundle import build_runtime_bundle, _get_field
@@ -94,16 +95,7 @@ def get_unsummarized_messages(
     character_id: str,
 ) -> list[dict[str, Any]]:
     """获取所有未摘要的消息。"""
-    rows: list[dict[str, Any]] = conn.execute(
-        """
-        SELECT id, role, content, created_at
-        FROM chat_messages
-        WHERE user_id = %s AND character_id = %s AND is_summarized = FALSE
-        ORDER BY id ASC
-        """,
-        (user_id, character_id),
-    ).fetchall()
-    return rows
+    return chat_repo.get_unsummarized_messages(conn, user_id, character_id)
 
 
 def get_summary_record(
@@ -112,10 +104,7 @@ def get_summary_record(
     character_id: str,
 ) -> Any | None:
     """获取摘要记录（完整行）。"""
-    return conn.execute(
-        "SELECT * FROM chat_summaries WHERE user_id = %s AND character_id = %s",
-        (user_id, character_id),
-    ).fetchone()
+    return chat_repo.get_summary_record(conn, user_id, character_id)
 
 
 def get_summary_text(
@@ -167,13 +156,7 @@ def save_summary(
 
 def mark_messages_summarized(conn: ConnType, message_ids: list[int]) -> None:
     """标记消息为已摘要。"""
-    if not message_ids:
-        return
-    placeholders = ",".join("%s" for _ in message_ids)
-    conn.execute(
-        f"UPDATE chat_messages SET is_summarized = 1 WHERE id IN ({placeholders})",
-        message_ids,
-    )
+    chat_repo.mark_messages_summarized(conn, message_ids)
 
 
 def should_refresh_summary(
@@ -182,11 +165,7 @@ def should_refresh_summary(
     character_id: str,
 ) -> bool:
     """判断是否需要刷新摘要（未摘要消息数 >= 阈值）。"""
-    row = conn.execute(
-        "SELECT COUNT(*) AS cnt FROM chat_messages WHERE user_id = %s AND character_id = %s AND is_summarized = FALSE",
-        (user_id, character_id),
-    ).fetchone()
-    return int(row["cnt"]) >= SUMMARY_TRIGGER_COUNT
+    return chat_repo.count_unsummarized_messages(conn, user_id, character_id) >= SUMMARY_TRIGGER_COUNT
 
 
 # ============================================================

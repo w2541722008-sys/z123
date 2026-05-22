@@ -16,11 +16,11 @@ from typing import Any
 from constants import Mood
 from core.database import get_conn
 from services.character_affection import (
-    _calculate_affection_change,
-    _get_affection_rules,
-    _get_daily_cap,
-    _update_anti_abuse_counters,
+    calculate_affection_change,
+    get_affection_rules,
+    get_daily_cap,
     is_affection_enabled,
+    update_anti_abuse_counters,
 )
 from services.character_state import (
     _reset_daily_fields_if_needed,
@@ -174,16 +174,31 @@ def _postprocess_regenerate_or_continue_result(
 
 _guest_state_cache: dict[str, dict[str, Any]] = {}
 _GUEST_STATE_CACHE_TTL = 3600
+_GUEST_STATE_CACHE_MAX = 10000
+
+
+def _evict_expired_guest_states(now: float) -> None:
+    """清理过期的游客状态条目，防止内存无限增长。"""
+    expired = [k for k, v in _guest_state_cache.items()
+               if now - v.get("_cached_at", 0) >= _GUEST_STATE_CACHE_TTL]
+    for k in expired:
+        _guest_state_cache.pop(k, None)
 
 
 def _get_guest_state(guest_ip: str, character_id: str) -> dict[str, Any]:
-    """读取或创建游客状态（带 TTL 自动过期）。"""
+    """读取或创建游客状态（带 TTL 自动过期 + 上限淘汰）。"""
     key = f"{guest_ip}:{character_id}"
     now = time.time()
     if key in _guest_state_cache:
         entry = _guest_state_cache[key]
         if now - entry.get("_cached_at", 0) < _GUEST_STATE_CACHE_TTL:
             return entry
+    # 惰性清理过期条目
+    _evict_expired_guest_states(now)
+    # 超上限时淘汰最旧的条目
+    if len(_guest_state_cache) >= _GUEST_STATE_CACHE_MAX:
+        oldest = min(_guest_state_cache, key=lambda k: _guest_state_cache[k].get("_cached_at", 0))
+        _guest_state_cache.pop(oldest, None)
     state = {
         "affection": 0,
         "story_phase": "stranger",
@@ -220,12 +235,12 @@ def _compute_guest_character_state(
     if is_affection_enabled(conn, character_id):
         if "event" in delta:
             event_name = str(delta["event"]).strip().lower()
-            rules = _get_affection_rules(conn, character_id)
-            daily_cap = _get_daily_cap(conn, character_id)
-            affection_change, _ = _calculate_affection_change(
+            rules = get_affection_rules(conn, character_id)
+            daily_cap = get_daily_cap(conn, character_id)
+            affection_change, _ = calculate_affection_change(
                 event_name, rules, state, daily_cap=daily_cap,
             )
-            state = _update_anti_abuse_counters(state, event_name, affection_change)
+            state = update_anti_abuse_counters(state, event_name, affection_change)
             affection = max(0, min(100, affection + affection_change))
         elif "affection" in delta:
             raw = str(delta["affection"]).strip()

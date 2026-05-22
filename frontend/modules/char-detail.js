@@ -4,7 +4,9 @@
    function open(char) {
      pendingChar = char;
      const cover = document.getElementById('detail-cover');
-     cover.style.background = char.color || 'linear-gradient(135deg,#8a72ff,#ff7eb6)';
+     const rawColor = char.color || 'linear-gradient(135deg,#8a72ff,#ff7eb6)';
+     // CSS 注入防护：拒绝含 url() 或 javascript: 的值
+     cover.style.background = /url\(|javascript:/i.test(rawColor) ? 'linear-gradient(135deg,#8a72ff,#ff7eb6)' : rawColor;
     // 优先用 avatarImg（/api/avatar/xxx 路由），和广场页保持一致
     const rawCover = char.coverImg || char.avatarImg || null;
      const imgSrc = rawCover

@@ -191,7 +191,14 @@ def get_user_last_login(conn: ConnType, user_id: int | str) -> datetime | None:
 def update_user_fields(
     conn: ConnType, user_id: int | str, updates: dict[str, Any]
 ) -> None:
-    """按白名单更新用户字段（动态 SET 子句）。updated_at 自动更新。"""
+    """按白名单更新用户字段（动态 SET 子句）。updated_at 自动更新。
+
+    防御性白名单校验：即使调用方已过滤字段，repository 层也做二次校验。
+    """
+    _ALLOWED = {"email", "nickname"}
+    for k in updates:
+        if k not in _ALLOWED:
+            raise ValueError(f"字段 '{k}' 不在允许更新的白名单中")
     set_clause = ", ".join(f"{k} = %s" for k in updates)
     conn.execute(
         f"UPDATE users SET {set_clause}, updated_at = now() WHERE id = %s",
@@ -216,6 +223,11 @@ def delete_user_cascade(conn: ConnType, user_id: int | str) -> None:
     """级联删除用户及关联数据。"""
     conn.execute("DELETE FROM ai_request_logs WHERE user_id = %s", (user_id,))
     conn.execute("DELETE FROM chat_messages WHERE user_id = %s", (user_id,))
+    conn.execute("DELETE FROM chat_summaries WHERE user_id = %s", (user_id,))
     conn.execute("DELETE FROM user_character_profiles WHERE user_id = %s", (user_id,))
+    conn.execute("DELETE FROM character_states WHERE user_id = %s", (user_id,))
+    conn.execute("DELETE FROM user_story_progress WHERE user_id = %s", (user_id,))
     conn.execute("DELETE FROM membership_orders WHERE user_id = %s", (user_id,))
+    conn.execute("DELETE FROM auth_tokens WHERE user_id = %s", (user_id,))
+    conn.execute("DELETE FROM password_reset_codes WHERE email = (SELECT email FROM users WHERE id = %s)", (user_id,))
     conn.execute("DELETE FROM users WHERE id = %s", (user_id,))

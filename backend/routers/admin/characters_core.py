@@ -10,10 +10,11 @@ from core.database import ConnType, get_db_dep
 from core.plan_constants import DEFAULT_CARD_TYPE, VALID_CARD_TYPES
 from core.schemas import AdminUpdatePayload
 from repositories import character_repository as char_repo
+from repositories import admin_audit_repository as audit_repo
 from services.cache_service import cache_delete, invalidate_character, invalidate_character_affection_rules, invalidate_character_list_all
 from utils.json_utils import parse_json_list, parse_json_object, to_json_string
 
-from ._helpers import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
+from ._helpers import _ADMIN_EDITABLE_FIELDS, _transaction
 
 # 认证依赖由父路由 _router.py 统一提供
 router = APIRouter(tags=["admin"])
@@ -107,7 +108,7 @@ def admin_create_character(
             ),
         )
 
-        _write_audit_log(
+        audit_repo.insert_audit_log(
             conn,
             operator_id=current_user.id,
             operator_email=current_user.email,
@@ -183,7 +184,7 @@ def admin_delete_character(
     if not row:
         raise HTTPException(status_code=404, detail="角色不存在")
 
-    _write_audit_log(
+    audit_repo.insert_audit_log(
         conn,
         operator_id=current_user.id,
         operator_email=current_user.email,

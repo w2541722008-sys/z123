@@ -316,9 +316,9 @@ const Chat = (() => {
         const firstChildBefore = box.children[btn ? 1 : 0];
         const scrollOffset = firstChildBefore ? firstChildBefore.getBoundingClientRect().top : 0;
         ChatState.history = [...olderMessages, ...ChatState.history];
-        // 内存中最多保留 300 条，超出裁剪旧消息
+        // 内存中最多保留 300 条，加载更早消息时优先保留最早的消息
         if (ChatState.history.length > 300) {
-          ChatState.history = ChatState.history.slice(-300);
+          ChatState.history = ChatState.history.slice(0, 300);
         }
         const frag = document.createDocumentFragment();
         olderMessages.forEach(item => { ChatState.batchContainer = frag; R.appendMsg(item.role, item.content, item.created_at); });

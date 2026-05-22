@@ -100,6 +100,50 @@ def upsert_user_profile(
     )
 
 
+def get_best_greeting_for_storyline(
+    conn: ConnType, character_id: str, story_phase: str, storyline_id: int,
+) -> dict[str, Any] | None:
+    """获取剧情线优先匹配的最佳开场白（含 storyline 精确匹配 + NULL 通用降级）。"""
+    sid = str(storyline_id)
+    return conn.execute(
+        """
+        SELECT id, content FROM character_greetings
+        WHERE character_id = %s AND story_phase = %s AND is_active = 1
+          AND (storyline_id = %s OR storyline_id IS NULL)
+        ORDER BY
+            CASE WHEN storyline_id = %s THEN 0 ELSE 1 END,
+            priority ASC, RANDOM()
+        LIMIT 1
+        """,
+        (character_id, story_phase, sid, sid),
+    ).fetchone()
+
+
+def get_generic_greeting(
+    conn: ConnType, character_id: str, story_phase: str,
+) -> dict[str, Any] | None:
+    """获取通用开场白（不限剧情线）。"""
+    return conn.execute(
+        """
+        SELECT id, content FROM character_greetings
+        WHERE character_id = %s AND story_phase = %s AND is_active = 1
+          AND storyline_id IS NULL
+        ORDER BY priority ASC, RANDOM()
+        LIMIT 1
+        """,
+        (character_id, story_phase),
+    ).fetchone()
+
+
+def get_opening_message(conn: ConnType, character_id: str) -> str | None:
+    """获取角色的默认开场白文本。"""
+    row = conn.execute(
+        "SELECT opening_message FROM characters WHERE id = %s",
+        (character_id,),
+    ).fetchone()
+    return row["opening_message"] if row else None
+
+
 def get_active_greetings(
     conn: ConnType, character_id: str
 ) -> list[dict[str, Any]]:
@@ -189,7 +233,22 @@ def insert_character(conn: ConnType, values: tuple) -> None:
 def update_character_fields(
     conn: ConnType, character_id: str, updates: dict[str, Any]
 ) -> None:
-    """管理后台：按白名单更新角色字段。updated_at 自动更新。"""
+    """管理后台：按白名单更新角色字段。updated_at 自动更新。
+
+    防御性白名单校验：即使调用方已过滤字段，repository 层也做二次校验，
+    防止未来新增调用路径遗漏白名单导致 SQL 注入。
+    """
+    _ALLOWED = {
+        "name", "abbr", "subtitle", "description", "tags",
+        "opening_message", "system_prompt", "sort_order",
+        "is_visible", "home_priority", "card_type",
+        "required_plan", "affection_enabled", "affection_rules_json",
+        "import_locked", "avatar_url", "cover_url",
+        "phase_behaviors_json",
+    }
+    for k in updates:
+        if k not in _ALLOWED:
+            raise ValueError(f"字段 '{k}' 不在允许更新的白名单中")
     set_clause = ", ".join(f"{k} = %s" for k in updates)
     conn.execute(
         f"UPDATE characters SET {set_clause}, updated_at = now() WHERE id = %s",
@@ -238,6 +297,9 @@ def delete_character_cascade(conn: ConnType, character_id: str) -> dict[str, Any
     conn.execute("DELETE FROM character_post_rules WHERE character_id = %s", (character_id,))
     conn.execute("DELETE FROM story_events WHERE character_id = %s", (character_id,))
     conn.execute("DELETE FROM character_storylines WHERE character_id = %s", (character_id,))
+    conn.execute("DELETE FROM chat_messages WHERE character_id = %s", (character_id,))
+    conn.execute("DELETE FROM chat_summaries WHERE character_id = %s", (character_id,))
+    conn.execute("DELETE FROM user_story_progress WHERE character_id = %s", (character_id,))
     conn.execute("DELETE FROM characters WHERE id = %s", (character_id,))
     return dict(row)
 
@@ -355,3 +417,11 @@ def get_asset_max_updated_at(conn: ConnType, character_id: str) -> str | None:
         (character_id,) * 6,
     ).fetchone()
     return str(row["max_ts"]) if row and row["max_ts"] else None
+
+
+def get_affection_config(conn: ConnType, character_id: str) -> dict[str, Any] | None:
+    """获取角色的好感度配置（affection_rules_json + affection_enabled）。"""
+    return conn.execute(
+        "SELECT affection_rules_json, affection_enabled FROM characters WHERE id = %s",
+        (character_id,),
+    ).fetchone()

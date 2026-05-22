@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.database import ConnType
+from repositories import chat_repository as chat_repo
 from services.character_state import get_character_state
 from services.chat_query import ensure_opening_message
 from utils.json_utils import parse_json_object
@@ -63,20 +64,9 @@ def _clear_chat_data(conn: ConnType, user_id: int | str, character_id: str) -> N
 
     包括：聊天消息、摘要、关系状态、剧情进度。
     清空后一切从零开始，避免出现"关系还在但记忆全无"的逻辑矛盾。
-
-    Args:
-        conn: 数据库连接
-        user_id: 用户 ID
-        character_id: 角色 ID
     """
-    conn.execute(
-        "DELETE FROM chat_messages WHERE user_id = %s AND character_id = %s",
-        (user_id, character_id),
-    )
-    conn.execute(
-        "DELETE FROM chat_summaries WHERE user_id = %s AND character_id = %s",
-        (user_id, character_id),
-    )
+    chat_repo.delete_user_messages(conn, user_id, character_id)
+    chat_repo.delete_user_summaries(conn, user_id, character_id)
     # 同步重置关系状态，防止"失忆但关系还在"的违和感
     conn.execute(
         "DELETE FROM character_states WHERE user_id = %s AND character_id = %s",
@@ -123,13 +113,7 @@ def clear_chat_history_with_greeting(
 ) -> str:
     _clear_chat_data(conn, user_id, character_id)
     greeting = _resolve_chat_clear_greeting(conn, character_id, greeting_index)
-    conn.execute(
-        """
-        INSERT INTO chat_messages(user_id, character_id, role, content, is_summarized)
-        VALUES (%s, %s, 'assistant', %s, 1)
-        """,
-        (user_id, character_id, greeting),
-    )
+    chat_repo.insert_message(conn, user_id=user_id, character_id=character_id, role="assistant", content=greeting, is_summarized=1)
     if commit:
         conn.commit()
     return greeting

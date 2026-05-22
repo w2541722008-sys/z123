@@ -6,7 +6,7 @@
 
 - **方式**: Cookie（`aifriend_session`）或 `Authorization: Bearer <token>`
 - **Cookie 属性**: HttpOnly、SameSite=Strict（生产）、Secure（生产）
-- **Token 续期**: 距过期不足 7 天时自动续期
+- **双 Token 模型**: Access Token（15 分钟）用于 API 鉴权，Refresh Token（30 天）用于续期
 
 ---
 
@@ -19,10 +19,10 @@
 ```json
 {
   "status": "ok",
-  "db": "ok",
-  "media": "ok"
+  "time": "2026-01-01T00:00:00+00:00"
 }
 ```
+`status` 为 `ok` 表示全部健康，`degraded` 表示部分异常。
 
 ---
 
@@ -36,7 +36,7 @@
 {
   "email": "user@example.com",
   "password": "password123",
-  "username": "用户名"
+  "nickname": "用户名"
 }
 ```
 

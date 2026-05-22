@@ -95,7 +95,6 @@ DATABASE_URL=postgresql://user:pass@host:5432/dbname
 ALLOWED_ORIGINS=https://your-domain.com
 AIFRIEND_API_KEY=your-api-key
 ADMIN_EMAILS=admin@example.com
-SECRET_KEY=your-secret-key
 
 # 邮件配置（二选一）
 SMTP_HOST=smtp.gmail.com

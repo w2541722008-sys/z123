@@ -297,77 +297,12 @@ def _prepare_prompt_context_result(
     )
 
 
-# ============================================================
-# 游客流式构建
-# ============================================================
-def _build_guest_fallback_messages(character: dict[str, Any], user_message: str) -> list[dict[str, str]]:
-    """最简降级 prompt — 仅在 build_layered_chat_messages 异常时使用。"""
-    name = character.get("name", "AI角色")
-    subtitle = character.get("subtitle", "")
-    identity = "你是" + name
-    if subtitle:
-        identity += "，" + subtitle
-    description = character.get("description", "")
-    if description:
-        identity += "\n" + description
-
-    return [
-        {"role": "system", "content": identity + "\n\n请用第一人称自然回复，保持角色设定。"},
-        {"role": "user", "content": user_message},
-    ]
-
-
-def _build_guest_stream_messages(
-    character: dict[str, Any],
-    message_text: str,
-    guest_history: list[Any],
-) -> tuple[str, list[dict[str, str]]]:
-    clean_text = _normalize_non_empty_message(message_text)
-    fake_history = [
-        message_projection(item.role, item.content)
-        for item in guest_history
-    ]
-    # 将用户消息加入历史末尾，由 build_layered_chat_messages 统一走预算控制
-    fake_history.append({"role": "user", "content": clean_text})
-    try:
-        messages = build_layered_chat_messages(
-            character=character,
-            recent_messages=fake_history,
-            memory_summary="",
-            related_assets=[],
-            user_name="访客",
-            character_state=None,
-        )
-    except Exception as exc:
-        logger.warning("游客 prompt 构建失败，使用降级 prompt: %s", exc, exc_info=True)
-        messages = _build_guest_fallback_messages(character, clean_text)
-    return clean_text, messages
-
-
-def _build_guest_quota_payload(conn: ConnType, guest_ip: str) -> dict[str, Any]:
-    plan_policy = get_plan_policy(GUEST_PLAN)
-    token_limit = max(0, int(plan_policy["token_limit"] or 0))
-    usage = get_daily_usage(conn, guest_ip=guest_ip)
-    used_tokens = max(0, int(usage["total_tokens"] or 0))
-    remaining_tokens = max(0, token_limit - used_tokens)
-    remaining_percent = int(remaining_tokens * 100 / token_limit) if token_limit > 0 else 100
-
-    if remaining_tokens <= 0:
-        status_text = "额度已用完"
-    elif remaining_percent <= 35:
-        status_text = "额度不多"
-    else:
-        status_text = "额度充足"
-
-    return {
-        "guest": True,
-        "status_text": status_text,
-        "remaining_percent": max(0, min(100, remaining_percent)),
-        "used_tokens": used_tokens,
-        "remaining_tokens": remaining_tokens,
-        "token_limit": token_limit,
-    }
-
+# 游客流式函数已移入 services.chat_stream._guest，此处保留向后兼容 re-export
+from services.chat_stream._guest import (  # noqa: F401
+    build_guest_fallback_messages as _build_guest_fallback_messages,
+    build_guest_stream_messages as _build_guest_stream_messages,
+    build_guest_quota_payload as _build_guest_quota_payload,
+)
 
 # ============================================================
 # 用户流式构建
@@ -533,8 +468,9 @@ def _persist_wi_state(
     if wi_sticky is None and wi_cooldown is None:
         return
     # 读取当前 DB 中的 custom_vars，合并状态后写回
+    # FOR UPDATE 防止并发请求之间的 read-modify-write 竞态
     row = conn.execute(
-        "SELECT custom_vars FROM character_states WHERE user_id = %s AND character_id = %s",
+        "SELECT custom_vars FROM character_states WHERE user_id = %s AND character_id = %s FOR UPDATE",
         (user_id, character_id),
     ).fetchone()
     if not row:

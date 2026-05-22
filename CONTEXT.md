@@ -67,8 +67,8 @@
 **FakeQueryResult**：与 FakeSequenceConn 配合使用，定义模拟查询的返回数据和 fetchone/fetchall 行为。
 
 **测试分层**：
-- `tests/unit/` — 单元测试（29 文件），无需数据库
-- `tests/services/` — 服务层测试（8 文件）
+- `tests/unit/` — 单元测试（30 文件），无需数据库
+- `tests/services/` — 服务层测试（12 文件）
 - `tests/routers/` — 路由层测试（7 文件）
 - `tests/contracts/` — 契约测试（5 文件）
 - `tests/integration/` — 集成测试（4 文件），需真实数据库
@@ -87,7 +87,7 @@
 4. `services/chat_send.py` — 聊天发送服务
 5. `core/auth/` — 认证模块（子包）
 6. `core/database.py` — 数据库连接管理
-7. `repositories/` — 数据访问层（全部 6 个模块）
+7. `repositories/` — 数据访问层（14 个模块）
 8. `alembic/versions/` — 数据库迁移脚本
 
 ---

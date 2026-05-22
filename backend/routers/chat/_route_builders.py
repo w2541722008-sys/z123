@@ -27,7 +27,7 @@ from core.plan_constants import GUEST_PLAN
 from services.plan_service import get_plan_policy
 from services.rate_limit import get_request_client_ip
 
-from services.chat_stream_service import (
+from services.chat_stream import (
     _build_main_stream_postprocess,
     _build_guest_stream_postprocess,
     _build_main_stream_response,

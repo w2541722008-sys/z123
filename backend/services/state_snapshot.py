@@ -16,6 +16,7 @@ from constants.story_phase import STORY_PHASE_LABELS, SCENARIO_PHASE_LABELS
 from constants.prompt_templates import STATE_UPDATE_INSTRUCTION, SCENARIO_STATE_UPDATE_INSTRUCTION
 from core.config import TIMEZONE_OFFSET
 from core.database import ConnType
+from repositories import story_repository as story_repo
 from services.character_affection import is_affection_enabled as _check_affection
 from services.prompt_builder import _get_behavior_tendency
 from services.runtime_bundle import _get_field
@@ -92,35 +93,18 @@ def _append_storyline_info(
         return
 
     try:
-        sl_row = conn.execute(
-            "SELECT name FROM character_storylines WHERE id = %s",
-            (storyline_id,),
-        ).fetchone()
-        if sl_row and sl_row["name"]:
-            state_lines.append(f"- 当前剧情线：{sl_row['name']}")
+        name = story_repo.get_storyline_name(conn, storyline_id)
+        if name:
+            state_lines.append(f"- 当前剧情线：{name}")
 
         if card_type == "scenario" and user_id:
             try:
-                progress_row = conn.execute(
-                    "SELECT triggered_event_ids FROM user_story_progress WHERE user_id = %s AND character_id = %s",
-                    (user_id, char_id),
-                ).fetchone()
-                if progress_row and progress_row["triggered_event_ids"]:
-                    event_ids = [
-                        int(x.strip())
-                        for x in str(progress_row["triggered_event_ids"]).split(",")
-                        if x.strip().isdigit()
-                    ]
-                    if event_ids:
-                        recent_ids = event_ids[-3:]
-                        placeholders = ",".join(["%s"] * len(recent_ids))
-                        recent_events = conn.execute(
-                            f"SELECT title FROM story_events WHERE id IN ({placeholders}) ORDER BY id DESC",
-                            tuple(recent_ids),
-                        ).fetchall()
-                        titles = [e["title"] for e in recent_events if e["title"]]
-                        if titles:
-                            state_lines.append(f"- 最近剧情：{' → '.join(titles)}")
+                triggered_ids = story_repo.get_triggered_event_ids(conn, user_id, char_id)
+                if triggered_ids:
+                    recent_ids = sorted(triggered_ids)[-3:]
+                    titles = story_repo.get_recent_event_titles(conn, recent_ids)
+                    if titles:
+                        state_lines.append(f"- 最近剧情：{' → '.join(titles)}")
             except Exception:
                 logger.warning(
                     "查询最近剧情事件失败 char_id=%s user_id=%s", char_id, user_id, exc_info=True,

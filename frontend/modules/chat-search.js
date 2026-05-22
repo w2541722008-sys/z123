@@ -66,14 +66,20 @@ const ChatSearch = (() => {
     if (q) _doSearch(q);
   }
 
+  var _searchVersion = 0;
+
   function _doSearch(q) {
     _currentQuery = q;
     _currentPage = 1;
+    var version = ++_searchVersion;
     var body = document.getElementById('chat-search-body');
     if (body) body.innerHTML = '<div class="chat-search-loading">搜索中…</div>';
     API.searchMessages(q, _characterId, 1).then(function (result) {
+      // 乱序防护：忽略过期请求的响应
+      if (version !== _searchVersion) return;
       _renderResults(result);
     }).catch(function (err) {
+      if (version !== _searchVersion) return;
       var body2 = document.getElementById('chat-search-body');
       if (body2) body2.innerHTML = '<div class="chat-search-error">搜索失败：' + escapeHtml(err.message || '网络错误') + '</div>';
     });

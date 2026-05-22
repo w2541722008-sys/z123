@@ -24,7 +24,7 @@ API 基地址：生产环境默认 `/api`（Nginx 同源代理），开发环境
 后台采用"入口瘦身 + 模块分域"组织：
 
 - 基础层：`utils.js`、`api.js`、`state.js`、`config.js`、`normalizers.js`
-- 分域层：`overview.js`、`char-list.js`、`char-crud.js`、`char-editor.js`、`char-advanced.js`、`membership.js`、`dashboard.js`、`audit-log.js`、`prompt-preview.js`
+- 分域层：`overview.js`、`char-list.js`、`char-crud.js`、`char-editor.js`、`char-editor-affection.js`、`char-advanced.js`、`membership.js`、`dashboard.js`、`audit-log.js`、`prompt-preview.js`
 - 编排层：`bootstrap.js`、`actions.js`、`main.js`
 
 ## 事件模型

@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from core.auth import CurrentUser, get_admin_user, get_current_user
 from core.database import ConnType, get_db_dep
 from core.schemas import GreetingPayload, StorylinePayload
+from repositories import admin_audit_repository as audit_repo
 from repositories import character_admin_story_repository as admin_repo
 from repositories import character_repository as char_repo
 from utils.json_utils import to_json_string
 
-from ._helpers import _write_audit_log, _assert_storyline_owned
+from ._helpers import _assert_storyline_owned
 
 # 认证依赖由父路由 _router.py 统一提供
 router = APIRouter(tags=["admin"])
@@ -206,7 +207,7 @@ def delete_storyline(
     admin_repo.admin_detach_storyline_refs(conn, storyline_id)
     admin_repo.admin_delete_storyline(conn, storyline_id)
 
-    _write_audit_log(
+    audit_repo.insert_audit_log(
         conn,
         operator_id=current_user.id,
         operator_email=current_user.email,

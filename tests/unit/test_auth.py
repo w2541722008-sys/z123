@@ -324,8 +324,8 @@ class TestAuthDependencies:
         assert user is None
         assert conn.closed is True
 
-    def test_get_optional_user_returns_user_and_triggers_sliding_extend(self):
-        """用户验证成功时，_sliding_extend_token 被调用且 conn 参数被传入。"""
+    def test_get_optional_user_returns_user_without_sliding_extend(self):
+        """用户验证成功时应正确返回用户信息，不再调用滑动续期。"""
         soon_expires = (NOW_UTC + timedelta(days=3)).isoformat()
         row = {
             "id": 1,
@@ -339,7 +339,6 @@ class TestAuthDependencies:
         conn = _AuthConn(row)
         mock_cache = _make_mock_cache()
         with patch("core.auth._dependencies.get_conn", return_value=conn), \
-             patch("core.auth._dependencies._sliding_extend_token") as mock_extend_token, \
              patch("core.auth._dependencies._cache", mock_cache):
             user = get_optional_user(MagicMock(cookies={}), "Bearer raw_token_123")
 
@@ -348,9 +347,6 @@ class TestAuthDependencies:
         assert user.email == "vip@example.com"
         assert user.nickname == "vip"
         assert conn.closed is True
-        mock_extend_token.assert_called_once()
-        call_kwargs = mock_extend_token.call_args
-        assert call_kwargs[1]["conn"] is conn
 
     def test_get_current_user_raises_401_when_optional_user_missing(self):
         with patch("core.auth._dependencies.get_optional_user", return_value=None):

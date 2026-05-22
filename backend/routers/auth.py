@@ -28,6 +28,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from fastapi.responses import JSONResponse
 
 # 本地模块导入
+from core.auth._cookies import _COOKIE_NAME
 from core.auth import (
     CurrentUser,
     _extract_token_from_request,

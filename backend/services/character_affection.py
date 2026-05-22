@@ -6,16 +6,30 @@ from typing import Any
 from core.config import utc_now
 from core.database import ConnType
 from constants import Mood, StoryPhase
+from constants.affection import (
+    AFFECTION_BASE_RULES,
+    AFFECTION_COOLDOWN_SECONDS,
+    AFFECTION_DELTA_MAX,
+    AFFECTION_DIMINISHING_RETURNS,
+    DAILY_AFFECTION_CAP_DEFAULT,
+    EVENT_NAME_MIGRATION,
+    PHASE_GAIN_MULTIPLIER,
+    PHASE_THRESHOLDS,
+)
+from repositories import character_repository as char_repo
 from services.cache_service import cache_get, cache_set
 from utils.json_utils import parse_json_object
 
-# 对话陪伴 + 冒险剧情共用的基础事件
-_AFFECTION_BASE_RULES: dict[str, int] = {
-    "deep_conversation": 4, "light_chat": 1, "compliment": 2, "gift": 6,
-    "help": 3, "shared_secret": 5, "first_meeting": 3, "comfort": 3,
-    "flirt": 2, "date": 5, "confession": 10, "intimate_moment": 6,
-    "argument": -5, "rude": -3, "ignore": -2, "lie": -4, "betray": -8, "insult": -6,
-}
+# 向后兼容别名（旧代码可能通过 from services.character_affection import _AFFECTION_BASE_RULES 引用）
+_AFFECTION_BASE_RULES = AFFECTION_BASE_RULES
+_AFFECTION_COOLDOWN_SECONDS = AFFECTION_COOLDOWN_SECONDS
+_AFFECTION_DIMINISHING_RETURNS = AFFECTION_DIMINISHING_RETURNS
+_DAILY_AFFECTION_CAP_DEFAULT = DAILY_AFFECTION_CAP_DEFAULT
+_PHASE_THRESHOLDS = PHASE_THRESHOLDS
+_PHASE_GAIN_MULTIPLIER = PHASE_GAIN_MULTIPLIER
+_AFFECTION_DELTA_MAX = AFFECTION_DELTA_MAX
+_EVENT_NAME_MIGRATION = EVENT_NAME_MIGRATION
+
 
 # 冒险剧情专属事件
 _ADVENTURE_AFFECTION_RULES: dict[str, int] = {
@@ -31,59 +45,17 @@ _ROMANCE_AFFECTION_RULES: dict[str, int] = {
     "love_rival_appears": -2, "heartfelt_talk": 4, "surprise_gift": 3,
 }
 
-_AFFECTION_COOLDOWN_SECONDS: dict[str, int] = {
-    "deep_conversation": 3600, "light_chat": 300, "compliment": 1800, "gift": 86400,
-    "help": 3600, "shared_secret": 7200, "first_meeting": 604800, "comfort": 1800,
-    "argument": 3600, "rude": 1800, "ignore": 1800, "lie": 3600, "betray": 604800, "insult": 3600,
-    # 冒险剧情事件冷却
-    "explore": 300, "discover": 1800, "problem_resolved": 86400, "challenge_won": 3600,
-    "obstacle_cleared": 604800, "choice_made": 7200, "npc_helped": 3600,
-    "secret_found": 86400, "milestone": 43200, "setback": 1800,
-    "unexpected_danger": 1200, "relationship_lost": 86400, "opportunity_missed": 3600,
-    # 恋爱剧情事件冷却
-    "flirt": 1200, "date": 43200, "first_hug": 604800, "kiss": 604800, "confession": 604800,
-    "intimate_moment": 86400, "jealousy": 3600, "misunderstanding": 7200, "reconciliation": 86400,
-    "love_rival_appears": 604800, "heartfelt_talk": 3600, "surprise_gift": 86400,
-}
-
-# 旧事件名→新事件名迁移映射（向后兼容：运营自定义规则中可能仍使用旧名）
-_EVENT_NAME_MIGRATION: dict[str, str] = {
-    "battle_won": "challenge_won",
-    "boss_defeated": "obstacle_cleared",
-    "battle_lost": "setback",
-    "trap_triggered": "unexpected_danger",
-    "puzzle_solved": "problem_resolved",
-    "ally_lost": "relationship_lost",
-    "clue_missed": "opportunity_missed",
-    # Prompt 旧事件名兼容（prompt_assembler 曾使用这些名称，已修正但对齐旧数据）
-    "chat": "light_chat",
-    "deep_talk": "deep_conversation",
-    "intimate": "intimate_moment",
-    "cold": "ignore",
-}
-
-_AFFECTION_DIMINISHING_RETURNS: list[float] = [1.0, 0.6, 0.3, 0.0]
-_DAILY_AFFECTION_CAP_DEFAULT = 15  # 默认每日好感度上限
-# daily_cap=0 表示不限制每日上限（适合剧情沙盒角色）
-_PHASE_THRESHOLDS: dict[str, int] = {"acquaintance": 20, "friend": 50, "lover": 80}
-_PHASE_GAIN_MULTIPLIER: dict[str, float] = {
-    "stranger": 1.0, "acquaintance": 0.8, "friend": 0.6, "lover": 0.4,
-}
 _VALID_STORY_PHASES = tuple(phase.value for phase in StoryPhase)
 _VALID_MOODS = tuple(mood.value for mood in Mood)
-_AFFECTION_DELTA_MAX = 10
 
 
-def _get_affection_rules(conn: ConnType, character_id: str) -> dict[str, int]:
+def get_affection_rules(conn: ConnType, character_id: str) -> dict[str, int]:
     cache_key = f"affection_rules:{character_id}"
     cached = cache_get(cache_key)
     if cached is not None:
         return dict(cached)
 
-    row = conn.execute(
-        "SELECT affection_rules_json, affection_enabled FROM characters WHERE id = %s",
-        (character_id,),
-    ).fetchone()
+    row = char_repo.get_affection_config(conn, character_id)
     if not row:
         result = dict(_AFFECTION_BASE_RULES)
         cache_set(cache_key, result, ttl=300)
@@ -117,10 +89,7 @@ def _get_affection_rules(conn: ConnType, character_id: str) -> dict[str, int]:
 
 
 def is_affection_enabled(conn: ConnType, character_id: str) -> bool:
-    row = conn.execute(
-        "SELECT affection_enabled, affection_rules_json FROM characters WHERE id = %s",
-        (character_id,),
-    ).fetchone()
+    row = char_repo.get_affection_config(conn, character_id)
     if not row:
         return True
     if int(row["affection_enabled"] or 1) == 0:
@@ -131,7 +100,7 @@ def is_affection_enabled(conn: ConnType, character_id: str) -> bool:
     return True
 
 
-def _get_daily_cap(conn: ConnType, character_id: str) -> int:
+def get_daily_cap(conn: ConnType, character_id: str) -> int:
     """从角色卡的 affection_rules_json 中读取 daily_cap 配置。
 
     返回值含义：
@@ -139,10 +108,7 @@ def _get_daily_cap(conn: ConnType, character_id: str) -> int:
         = 0  → 不限制每日上限（适合剧情沙盒）
     未配置时返回默认值 15。
     """
-    row = conn.execute(
-        "SELECT affection_rules_json FROM characters WHERE id = %s",
-        (character_id,),
-    ).fetchone()
+    row = char_repo.get_affection_config(conn, character_id)
     if not row or not row["affection_rules_json"]:
         return _DAILY_AFFECTION_CAP_DEFAULT
     rules_json = parse_json_object(row["affection_rules_json"], fallback={})
@@ -155,7 +121,7 @@ def _get_daily_cap(conn: ConnType, character_id: str) -> int:
     return _DAILY_AFFECTION_CAP_DEFAULT
 
 
-def _calculate_affection_change(
+def calculate_affection_change(
     event: str,
     rules: dict[str, int],
     current_state: dict[str, Any],
@@ -188,8 +154,8 @@ def _calculate_affection_change(
             elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
             if elapsed < cooldown_secs:
                 return 0, f"cooldown: event={event}, remaining={int(cooldown_secs - elapsed)}s"
-        except (ValueError, TypeError):
-            pass
+        except (ValueError, TypeError) as exc:
+            logging.warning("冷却时间戳解析失败 event=%s ts=%s: %s", event, last_ts, exc)
 
     # 日上限检查（daily_cap=0 时跳过，不限制）
     daily_gained = current_state.get("_daily_affection_gained", 0)
@@ -214,7 +180,7 @@ def _calculate_affection_change(
     return actual, reason
 
 
-def _update_anti_abuse_counters(
+def update_anti_abuse_counters(
     current_state: dict[str, Any],
     event: str,
     actual_change: int,
@@ -233,7 +199,7 @@ def _update_anti_abuse_counters(
     return updated
 
 
-def _auto_advance_story_phase(
+def auto_advance_story_phase(
     affection: int,
     current_phase: str,
     *,
@@ -268,3 +234,11 @@ def _auto_advance_story_phase(
             if candidate_idx > best_idx:
                 best_idx = candidate_idx
     return phases_order[best_idx]
+
+
+# 向后兼容别名 — 旧代码可能通过 _ 前缀引用这些函数
+_get_affection_rules = get_affection_rules
+_get_daily_cap = get_daily_cap
+_calculate_affection_change = calculate_affection_change
+_update_anti_abuse_counters = update_anti_abuse_counters
+_auto_advance_story_phase = auto_advance_story_phase

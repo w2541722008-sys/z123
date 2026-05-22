@@ -61,7 +61,8 @@ def admin_create_memory(
         """,
         (
             character_id, keywords, trigger_logic, content, category_id,
-            position, priority, is_active, comment, selective, constant,
+            position, priority, 1 if is_active else 0, comment,
+            1 if selective else 0, 1 if constant else 0,
             sticky, cooldown,
         ),
     )
@@ -103,7 +104,9 @@ def admin_update_memory(
         """,
         (
             keywords, trigger_logic, content, category_id, position, priority,
-            is_active, comment, selective, constant, sticky, cooldown, memory_id,
+            1 if is_active else 0, comment,
+            1 if selective else 0, 1 if constant else 0,
+            sticky, cooldown, memory_id,
         ),
     )
 

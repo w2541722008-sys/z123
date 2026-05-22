@@ -10,7 +10,7 @@
 
 from fastapi import APIRouter
 
-from ._helpers import _ADMIN_EDITABLE_FIELDS, _transaction, _write_audit_log
+from ._helpers import _ADMIN_EDITABLE_FIELDS, _transaction
 from ._router import router as characters_router
 from .users import router as users_router
 from .orders import router as orders_router
@@ -22,4 +22,4 @@ router.include_router(users_router)
 router.include_router(orders_router)
 router.include_router(dashboard_router)
 
-__all__ = ["router", "_ADMIN_EDITABLE_FIELDS", "_transaction", "_write_audit_log"]
+__all__ = ["router", "_ADMIN_EDITABLE_FIELDS", "_transaction"]

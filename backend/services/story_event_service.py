@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from core.database import ConnType
+from repositories import story_repository as story_repo
 
 logger = logging.getLogger(__name__)
 
@@ -22,39 +23,14 @@ def _fetch_active_story_events(
     conn: ConnType, character_id: str
 ) -> list[dict[str, Any]]:
     """获取角色所有启用的剧情事件，按触发分数升序。"""
-    return conn.execute(
-        """
-        SELECT id, title, description, trigger_score, trigger_custom_key,
-               unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
-               event_content, is_active
-        FROM story_events
-        WHERE character_id = %s AND is_active = 1
-        ORDER BY trigger_score ASC
-        """,
-        (character_id,),
-    ).fetchall()
+    return story_repo.fetch_active_story_events(conn, character_id)
 
 
 def _load_triggered_event_ids(
     conn: ConnType, user_id: int | str, character_id: str
 ) -> set[int]:
     """读取用户已触发的剧情事件 ID 集合。"""
-    progress_row = conn.execute(
-        """
-        SELECT triggered_event_ids FROM user_story_progress
-        WHERE user_id = %s AND character_id = %s
-        """,
-        (user_id, character_id),
-    ).fetchone()
-
-    if not progress_row or not progress_row["triggered_event_ids"]:
-        return set()
-
-    return set(
-        int(x.strip())
-        for x in str(progress_row["triggered_event_ids"]).split(",")
-        if x.strip().isdigit()
-    )
+    return story_repo.get_triggered_event_ids(conn, user_id, character_id)
 
 
 def _should_trigger_event(
@@ -97,15 +73,7 @@ def _unlock_event_assets(
             if x.strip().isdigit()
         ]
         if memory_ids:
-            placeholders = ",".join(["%s"] * len(memory_ids))
-            conn.execute(
-                f"""
-                UPDATE character_memories
-                SET is_active = 1
-                WHERE character_id = %s AND id IN ({placeholders})
-                """,
-                (character_id,) + tuple(memory_ids),
-            )
+            story_repo.unlock_memories(conn, character_id, memory_ids)
             unlocked["memories"] = memory_ids
 
     if event["unlocked_greeting_ids"]:
@@ -115,27 +83,12 @@ def _unlock_event_assets(
             if x.strip().isdigit()
         ]
         if greeting_ids:
-            placeholders = ",".join(["%s"] * len(greeting_ids))
-            conn.execute(
-                f"""
-                UPDATE character_greetings
-                SET is_active = 1
-                WHERE character_id = %s AND id IN ({placeholders})
-                """,
-                (character_id,) + tuple(greeting_ids),
-            )
+            story_repo.unlock_greetings(conn, character_id, greeting_ids)
             unlocked["greetings"] = greeting_ids
 
     if event["unlocked_storyline_id"]:
         storyline_id = int(event["unlocked_storyline_id"])
-        conn.execute(
-            """
-            UPDATE character_storylines
-            SET is_active = 1
-            WHERE character_id = %s AND id = %s
-            """,
-            (character_id, storyline_id),
-        )
+        story_repo.unlock_storyline(conn, character_id, storyline_id)
         unlocked["storyline_id"] = storyline_id
 
     return unlocked
@@ -154,17 +107,7 @@ def _persist_story_progress(
     all_triggered = triggered_ids | set(int(x) for x in new_triggered_ids)
     all_triggered_str = ",".join(sorted(str(x) for x in all_triggered))
 
-    conn.execute(
-        """
-        INSERT INTO user_story_progress
-        (user_id, character_id, triggered_event_ids, current_storyline_id)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT(user_id, character_id) DO UPDATE SET
-            triggered_event_ids = excluded.triggered_event_ids,
-            last_updated = now()
-        """,
-        (user_id, character_id, all_triggered_str, None),
-    )
+    story_repo.upsert_story_progress(conn, user_id, character_id, all_triggered_str)
     if commit:
         conn.commit()
 

@@ -74,7 +74,11 @@ def load_env_file() -> None:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = value.strip()
+        # 成对引号剥离：仅当值首尾是同一引号字符时才剥离，避免误删值内部的引号
+        if len(value) >= 2:
+            if (value[0] == value[-1]) and value[0] in ('"', "'"):
+                value = value[1:-1]
         if key and key not in os.environ:
             os.environ[key] = value
 

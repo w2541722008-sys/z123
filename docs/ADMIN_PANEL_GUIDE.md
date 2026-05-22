@@ -21,6 +21,7 @@
 - `char-list.js`
 - `char-crud.js`
 - `char-editor.js`
+- `char-editor-affection.js`
 - `char-advanced.js`
 - `membership.js`
 - `dashboard.js`

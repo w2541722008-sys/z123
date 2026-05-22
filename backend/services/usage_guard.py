@@ -8,11 +8,10 @@ from typing import Any
 from core.exceptions import BudgetExceededError
 from core.config import COST_ESTIMATE_CHARS_PER_TOKEN
 from core.database import ConnType
+from repositories import usage_repository as usage_repo
 
-# 常量定义
-ERROR_DETAIL_MAX_LENGTH = 500
-
-SUCCESS_STATUSES = ("success", "fallback")
+# 向后兼容（这些常量已移入 usage_repository，但旧代码仍可能从 usage_guard 导入）
+from repositories.usage_repository import ERROR_DETAIL_MAX_LENGTH, SUCCESS_STATUSES  # noqa: F401
 
 
 def estimate_tokens_from_chars(chars: int) -> int:
@@ -56,39 +55,9 @@ def get_daily_usage(
         raise ValueError("user_id 和 guest_ip 至少需要一个")
 
     start_iso, end_iso = _day_range_utc()
-    status_placeholders = ", ".join(["%s"] * len(SUCCESS_STATUSES))
-
-    if user_id is not None:
-        row = conn.execute(
-            f"""
-            SELECT COUNT(*) AS request_count,
-                   COALESCE(SUM(CAST(total_estimated_tokens AS bigint)), 0) AS total_tokens
-            FROM ai_request_logs
-            WHERE user_id = %s
-              AND status IN ({status_placeholders})
-              AND created_at >= %s
-              AND created_at < %s
-            """,
-            (user_id, *SUCCESS_STATUSES, start_iso, end_iso),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            f"""
-            SELECT COUNT(*) AS request_count,
-                   COALESCE(SUM(CAST(total_estimated_tokens AS bigint)), 0) AS total_tokens
-            FROM ai_request_logs
-            WHERE guest_ip = %s
-              AND status IN ({status_placeholders})
-              AND created_at >= %s
-              AND created_at < %s
-            """,
-            (guest_ip or "", *SUCCESS_STATUSES, start_iso, end_iso),
-        ).fetchone()
-
-    return {
-        "request_count": int(row["request_count"] or 0) if row else 0,
-        "total_tokens": int(row["total_tokens"] or 0) if row else 0,
-    }
+    return usage_repo.get_daily_usage(
+        conn, user_id=user_id, guest_ip=guest_ip, start_iso=start_iso, end_iso=end_iso,
+    )
 
 
 def enforce_daily_budget(
@@ -124,27 +93,19 @@ def log_ai_request(
     commit: bool = True,
 ) -> None:
     """记录一次聊天请求的估算消耗。"""
-    conn.execute(
-        """
-        INSERT INTO ai_request_logs(
-            user_id, guest_ip, character_id, endpoint,
-            request_chars, estimated_input_tokens, estimated_output_tokens,
-            total_estimated_tokens, used_fallback, status, error_detail
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
-            user_id,
-            guest_ip or "",
-            character_id,
-            endpoint,
-            request_chars,
-            estimated_input_tokens,
-            estimated_output_tokens,
-            total_estimated_tokens,
-            1 if used_fallback else 0,
-            status,
-            (error_detail or "")[:ERROR_DETAIL_MAX_LENGTH],
-        ),
+    usage_repo.insert_request_log(
+        conn,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        character_id=character_id,
+        endpoint=endpoint,
+        request_chars=request_chars,
+        estimated_input_tokens=estimated_input_tokens,
+        estimated_output_tokens=estimated_output_tokens,
+        total_estimated_tokens=total_estimated_tokens,
+        used_fallback=used_fallback,
+        status=status,
+        error_detail=error_detail,
     )
     if commit:
         conn.commit()

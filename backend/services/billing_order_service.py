@@ -12,13 +12,9 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime, timezone
-
-from core.config import utc_now, logger
+from core.config import logger
 from core.database import get_conn
-
-ORDER_STATUS_PENDING = "pending"
-ORDER_STATUS_CLOSED = "closed"
+from repositories import billing_repository as billing_repo
 
 
 def close_expired_pending_orders(
@@ -27,33 +23,10 @@ def close_expired_pending_orders(
     *,
     commit: bool = True,
 ) -> int:
-    now = utc_now()
-    if user_id is None:
-        cursor = conn.execute(
-            """
-            UPDATE membership_orders
-            SET status = %s, closed_at = %s, updated_at = now()
-            WHERE status = %s
-              AND expires_at IS NOT NULL
-              AND expires_at <= %s
-            """,
-            (ORDER_STATUS_CLOSED, now, ORDER_STATUS_PENDING, now),
-        )
-    else:
-        cursor = conn.execute(
-            """
-            UPDATE membership_orders
-            SET status = %s, closed_at = %s, updated_at = now()
-            WHERE user_id = %s
-              AND status = %s
-              AND expires_at IS NOT NULL
-              AND expires_at <= %s
-            """,
-            (ORDER_STATUS_CLOSED, now, user_id, ORDER_STATUS_PENDING, now),
-        )
+    rowcount = billing_repo.close_expired_orders(conn, user_id=user_id)
     if commit:
         conn.commit()
-    return int(cursor.rowcount)
+    return rowcount
 
 
 def start_order_cleanup_daemon(*, interval_seconds: int = 3600) -> threading.Thread:

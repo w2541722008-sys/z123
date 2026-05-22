@@ -27,9 +27,7 @@ from services.rate_limit import enforce_rate_limit, get_request_client_ip
 router = APIRouter()
 
 
-ORDER_STATUS_PENDING = "pending"
-ORDER_STATUS_PAID = "paid"
-ORDER_STATUS_CLOSED = "closed"
+from constants.order_status import ORDER_STATUS_CLOSED, ORDER_STATUS_PAID, ORDER_STATUS_PENDING
 
 
 PLAN_PRODUCTS = {
@@ -61,12 +59,18 @@ def _pending_order_expires_at() -> str:
 
 
 def _is_order_expired(row) -> bool:
-    """判断一笔待支付订单是否已经超时。"""
-    expires_at = (row["expires_at"] or "").strip()
+    """判断一笔待支付订单是否已经超时。
+
+    expires_at 可能是 psycopg2 返回的 datetime 对象，也可能是字符串，
+    此处兼容两种类型。
+    """
+    expires_at = row["expires_at"]
     if row["status"] != ORDER_STATUS_PENDING or not expires_at:
         return False
+    if isinstance(expires_at, datetime):
+        return expires_at <= datetime.now(timezone.utc)
     try:
-        return datetime.fromisoformat(expires_at) <= datetime.now(timezone.utc)
+        return datetime.fromisoformat(str(expires_at).strip()) <= datetime.now(timezone.utc)
     except ValueError:
         return False
 

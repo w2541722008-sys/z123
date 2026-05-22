@@ -165,8 +165,8 @@ def get_circuit_breaker(
     global _breaker
     if _breaker is None:
         _breaker = CircuitBreaker(
-            failure_threshold=failure_threshold or 5,
-            failure_window_seconds=failure_window_seconds or 60.0,
-            open_timeout_seconds=open_timeout_seconds or 30.0,
+            failure_threshold=failure_threshold if failure_threshold is not None else 5,
+            failure_window_seconds=failure_window_seconds if failure_window_seconds is not None else 60.0,
+            open_timeout_seconds=open_timeout_seconds if open_timeout_seconds is not None else 30.0,
         )
     return _breaker

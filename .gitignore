@@ -119,3 +119,4 @@ skills-lock.json
 
 # Trae（保留规则文件，忽略其余）
 .trae/
+.codex/

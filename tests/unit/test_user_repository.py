@@ -119,13 +119,13 @@ class TestUpdateUserFields:
     def test_dynamic_set_clause(self):
         from repositories.user_repository import update_user_fields
         conn = FakeSequenceConn([FakeRow()])
-        update_user_fields(conn, user_id=1, updates={"nickname": "new", "plan_type": "vip"})
+        update_user_fields(conn, user_id=1, updates={"nickname": "new", "email": "vip@test.com"})
         sql, params = conn.executed[0]
         assert "nickname = %s" in sql
-        assert "plan_type = %s" in sql
+        assert "email = %s" in sql
         assert "updated_at = now()" in sql
         # 源码使用 list(updates.values()) + [user_id]，参数为 list
-        assert list(params) == ["new", "vip", 1]
+        assert list(params) == ["new", "vip@test.com", 1]
 
 
 # ── admin: update_user_plan ─────────────────────────
@@ -146,14 +146,16 @@ class TestUpdateUserPlan:
 class TestDeleteUserCascade:
     def test_deletes_in_order(self):
         from repositories.user_repository import delete_user_cascade
-        conn = FakeSequenceConn([FakeRow()] * 5)
+        conn = FakeSequenceConn([FakeRow()] * 10)
         delete_user_cascade(conn, user_id=1)
         sqls = [sql for sql, _ in conn.executed]
         # 验证删除顺序：先子表后主表
         table_order = []
         for sql in sqls:
-            for table in ["ai_request_logs", "chat_messages", "user_character_profiles", "membership_orders", "users"]:
+            for table in ["ai_request_logs", "chat_messages", "chat_summaries",
+                          "user_character_profiles", "character_states", "user_story_progress",
+                          "membership_orders", "auth_tokens", "password_reset_codes", "users"]:
                 if f"DELETE FROM {table}" in sql:
                     table_order.append(table)
         assert table_order.index("users") > table_order.index("chat_messages")
-        assert len(conn.executed) == 5
+        assert len(conn.executed) == 10

@@ -57,6 +57,23 @@
       .replace(/'/g, "\\'");
   }
 
+  /**
+   * 校验 CSS 颜色值，仅允许安全的颜色格式。
+   * 防止将用户输入的恶意字符串注入 style 属性。
+   *
+   * @param {string} color - 用户输入的颜色值
+   * @param {string} fallback - 校验失败时的回退颜色
+   * @returns {string} 安全的 CSS 颜色值
+   */
+  function sanitizeCssColor(color, fallback) {
+    if (!color || typeof color !== 'string') return fallback || '#1a1b30';
+    var trimmed = color.trim();
+    // 允许：hex (#rgb, #rrggbb, #rrggbbaa)、rgb()、rgba()、hsl()、hsla()
+    if (/^#[0-9a-fA-F]{3,8}$/.test(trimmed)) return trimmed;
+    if (/^(rgb|rgba|hsl|hsla)\([^)]*\)$/i.test(trimmed)) return trimmed;
+    return fallback || '#1a1b30';
+  }
+
   window.AIFriendShared = {
     STORAGE_KEYS: {
       TOKEN_KEY: 'aifriend_token',
@@ -65,5 +82,6 @@
     resolveApiBase,
     escapeHtml,
     sanitizeCssUrl,
+    sanitizeCssColor,
   };
 })();

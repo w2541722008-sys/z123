@@ -38,25 +38,38 @@ from core.config import utc_now
 from constants import Mood, StoryPhase
 from core.database import ConnType
 from core.character_state_snapshot import CharacterStateSnapshot
+from repositories import character_repository as char_repo
+from repositories import character_state_repository as state_repo
+from repositories import story_repository as story_repo
 from services.cache_service import cache_get, cache_set
 from services.story_event_service import check_and_trigger_story_events
 from utils.json_utils import parse_json_object
-from services.character_affection import (
-    _AFFECTION_BASE_RULES,
-    _AFFECTION_COOLDOWN_SECONDS,
-    _AFFECTION_DIMINISHING_RETURNS,
-    _DAILY_AFFECTION_CAP_DEFAULT,
-    _PHASE_THRESHOLDS,
-    _PHASE_GAIN_MULTIPLIER,
-    _AFFECTION_DELTA_MAX,
-    _EVENT_NAME_MIGRATION,
-    _get_affection_rules,
-    _get_daily_cap,
-    is_affection_enabled,
-    _calculate_affection_change,
-    _update_anti_abuse_counters,
-    _auto_advance_story_phase,
+from constants.affection import (
+    AFFECTION_BASE_RULES,
+    AFFECTION_COOLDOWN_SECONDS,
+    AFFECTION_DELTA_MAX,
+    AFFECTION_DIMINISHING_RETURNS,
+    DAILY_AFFECTION_CAP_DEFAULT,
+    EVENT_NAME_MIGRATION,
+    PHASE_GAIN_MULTIPLIER,
+    PHASE_THRESHOLDS,
 )
+from services.character_affection import (
+    auto_advance_story_phase,
+    calculate_affection_change,
+    get_affection_rules,
+    get_daily_cap,
+    is_affection_enabled,
+    update_anti_abuse_counters,
+)
+
+# 向后兼容别名（旧测试代码可能通过 from services.character_state import _xxx 引用）
+_AFFECTION_BASE_RULES = AFFECTION_BASE_RULES
+_AFFECTION_DELTA_MAX = AFFECTION_DELTA_MAX
+_DAILY_AFFECTION_CAP_DEFAULT = DAILY_AFFECTION_CAP_DEFAULT
+_calculate_affection_change = calculate_affection_change
+_auto_advance_story_phase = auto_advance_story_phase
+_update_anti_abuse_counters = update_anti_abuse_counters
 
 logger = logging.getLogger(__name__)
 
@@ -82,23 +95,10 @@ def get_greeting_for_phase(
         - 命中 character_greetings 时返回真实 greeting_id
         - 回退到 characters.opening_message 时返回 (None, content)
     """
-    # 1. 尝试从多阶段开场白表中获取
+    # 1. 尝试从多阶段开场白表中获取（含剧情线匹配优先级）
     row = None
     if storyline_id:
-        storyline_id_str = str(storyline_id)
-        row = conn.execute(
-            """
-            SELECT id, content FROM character_greetings
-            WHERE character_id = %s AND story_phase = %s AND is_active = 1
-              AND (storyline_id = %s OR storyline_id IS NULL)
-            ORDER BY
-                CASE WHEN storyline_id = %s THEN 0 ELSE 1 END,
-                priority ASC, RANDOM()
-            LIMIT 1
-            """,
-            (character_id, story_phase, storyline_id_str, storyline_id_str),
-        ).fetchone()
-
+        row = char_repo.get_best_greeting_for_storyline(conn, character_id, story_phase, storyline_id)
         if not row:
             logger.info(
                 "未找到剧情线 %s 的开场白，将尝试通用开场白",
@@ -107,27 +107,14 @@ def get_greeting_for_phase(
 
     # 2. 如果没有指定剧情线，或指定剧情线未匹配到，尝试通用开场白
     if not row:
-        row = conn.execute(
-            """
-            SELECT id, content FROM character_greetings
-            WHERE character_id = %s AND story_phase = %s AND is_active = 1
-              AND storyline_id IS NULL
-            ORDER BY priority ASC, RANDOM()
-            LIMIT 1
-            """,
-            (character_id, story_phase),
-        ).fetchone()
+        row = char_repo.get_generic_greeting(conn, character_id, story_phase)
 
     if row and row["content"]:
         return row["id"], row["content"]
 
     # 3. 回退到角色的默认开场白
-    row = conn.execute(
-        "SELECT opening_message FROM characters WHERE id = %s",
-        (character_id,),
-    ).fetchone()
-
-    return None, (row["opening_message"] if row else None)
+    msg = char_repo.get_opening_message(conn, character_id)
+    return None, msg
 
 
 def _get_today_date() -> str:
@@ -144,32 +131,8 @@ def get_character_state(conn: ConnType, user_id: int | str, character_id: str, *
         for_update: 若为 True，对 character_states 行加 SELECT ... FOR UPDATE 行级锁，
                     防止并发请求之间的丢失更新。仅在事务中使用。
     """
-    lock_clause = "\nFOR UPDATE" if for_update else ""
-    row = conn.execute(
-        f"""
-        SELECT affection, story_phase, mood, custom_vars,
-               daily_event_counts, daily_affection_gained, last_event_timestamps, daily_reset_date
-        FROM character_states
-        WHERE user_id = %s AND character_id = %s{lock_clause}
-        """,
-        (user_id, character_id),
-    ).fetchone()
-
-    # 查询当前剧情线
-    progress_row = conn.execute(
-        """
-        SELECT current_storyline_id FROM user_story_progress
-        WHERE user_id = %s AND character_id = %s
-        """,
-        (user_id, character_id),
-    ).fetchone()
-
-    storyline_id = None
-    if progress_row and progress_row["current_storyline_id"]:
-        try:
-            storyline_id = int(progress_row["current_storyline_id"])
-        except (ValueError, TypeError):
-            storyline_id = None
+    row = state_repo.get_character_state(conn, user_id, character_id, for_update=for_update)
+    storyline_id = story_repo.get_current_storyline_id(conn, user_id, character_id)
 
     if not row:
         return {
@@ -193,13 +156,22 @@ def get_character_state(conn: ConnType, user_id: int | str, character_id: str, *
     }
 
 
-def _reset_daily_fields_if_needed(snapshot: CharacterStateSnapshot) -> CharacterStateSnapshot:
-    """惰性日重置：如果不是今天，归零当天统计。"""
+def _reset_daily_fields_if_needed(snapshot: CharacterStateSnapshot | dict) -> CharacterStateSnapshot | dict:
+    """惰性日重置：如果不是今天，归零当天统计。
+
+    兼容 dict 和 CharacterStateSnapshot 两种输入，游客路径传入的是普通 dict。
+    """
     today = _get_today_date()
-    if snapshot.daily_reset_date != today:
-        snapshot.daily_event_counts = {}
-        snapshot.daily_affection_gained = 0
-        snapshot.daily_reset_date = today
+    if isinstance(snapshot, dict):
+        if snapshot.get("daily_reset_date", "") != today:
+            snapshot["daily_event_counts"] = {}
+            snapshot["daily_affection_gained"] = 0
+            snapshot["daily_reset_date"] = today
+    else:
+        if snapshot.daily_reset_date != today:
+            snapshot.daily_event_counts = {}
+            snapshot.daily_affection_gained = 0
+            snapshot.daily_reset_date = today
     return snapshot
 
 
@@ -215,33 +187,18 @@ def upsert_character_state(
     mood = snapshot.mood if snapshot.mood in _VALID_MOODS else "neutral"
     daily_reset_date = snapshot.daily_reset_date or _get_today_date()
 
-    conn.execute(
-        """
-        INSERT INTO character_states(
-            user_id, character_id, affection, story_phase, mood, custom_vars,
-            daily_event_counts, daily_affection_gained, last_event_timestamps,
-            daily_reset_date
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT(user_id, character_id) DO UPDATE SET
-            affection = excluded.affection,
-            story_phase = excluded.story_phase,
-            mood = excluded.mood,
-            custom_vars = excluded.custom_vars,
-            daily_event_counts = excluded.daily_event_counts,
-            daily_affection_gained = excluded.daily_affection_gained,
-            last_event_timestamps = excluded.last_event_timestamps,
-            daily_reset_date = excluded.daily_reset_date,
-            updated_at = now()
-        """,
-        (
-            snapshot.user_id, snapshot.character_id, affection, story_phase, mood,
-            json.dumps(snapshot.custom_vars, ensure_ascii=False),
-            json.dumps(snapshot.daily_event_counts, ensure_ascii=False),
-            snapshot.daily_affection_gained,
-            json.dumps(snapshot.last_event_timestamps, ensure_ascii=False),
-            daily_reset_date,
-        ),
+    state_repo.upsert_character_state(
+        conn,
+        user_id=snapshot.user_id,
+        character_id=snapshot.character_id,
+        affection=affection,
+        story_phase=story_phase,
+        mood=mood,
+        custom_vars_json=json.dumps(snapshot.custom_vars, ensure_ascii=False),
+        daily_event_counts_json=json.dumps(snapshot.daily_event_counts, ensure_ascii=False),
+        daily_affection_gained=snapshot.daily_affection_gained,
+        last_event_timestamps_json=json.dumps(snapshot.last_event_timestamps, ensure_ascii=False),
+        daily_reset_date=daily_reset_date,
     )
     if commit:
         conn.commit()
@@ -283,7 +240,7 @@ def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
 
         if key == "affection":
             if isinstance(value, (int, float)):
-                sanitized[key] = max(-_AFFECTION_DELTA_MAX, min(_AFFECTION_DELTA_MAX, int(value)))
+                sanitized[key] = max(-AFFECTION_DELTA_MAX, min(AFFECTION_DELTA_MAX, int(value)))
             elif isinstance(value, str):
                 sanitized[key] = value[:20]
 
@@ -338,13 +295,13 @@ def _resolve_affection_delta(
     if affection_enabled:
         if "event" in delta:
             event_name = str(delta["event"]).strip().lower()
-            rules = _get_affection_rules(conn, snapshot.character_id)
-            daily_cap = _get_daily_cap(conn, snapshot.character_id)
+            rules = get_affection_rules(conn, snapshot.character_id)
+            daily_cap = get_daily_cap(conn, snapshot.character_id)
             # 将 snapshot 转为旧 dict 传给现有函数（渐进迁移，后续可改造这些函数）
             current_dict = snapshot.to_dict()
-            affection_change, _ = _calculate_affection_change(event_name, rules, current_dict, daily_cap=daily_cap)
+            affection_change, _ = calculate_affection_change(event_name, rules, current_dict, daily_cap=daily_cap)
             # 同步反滥用计数器回 snapshot
-            anti_abuse = _update_anti_abuse_counters(current_dict, event_name, affection_change)
+            anti_abuse = update_anti_abuse_counters(current_dict, event_name, affection_change)
             snapshot.daily_event_counts = anti_abuse.get("_daily_event_counts", snapshot.daily_event_counts)
             snapshot.daily_affection_gained = anti_abuse.get("_daily_affection_gained", snapshot.daily_affection_gained)
             snapshot.last_event_timestamps = anti_abuse.get("_last_event_timestamps", snapshot.last_event_timestamps)
@@ -352,10 +309,10 @@ def _resolve_affection_delta(
         elif "affection" in delta:
             raw = str(delta["affection"]).strip()
             if raw.startswith("+"):
-                raw_change = min(int(raw[1:]), _AFFECTION_DELTA_MAX)
+                raw_change = min(int(raw[1:]), AFFECTION_DELTA_MAX)
                 snapshot.affection = max(0, min(100, snapshot.affection + raw_change))
             elif raw.startswith("-"):
-                raw_change = min(int(raw[1:]), _AFFECTION_DELTA_MAX)
+                raw_change = min(int(raw[1:]), AFFECTION_DELTA_MAX)
                 snapshot.affection = max(0, min(100, snapshot.affection - raw_change))
             else:
                 try:
@@ -383,17 +340,14 @@ def _resolve_story_phase(
     # AI 未指定阶段时，按好感度自动推进
     allow_regression = False
     try:
-        rules_row = conn.execute(
-            "SELECT affection_rules_json FROM characters WHERE id = %s",
-            (snapshot.character_id,),
-        ).fetchone()
+        rules_row = char_repo.get_affection_config(conn, snapshot.character_id)
         if rules_row and rules_row["affection_rules_json"]:
             rules_json = parse_json_object(rules_row["affection_rules_json"], fallback={})
             allow_regression = bool(rules_json.get("allow_regression", False))
     except Exception:
         logger.warning("解析 affection_rules_json 失败 character_id=%s", snapshot.character_id, exc_info=True)
 
-    snapshot.story_phase = _auto_advance_story_phase(snapshot.affection, snapshot.story_phase, allow_regression=allow_regression)
+    snapshot.story_phase = auto_advance_story_phase(snapshot.affection, snapshot.story_phase, allow_regression=allow_regression)
     return snapshot
 
 
@@ -469,21 +423,12 @@ def _handle_storyline_and_events(
 
     if new_storyline_id is not None:
         try:
-            valid_row = conn.execute(
-                "SELECT id FROM character_storylines WHERE id = %s AND character_id = %s AND is_active = TRUE",
-                (new_storyline_id, snapshot.character_id),
-            ).fetchone()
-            if valid_row:
-                conn.execute(
-                    """
-                    INSERT INTO user_story_progress (user_id, character_id, triggered_event_ids, current_storyline_id)
-                    VALUES (%s, %s, '', %s)
-                    ON CONFLICT(user_id, character_id) DO UPDATE SET
-                        current_storyline_id = excluded.current_storyline_id,
-                        last_updated = now()
-                    """,
-                    (snapshot.user_id, snapshot.character_id, new_storyline_id),
+            if story_repo.is_storyline_valid(conn, new_storyline_id, snapshot.character_id):
+                story_repo.set_current_storyline_id(
+                    conn, snapshot.user_id, snapshot.character_id, new_storyline_id,
                 )
+                # 内存传播，消除 SQL#11 防御性重读
+                snapshot.storyline_id = new_storyline_id
             else:
                 logger.warning("剧情线ID无效或不属于当前角色: storyline_id=%s, character_id=%s", new_storyline_id, snapshot.character_id)
         except Exception as e:
@@ -499,14 +444,11 @@ def _handle_storyline_and_events(
     old_storyline_id = snapshot.storyline_id
     if new_storyline_id and new_storyline_id != old_storyline_id:
         try:
-            sl_row = conn.execute(
-                "SELECT name FROM character_storylines WHERE id = %s",
-                (new_storyline_id,)
-            ).fetchone()
-            if sl_row and sl_row["name"]:
+            sl_name = story_repo.get_storyline_name(conn, new_storyline_id)
+            if sl_name:
                 triggered_events.append({
                     "type": "storyline_changed",
-                    "title": f"进入【{sl_row['name']}】",
+                    "title": f"进入【{sl_name}】",
                     "description": ""
                 })
                 snapshot.custom_vars["_force_refresh_greeting"] = True
@@ -517,18 +459,8 @@ def _handle_storyline_and_events(
     old_phase = snapshot.old_phase or snapshot.story_phase
     if snapshot.story_phase != old_phase:
         try:
-            storyline_id_for_greeting = None
-            progress_row = conn.execute(
-                "SELECT current_storyline_id FROM user_story_progress WHERE user_id = %s AND character_id = %s",
-                (snapshot.user_id, snapshot.character_id),
-            ).fetchone()
-            if progress_row and progress_row["current_storyline_id"]:
-                try:
-                    storyline_id_for_greeting = int(progress_row["current_storyline_id"])
-                except (ValueError, TypeError):
-                    pass
             _, upgrade_greeting = get_greeting_for_phase(
-                conn, snapshot.character_id, snapshot.story_phase, storyline_id_for_greeting,
+                conn, snapshot.character_id, snapshot.story_phase, snapshot.storyline_id,
             )
             if upgrade_greeting:
                 snapshot.custom_vars["_pending_phase_upgrade"] = {

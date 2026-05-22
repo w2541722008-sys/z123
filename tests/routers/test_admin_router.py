@@ -129,8 +129,13 @@ class TestAdminUsers:
             FakeQueryResult(one={"id": 1, "email": "del@example.com"}),  # SELECT user
             FakeQueryResult(rowcount=1),  # DELETE ai_request_logs
             FakeQueryResult(rowcount=1),  # DELETE chat_messages
+            FakeQueryResult(rowcount=1),  # DELETE chat_summaries
             FakeQueryResult(rowcount=1),  # DELETE user_character_profiles
+            FakeQueryResult(rowcount=1),  # DELETE character_states
+            FakeQueryResult(rowcount=1),  # DELETE user_story_progress
             FakeQueryResult(rowcount=1),  # DELETE membership_orders
+            FakeQueryResult(rowcount=1),  # DELETE auth_tokens
+            FakeQueryResult(rowcount=1),  # DELETE password_reset_codes
             FakeQueryResult(rowcount=1),  # DELETE users
             FakeQueryResult(rowcount=1),  # audit log INSERT
         ])

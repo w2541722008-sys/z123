@@ -15,6 +15,7 @@ from typing import Any
 
 from core.config import RECENT_MESSAGE_WINDOW, logger, utc_now
 from core.database import ConnType
+from repositories import chat_repository as chat_repo
 from services.prompt_assembler import build_layered_chat_messages
 from services.character_state import apply_state_delta, get_character_state
 from services.memory_service import get_summary_for_prompt
@@ -109,24 +110,15 @@ def _build_recent_messages_before_target(
     # 优化：先获取目标消息的时间戳，再只查询该时间之前的消息
     _MAX_MESSAGES_FOR_CONTEXT = RECENT_MESSAGE_WINDOW * 4  # 48条
 
-    target_row = conn.execute(
-        "SELECT created_at FROM chat_messages WHERE id = %s",
-        (target_message_id,),
-    ).fetchone()
+    target_ts = chat_repo.get_message_created_at(conn, target_message_id)
 
-    if not target_row:
+    if not target_ts:
         return fallback_recent
 
-    all_rows = conn.execute(
-        """SELECT id, role, content, created_at FROM chat_messages
-           WHERE user_id = %s AND character_id = %s
-             AND (created_at < %s OR (created_at = %s AND id::text < %s))
-           ORDER BY created_at DESC, id DESC
-           LIMIT %s""",
-        (user_id, character_id, target_row["created_at"],
-         target_row["created_at"], str(target_message_id),
-         _MAX_MESSAGES_FOR_CONTEXT),
-    ).fetchall()
+    all_rows = chat_repo.get_messages_before_target(
+        conn, user_id, character_id, target_ts, target_message_id,
+        _MAX_MESSAGES_FOR_CONTEXT,
+    )
     chronological = _project_message_rows(list(reversed(all_rows)))
     return _resolve_recent_messages_before_target(
         chronological,
@@ -446,19 +438,15 @@ def save_regenerated_version(
         commit: 是否立即提交事务
     """
     try:
-        current_row = conn.execute(
-            "SELECT content FROM chat_messages WHERE id = %s",
-            (message_id,),
-        ).fetchone()
+        current_content = chat_repo.get_message_content(conn, message_id)
 
-        if not current_row:
-            raise ValueError("消息 %s 不存在", message_id)
+        if current_content is None:
+            raise ValueError(f"消息 {message_id} 不存在")
 
         now = utc_now()
 
         if is_append:
-            base_content = current_row["content"] or ""
-            final_content = base_content + new_content
+            final_content = (current_content or "") + new_content
         else:
             final_content = new_content
 
@@ -468,32 +456,19 @@ def save_regenerated_version(
             "operation": "continue" if is_append else "regenerate",
         }]
 
-        conn.execute(
-            """UPDATE chat_messages
-               SET content = %s,
-                   versions = %s::jsonb,
-                   current_version_index = 0,
-                   updated_at = now()
-               WHERE id = %s""",
-            (final_content, json.dumps(versions, ensure_ascii=False), message_id),
+        chat_repo.update_message_with_versions(
+            conn, message_id, final_content, json.dumps(versions, ensure_ascii=False),
         )
     except Exception as e:
         logger.warning("版本保存失败，降级为仅更新内容: %s", e, exc_info=True)
 
         if is_append:
-            row = conn.execute(
-                "SELECT content FROM chat_messages WHERE id = %s", (message_id,)
-            ).fetchone()
-            final_content = (row["content"] or "") + new_content if row else new_content
+            existing = chat_repo.get_message_content(conn, message_id)
+            final_content = (existing or "") + new_content if existing else new_content
         else:
             final_content = new_content
 
-        conn.execute(
-            """UPDATE chat_messages
-               SET content = %s, updated_at = now()
-               WHERE id = %s""",
-            (final_content, message_id),
-        )
+        chat_repo.update_message_content(conn, message_id, final_content)
 
     if commit:
         conn.commit()

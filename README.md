@@ -14,7 +14,7 @@
 - 后端：Python 3.10+、FastAPI、Uvicorn、httpx、psycopg2（ThreadedConnectionPool）
 - 数据库：PostgreSQL（Supabase）+ Alembic 迁移（14 个版本）
 - 前端：原生 HTML/CSS/JavaScript（IIFE 模块模式）
-- 测试：pytest（~1077 tests）+ Node.js 脚本
+- 测试：pytest（1149+ tests）+ Node.js 脚本
 
 ## 本地开发
 

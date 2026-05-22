@@ -6,16 +6,18 @@
 import json
 from unittest.mock import patch
 
-from services.chat_stream_service import (
+from services.chat_stream import (
+    _bind_stream_postprocess,
+    _build_main_stream_postprocess,
+    _build_guest_stream_postprocess,
+    _build_retry_stream_postprocess,
+)
+from services.chat_stream._sse import (
     _build_stream_done_payload,
     _build_stream_done_payload_from_persisted_result,
     _default_stream_headers,
     _default_stream_error_message,
     _build_sse_response,
-    _bind_stream_postprocess,
-    _build_main_stream_postprocess,
-    _build_guest_stream_postprocess,
-    _build_retry_stream_postprocess,
 )
 
 

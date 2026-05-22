@@ -15,6 +15,7 @@ from typing import Any
 from core.exceptions import BadRequestError, NotFoundError
 from core.config import logger
 from core.database import ConnType
+from repositories import chat_repository as chat_repo
 from services.cache_service import get_character, set_character
 from core.plan_constants import plan_display_name
 from services.plan_service import ensure_plan_access
@@ -118,11 +119,7 @@ def ensure_opening_message(
                 conn.commit()
             return
 
-    row = conn.execute(
-        "SELECT 1 FROM chat_messages WHERE user_id = %s AND character_id = %s LIMIT 1",
-        (user_id, character_id),
-    ).fetchone()
-    if row:
+    if chat_repo.message_exists(conn, user_id, character_id):
         return  # 已有消息，不需要开场白
     
     # 获取当前关系阶段和剧情线
@@ -214,22 +211,12 @@ def count_chat_search_results(
 
 def count_chat_messages(conn: ConnType, user_id: int | str, character_id: str) -> int:
     """统计用户和某角色的聊天消息总数。"""
-    row = conn.execute(
-        "SELECT COUNT(*) AS total FROM chat_messages WHERE user_id = %s AND character_id = %s",
-        (user_id, character_id),
-    ).fetchone()
-    return int(row["total"]) if row else 0
+    return chat_repo.count_chat_history(conn, user_id, character_id)
 
 
 def get_last_chat_time(conn: ConnType, user_id: int | str, character_id: str) -> str | None:
     """获取用户与角色最近一条 assistant 消息的 created_at 时间戳，用于判断久未聊天。"""
-    row = conn.execute(
-        """SELECT created_at FROM chat_messages
-           WHERE user_id = %s AND character_id = %s AND role = 'assistant'
-           ORDER BY id DESC LIMIT 1""",
-        (user_id, character_id),
-    ).fetchone()
-    return row["created_at"] if row else None
+    return chat_repo.get_last_assistant_message_time(conn, user_id, character_id)
 
 
 def get_linked_assets(conn: ConnType, character_id: str) -> list[Any]:
@@ -262,11 +249,7 @@ def get_message_for_regenerate_or_continue(
     """
     _ = operation
 
-    row = conn.execute(
-        """SELECT * FROM chat_messages 
-           WHERE id = %s AND user_id = %s AND role = 'assistant'""",
-        (message_id, user_id),
-    ).fetchone()
+    row = chat_repo.get_assistant_message_by_id(conn, message_id, user_id)
 
     if not row:
         raise NotFoundError(detail="消息不存在或无权操作")

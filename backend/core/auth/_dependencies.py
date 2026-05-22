@@ -22,7 +22,7 @@ from core.database import get_conn
 from core.plan_constants import serialize_plan_info
 from core.auth._cache import _cache
 from core.auth._cookies import _COOKIE_NAME
-from core.auth._token import _hash_token_value, _sliding_extend_token
+from core.auth._token import _hash_token_value
 
 
 @dataclass
@@ -131,7 +131,6 @@ def _verify_token_and_get_user(token: str) -> CurrentUser | None:
         if not row:
             return None
 
-        _sliding_extend_token(token_hash, row["expires_at"], now, conn=conn)
         conn.commit()
     except Exception:
         conn.rollback()

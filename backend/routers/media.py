@@ -64,20 +64,47 @@ def _is_under_safe_dir(path: Path) -> bool:
     return any(str(resolved).startswith(str(root.resolve())) for root in _SAFE_MEDIA_ROOTS)
 
 
+def _is_allowed_redirect_url(url: str) -> bool:
+    """校验外部 URL 的域名是否在白名单内，防止开放重定向攻击。"""
+    import os
+    from urllib.parse import urlparse
+    try:
+        hostname = (urlparse(url).hostname or "").lower()
+    except (ValueError, TypeError):
+        return False
+    if not hostname:
+        return False
+    allowed = {"localhost", "127.0.0.1"}
+    origins = os.environ.get("ALLOWED_ORIGINS", "")
+    for origin in origins.split(","):
+        o = origin.strip()
+        if o:
+            try:
+                allowed.add((urlparse(o).hostname or o).lower())
+            except (ValueError, TypeError):
+                pass
+    return hostname in allowed
+
+
 def resolve_media_response(raw_value: str, *, fallback_path: Path | None = None):
     """把数据库中的图片值解析成可返回的响应。
 
     安全措施：
         - FileResponse 的路径必须在白名单目录内（avatars/、covers/、assets/、frontend/），
           防止路径遍历攻击读取服务器任意文件。
-        - URL 重定向仅允许 http/https 和 /frontend/ 前缀。
+        - URL 重定向仅允许 /frontend/ 前缀或已配置的 ALLOWED_ORIGINS 域名，
+          防止开放重定向攻击。
     """
     media_value = (raw_value or "").strip()
 
     if media_value:
         try:
-            if media_value.startswith(("http://", "https://", "/frontend/")):
+            if media_value.startswith("/frontend/"):
                 return RedirectResponse(media_value)
+            if media_value.startswith(("http://", "https://")):
+                if _is_allowed_redirect_url(media_value):
+                    return RedirectResponse(media_value)
+                # 非白名单域名不回重定向，继续尝试本地文件匹配
 
             candidate = Path(media_value)
             if candidate.exists() and _is_under_safe_dir(candidate):

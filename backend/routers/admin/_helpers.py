@@ -4,14 +4,10 @@
 
 from __future__ import annotations
 
-import json
-import logging
 from typing import Any, Optional
 
 from core.database import ConnType
 from fastapi import HTTPException
-
-logger = logging.getLogger(__name__)
 
 # 管理后台可编辑的字段白名单
 _ADMIN_EDITABLE_FIELDS = {
@@ -75,39 +71,6 @@ def _count_with_where(conn: ConnType, count_from_sql: str, where_clause: str, pa
         tuple(params),
     ).fetchone()
     return int(count_row["total"])
-
-
-def _write_audit_log(
-    conn: ConnType,
-    operator_id: int,
-    operator_email: str,
-    action: str,
-    target_type: str,
-    target_id: Optional[str] = None,
-    detail: Optional[dict[str, Any]] = None,
-) -> None:
-    """
-    内部函数：写入一条操作日志。
-    注意：此函数不自行 commit，调用方负责提交事务。
-    """
-    try:
-        conn.execute(
-            """
-            INSERT INTO admin_audit_logs
-            (operator_id, operator_email, action, target_type, target_id, detail)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
-            (
-                operator_id,
-                operator_email,
-                action,
-                target_type,
-                target_id,
-                json.dumps(detail or {}, ensure_ascii=False),
-            ),
-        )
-    except Exception as exc:
-        logger.warning("审计日志写入失败: %s", exc)
 
 
 def _split_csv_ids(raw: str | None) -> list[str]:

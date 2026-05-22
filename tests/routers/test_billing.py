@@ -3,32 +3,7 @@ from unittest.mock import patch
 
 from core.auth import CurrentUser, get_current_user
 from core.database import get_db_dep
-from conftest import FakeQueryResult as _QueryResult
-
-
-class _SequenceConn:
-    def __init__(self, results):
-        self._results = list(results)
-        self.executed = []
-        self.committed = False
-        self.rolled_back = False
-        self.closed = False
-
-    def execute(self, sql, params=None):
-        if not self._results:
-            raise AssertionError(f"Unexpected SQL: {sql}")
-        result = self._results.pop(0)
-        self.executed.append((sql, params))
-        return result
-
-    def commit(self):
-        self.committed = True
-
-    def rollback(self):
-        self.rolled_back = True
-
-    def close(self):
-        self.closed = True
+from conftest import FakeQueryResult, FakeSequenceConn
 
 
 def _override_user(app, *, user_id=101, email="vip@example.com"):
@@ -44,11 +19,11 @@ def test_billing_create_order_success(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(one=None),
-        _QueryResult(rowcount=1),
-        _QueryResult(one={
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(one=None),
+        FakeQueryResult(rowcount=1),
+        FakeQueryResult(one={
             "order_no": "AF202601010101AA",
             "plan_type": "vip",
             "amount_cents": 1990,
@@ -89,9 +64,9 @@ def test_billing_create_order_reuses_pending_order(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(one={
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(one={
             "order_no": "AFREUSE001",
             "plan_type": "vip",
             "amount_cents": 1990,
@@ -126,9 +101,9 @@ def test_billing_list_orders_returns_serialized_orders(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(many=[
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(many=[
             {
                 "order_no": "AF001",
                 "plan_type": "vip",
@@ -164,9 +139,9 @@ def test_billing_get_order_not_found_returns_404(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(one=None),
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(one=None),
     ])
     app.dependency_overrides[get_db_dep] = lambda: conn
 
@@ -183,9 +158,9 @@ def test_billing_cancel_order_success(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(one={
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(one={
             "order_no": "AFCAN001",
             "plan_type": "vip",
             "amount_cents": 1990,
@@ -200,8 +175,8 @@ def test_billing_cancel_order_success(app_client):
             "expires_at": "2099-01-01T00:00:00+00:00",
             "closed_at": "",
         }),
-        _QueryResult(rowcount=1),
-        _QueryResult(one={
+        FakeQueryResult(rowcount=1),
+        FakeQueryResult(one={
             "order_no": "AFCAN001",
             "plan_type": "vip",
             "amount_cents": 1990,
@@ -236,9 +211,9 @@ def test_billing_cancel_paid_order_returns_409(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(one={
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(one={
             "order_no": "AFPAID001",
             "plan_type": "vip",
             "amount_cents": 1990,
@@ -283,9 +258,9 @@ def test_billing_list_orders_clamps_limit_to_min_1(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(many=[]),
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(many=[]),
     ])
     app.dependency_overrides[get_db_dep] = lambda: conn
 
@@ -303,9 +278,9 @@ def test_billing_list_orders_clamps_limit_to_max_100(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(many=[]),
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(many=[]),
     ])
     app.dependency_overrides[get_db_dep] = lambda: conn
 
@@ -323,9 +298,9 @@ def test_billing_cancel_closed_order_returns_409(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(one={
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(one={
             "order_no": "AFCLOSE001",
             "plan_type": "vip",
             "amount_cents": 1990,
@@ -362,9 +337,9 @@ def test_billing_cancel_order_invalidates_user_cache(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),
-        _QueryResult(one={
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),
+        FakeQueryResult(one={
             "order_no": "AFCANCEL001",
             "plan_type": "vip",
             "amount_cents": 2990,
@@ -379,8 +354,8 @@ def test_billing_cancel_order_invalidates_user_cache(app_client):
             "expires_at": "2099-01-01T00:00:00+00:00",
             "closed_at": "",
         }),
-        _QueryResult(rowcount=1),
-        _QueryResult(one={
+        FakeQueryResult(rowcount=1),
+        FakeQueryResult(one={
             "order_no": "AFCANCEL001",
             "plan_type": "vip",
             "amount_cents": 2990,
@@ -414,9 +389,9 @@ def test_billing_list_orders_with_expired_invalidates_cache(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=2),  # 关闭了2笔过期订单
-        _QueryResult(many=[]),
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=2),  # 关闭了2笔过期订单
+        FakeQueryResult(many=[]),
     ])
     app.dependency_overrides[get_db_dep] = lambda: conn
 
@@ -435,9 +410,9 @@ def test_billing_list_orders_no_expired_skips_invalidate(app_client):
     _, client = app_client
     app = client.app
     _override_user(app)
-    conn = _SequenceConn([
-        _QueryResult(rowcount=0),  # 没有关闭任何过期订单
-        _QueryResult(many=[]),
+    conn = FakeSequenceConn([
+        FakeQueryResult(rowcount=0),  # 没有关闭任何过期订单
+        FakeQueryResult(many=[]),
     ])
     app.dependency_overrides[get_db_dep] = lambda: conn
 

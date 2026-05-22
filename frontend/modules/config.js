@@ -41,9 +41,9 @@ const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
    let _refreshToken = '';
 
    function setToken(token) {
-     if (token) {
-       localStorage.setItem(TOKEN_KEY, token);
-     } else {
+     // 不再写入 localStorage：access token 由 HttpOnly Cookie 管理，
+     // 避免 XSS 窃取。仅清除旧数据。
+     if (!token) {
        localStorage.removeItem(TOKEN_KEY);
      }
    }

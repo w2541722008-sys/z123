@@ -149,8 +149,8 @@ echo "✅ systemd 服务配置完成"
 echo
 
 # 日志轮转
-if [[ -f /opt/aifriend/docs/logrotate.conf ]]; then
-  sudo cp /opt/aifriend/docs/logrotate.conf /etc/logrotate.d/aifriend
+if [[ -f /opt/aifriend/deploy/logrotate.conf ]]; then
+  sudo cp /opt/aifriend/deploy/logrotate.conf /etc/logrotate.d/aifriend
   sudo chmod 644 /etc/logrotate.d/aifriend
   echo "✅ 日志轮转配置完成"
 else

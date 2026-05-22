@@ -244,13 +244,14 @@ def request_chat_completion(
             breaker.report_failure(endpoint_key)
             _handle_model_error(exc)
 
-    breaker.report_success(endpoint_key)
     data = json.loads(body)
     choices = data.get("choices", [])
     content = choices[0].get("message", {}).get("content", "") if choices else ""
     reply = normalize_reply_text(content)
     if not reply:
+        breaker.report_failure(endpoint_key)
         raise RuntimeError("模型返回了空内容")
+    breaker.report_success(endpoint_key)
     return reply
 
 

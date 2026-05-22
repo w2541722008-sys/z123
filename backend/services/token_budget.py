@@ -15,6 +15,8 @@ Token 预算分配器 - 基于 Token 预算控制 Prompt 各区块的大小
 """
 from __future__ import annotations
 
+from core.config import COST_ESTIMATE_CHARS_PER_TOKEN
+
 
 class TokenBudget:
     """基于字符数估算的 Token 预算分配器。
@@ -98,7 +100,7 @@ class TokenBudget:
 
 
 # 默认预算实例（可在构造 messages 时传入自定义实例覆盖）
-DEFAULT_BUDGET = TokenBudget(context_tokens=64000, output_reserve=2048, chars_per_token=1.6)
+DEFAULT_BUDGET = TokenBudget(context_tokens=64000, output_reserve=2048, chars_per_token=COST_ESTIMATE_CHARS_PER_TOKEN)
 
 # ── 向下兼容：保留旧的字符常量别名 ──
 # 注意：这些常量是 DEFAULT_BUDGET 的别名，新增代码应直接使用 DEFAULT_BUDGET.xxx() 方法。

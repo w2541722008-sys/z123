@@ -4,7 +4,7 @@
 
 ## 脚本位置
 
-- `backend/backup_supabase.sh`
+- `deploy/backup_supabase.sh`
 
 脚本行为：
 
@@ -16,13 +16,13 @@
 ## 手动备份
 
 ```bash
-bash /opt/aifriend/backend/backup_supabase.sh
+bash /opt/aifriend/deploy/backup_supabase.sh
 ```
 
 自定义保留天数：
 
 ```bash
-RETENTION_DAYS=14 bash /opt/aifriend/backend/backup_supabase.sh
+RETENTION_DAYS=14 bash /opt/aifriend/deploy/backup_supabase.sh
 ```
 
 ## 查看备份
@@ -43,7 +43,7 @@ psql "$DATABASE_URL" < /opt/aifriend/backups/backup_YYYYMMDD_HHMMSS.sql
 
 ```bash
 crontab -e
-0 3 * * * /opt/aifriend/backend/backup_supabase.sh >> /opt/aifriend/logs/backup.log 2>&1
+0 3 * * * /opt/aifriend/deploy/backup_supabase.sh >> /opt/aifriend/logs/backup.log 2>&1
 ```
 
 ## 常见故障
