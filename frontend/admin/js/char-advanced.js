@@ -564,7 +564,7 @@ async function saveEvent() {
   const hasUnlocks = selectedMemoryIds.length || selectedGreetingIds.length || data.unlocked_storyline_id;
   if (!hasUnlocks) { const goOn = await showConfirm('这个事件没有配置解锁内容。仍然保存？','提示'); if (!goOn) return; }
   if (!String(data.event_content||'').trim()) { toast('⚠️ 事件内容（event_content）是 AI 的行动指导，必须填写！\n\n示例：【剧情推进】用户发现了一把生锈的钥匙。接下来应该：引导用户前往地下室探索...'); return; }
-  if (AdminState.currentCharData && !AdminState.currentCharData.affection_enabled) { const goOn = await showConfirm('当前角色未启用好感度系统，事件可能无法按预期触发。仍然继续？','提示'); if (!goOn) return; }
+  if (AdminState.currentCharData && !AdminState.currentCharData.affection_enabled) { const goOn = await showConfirm('当前角色隐藏了好感度状态栏，用户将看不到好感度进度。仍然继续？','提示'); if (!goOn) return; }
   await crudSave('/story-events', data, 'event-modal', id);
 }
 async function deleteEvent() { await crudDelete('/story-events', document.getElementById('event-id').value, 'event-modal', '确定删除此剧情事件？'); }

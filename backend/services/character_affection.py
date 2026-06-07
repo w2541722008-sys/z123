@@ -14,6 +14,7 @@ from constants.affection import (
     AFFECTION_DIMINISHING_RETURNS,
     DAILY_AFFECTION_CAP_DEFAULT,
     EVENT_NAME_MIGRATION,
+    PHASE_DOWNGRADE_THRESHOLDS,
     PHASE_GAIN_MULTIPLIER,
     PHASE_LOSS_MULTIPLIER,
     PHASE_THRESHOLDS,
@@ -30,6 +31,7 @@ _DAILY_AFFECTION_CAP_DEFAULT: int = DAILY_AFFECTION_CAP_DEFAULT
 _PHASE_THRESHOLDS: dict[str, int] = PHASE_THRESHOLDS
 _PHASE_GAIN_MULTIPLIER: dict[str, float] = PHASE_GAIN_MULTIPLIER
 _PHASE_LOSS_MULTIPLIER: dict[str, float] = PHASE_LOSS_MULTIPLIER
+_PHASE_DOWNGRADE_THRESHOLDS: dict[str, int] = PHASE_DOWNGRADE_THRESHOLDS
 _AFFECTION_DELTA_MAX: int = AFFECTION_DELTA_MAX
 _EVENT_NAME_MIGRATION: dict[str, str] = EVENT_NAME_MIGRATION
 
@@ -119,8 +121,7 @@ def is_affection_enabled(conn: ConnType, character_id: str) -> bool:
             cache_set(cache_key, row, ttl=300)
     if not row:
         return True
-    if int(row["affection_enabled"] or 1) == 0:
-        return False
+    # affection_enabled 列现在仅控制 UI 显隐，不再禁止好感度计算
     card_rules = parse_json_object(row["affection_rules_json"] or "{}", fallback={})
     if "enabled" in card_rules:
         return bool(card_rules["enabled"])
@@ -261,16 +262,21 @@ def auto_advance_story_phase(
     )
 
     if allow_regression:
-        # 允许回退：直接根据好感度计算应该处于的阶段
-        best_idx = 0  # 默 stranger
+        # 允许回退：一次最多降一级，需跌破降级阈值（缓冲 10 点防止边界抖动）
+        target_idx = 0
         for phase_name, threshold in _PHASE_THRESHOLDS.items():
             if affection >= threshold:
                 candidate_idx = (
                     phases_order.index(phase_name) if phase_name in phases_order else 0
                 )
-                if candidate_idx > best_idx:
-                    best_idx = candidate_idx
-        return phases_order[best_idx]
+                if candidate_idx > target_idx:
+                    target_idx = candidate_idx
+        if target_idx < current_idx:
+            downgrade_at = _PHASE_DOWNGRADE_THRESHOLDS.get(phases_order[current_idx], 0)
+            if affection < downgrade_at:
+                return phases_order[current_idx - 1]  # 降一级
+            return current_phase  # 缓冲区内保持不变
+        return phases_order[target_idx]
 
     # 不允许回退：只前进不后退
     best_idx = current_idx

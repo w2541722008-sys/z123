@@ -34,6 +34,11 @@ DAILY_AFFECTION_CAP_DEFAULT = 15
 # 好感度阶段阈值
 PHASE_THRESHOLDS: dict[str, int] = {"acquaintance": 20, "friend": 50, "lover": 80}
 
+# 阶段降级阈值（缓冲 10 点，防止边界抖动）
+PHASE_DOWNGRADE_THRESHOLDS: dict[str, int] = {
+    "acquaintance": 10, "friend": 40, "lover": 70,
+}
+
 # 各阶段好感度增长倍率（随亲密度上升缓慢递减，防止刷分但不让正反馈归零）
 PHASE_GAIN_MULTIPLIER: dict[str, float] = {
     "stranger": 1.0, "acquaintance": 0.85, "friend": 0.7, "lover": 0.55,
@@ -46,6 +51,10 @@ PHASE_LOSS_MULTIPLIER: dict[str, float] = {
 
 # 单次事件好感度最大变化值
 AFFECTION_DELTA_MAX = 10
+
+# 心情自然衰减：连续 N 轮无负面事件时自动恢复到 neutral
+DECAYABLE_MOODS: tuple[str, ...] = ("angry", "cold", "sad")
+MOOD_DECAY_ROUNDS = 4
 
 # 旧事件名→新事件名迁移映射（向后兼容：运营自定义规则中可能仍使用旧名）
 EVENT_NAME_MIGRATION: dict[str, str] = {

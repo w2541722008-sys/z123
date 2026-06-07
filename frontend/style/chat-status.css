@@ -92,9 +92,7 @@
   border: 1px solid rgba(124,108,240,.28);
 }
 .state-mood {
-  background: rgba(167,139,250,.10);
-  color: #c4b5fd;
-  border: 1px solid rgba(167,139,250,.22);
+  display: none;
 }
 .state-mood.mood-happy    { color:#c4b5fd; background:rgba(196,181,253,.12); border-color:rgba(196,181,253,.25); }
 .state-mood.mood-warm     { color:#b8a0f5; background:rgba(184,160,245,.12); border-color:rgba(184,160,245,.25); }

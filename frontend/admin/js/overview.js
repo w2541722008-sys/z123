@@ -123,10 +123,10 @@ function buildExtraWarnings(summary) {
   const activeGreetings = stats.active_greetings ?? stats.greetings ?? 0;
   const activePostRules = stats.active_post_rules ?? stats.post_rules ?? 0;
   const phaseCoverage = stats.greeting_phase_coverage ?? phases.size;
-  const affectionEnabled = AdminState.currentCharData?.affection_enabled === 1 || AdminState.currentCharData?.affection_enabled === '1';
+  const affectionVisible = AdminState.currentCharData?.affection_enabled === 1 || AdminState.currentCharData?.affection_enabled === '1';
   const hasAffectionRules = hasUsableAffectionRules(AdminState.currentCharData?.affection_rules_json);
 
-  if (affectionEnabled && !hasAffectionRules) {
+  if (affectionVisible && !hasAffectionRules) {
     extra.push(`已启用${getMetricName()}系统，但${getMetricName()}规则还是空的。`);
   }
   if (activeMemories > 0 && activeMemories < 3) {
@@ -168,7 +168,7 @@ function buildChecklist(summary) {
   const phaseCoverage = stats.greeting_phase_coverage ?? phases.size;
   const emptyUnlockEvents = stats.empty_unlock_events ?? events.filter(e => !(splitCsvIds(e.unlocked_memory_ids).length || splitCsvIds(e.unlocked_greeting_ids).length || e.unlocked_storyline_id)).length;
   const emptyEventContentEvents = stats.empty_event_content_events ?? events.filter(e => !String(e.event_content || '').trim()).length;
-  const affectionEnabled = AdminState.currentCharData?.affection_enabled === 1 || AdminState.currentCharData?.affection_enabled === '1';
+  const affectionVisible = AdminState.currentCharData?.affection_enabled === 1 || AdminState.currentCharData?.affection_enabled === '1';
   const hasAffectionRules = hasUsableAffectionRules(AdminState.currentCharData?.affection_rules_json);
 
   return [
@@ -219,13 +219,13 @@ function buildChecklist(summary) {
             : '虽然后置规则已配置，但现在全部是禁用状态。')
     },
     {
-      ok: !affectionEnabled || hasAffectionRules,
-      title: getMetricName() + '规则',
-      text: !affectionEnabled
-        ? '当前角色未启用' + getMetricName() + '系统。'
+      ok: !affectionVisible || hasAffectionRules,
+      title: getMetricName() + '状态栏',
+      text: !affectionVisible
+        ? '当前角色隐藏了' + getMetricName() + '状态栏。后台仍会计算好感度。'
         : (hasAffectionRules
-            ? getMetricName() + '系统已启用，且已有有效规则配置。'
-            : getMetricName() + '已启用，但规则还是空的。系统会使用默认规则。')
+            ? getMetricName() + '状态栏已显示，且已有有效规则配置。'
+            : getMetricName() + '状态栏已显示，但规则还是空的。系统会使用默认规则。')
     }
   ];
 }

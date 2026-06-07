@@ -36,7 +36,7 @@ const FIXED_FIELD_META = {
   card_type:          { label: '卡类型', desc: '决定聊天模式', type: 'select', options: [['intimate','💞 对话陪伴'],['scenario','🎭 剧情沙盒']] },
   required_plan:      { label: '访问档位', desc: '控制谁能看到/进入这个角色。guest=游客可见，svip=仅SVIP可用', type: 'select', options: [['guest','游客可访问'],['free','注册用户可访问'],['vip','仅 VIP 可访问'],['svip','仅 SVIP 可访问']] },
   import_locked:      { label: '导入锁定', desc: '1=展示字段已锁定不被重导入覆盖', type: 'select', options: [['1','🔒 已锁定'],['0','🔓 未锁定']] },
-  affection_enabled:  { label: '好感度系统', desc: '是否启用好感度追踪', type: 'select', options: [['1','❤️ 启用'],['0','🚫 禁用']] },
+  affection_enabled:  { label: '显示好感度状态栏', desc: '在聊天界面显示好感度进度条与阶段标签，关闭后仅隐藏 UI，后台仍会计算好感度', type: 'select', options: [['1','👁 显示'],['0','🙈 隐藏']] },
   affection_rules_json: { label: '好感度规则 JSON', desc: 'JSON 对象字符串，写入 affection_rules_json 列', type: 'textarea', rows: 8 },
   phase_behaviors_json: { label: '🎭 阶段行为定制', desc: 'JSON 对象，为每个关系阶段定制行为倾向。如 {"stranger":"对新顾客热情推荐","friend":"主动分享烦恼"}', type: 'phase_behaviors' },
   life_profile_json: { label: '👤 人生档案', desc: '角色的完整人生背景（童年、家庭、工作等），AI每轮都能看到', type: 'life_profile' },

@@ -93,39 +93,7 @@ def ensure_opening_message(
     同时处理关系阶段升级的触发语：如果有暂存的升级消息，
     在用户已有聊天记录的情况下，以角色主动消息的形式插入。
     """
-    # 优先处理关系阶段升级的触发语（即使已有聊天记录也要插入）
     state = get_character_state(conn, user_id, character_id)
-    if state and state.get("custom_vars"):
-        pending_upgrade = state["custom_vars"].get("_pending_phase_upgrade")
-        if pending_upgrade and pending_upgrade.get("greeting"):
-            upgrade_greeting = pending_upgrade["greeting"]
-            # 插入升级触发语作为角色的主动消息
-            conn.execute(
-                """
-                INSERT INTO chat_messages(user_id, character_id, role, content, is_summarized)
-                VALUES (%s, %s, 'assistant', %s, 1)
-                """,
-                (user_id, character_id, upgrade_greeting),
-            )
-            # 清除已消费的升级标记（直接 SQL，避免循环导入 character_state.upsert）
-            import json
-
-            state["custom_vars"].pop("_pending_phase_upgrade", None)
-            conn.execute(
-                """
-                UPDATE character_states
-                SET custom_vars = %s, updated_at = now()
-                WHERE user_id = %s AND character_id = %s
-                """,
-                (
-                    json.dumps(state["custom_vars"], ensure_ascii=False),
-                    user_id,
-                    character_id,
-                ),
-            )
-            if commit:
-                conn.commit()
-            return
 
     if chat_repo.message_exists(conn, user_id, character_id):
         return  # 已有消息，不需要开场白

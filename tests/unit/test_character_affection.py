@@ -312,8 +312,9 @@ class TestAutoAdvanceStoryPhase:
         assert phase == "friend"
 
     def test_affection_drop_with_regression_allowed(self):
+        """回退一次最多降一级（缓冲带保护），friend(10) → acquaintance。"""
         phase = _auto_advance_story_phase(10, "friend", allow_regression=True)
-        assert phase == "stranger"
+        assert phase == "acquaintance"  # 一次降一级，不会直接跳到 stranger
 
     def test_affection_huge_skips_multiple_phases(self):
         phase = _auto_advance_story_phase(90, "stranger")

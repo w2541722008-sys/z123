@@ -46,6 +46,8 @@ from constants.affection import (
     AFFECTION_BASE_RULES,
     AFFECTION_DELTA_MAX,
     DAILY_AFFECTION_CAP_DEFAULT,
+    DECAYABLE_MOODS,
+    MOOD_DECAY_ROUNDS,
 )
 from services.character_affection import (
     auto_advance_story_phase,
@@ -238,7 +240,6 @@ _CUSTOM_VARS_BLACKLIST = {
     "_daily_reset_date",
     "_shared_moments",
     "_pending_events",
-    "_pending_phase_upgrade",
     "_silent_rounds",
 }
 
@@ -368,8 +369,8 @@ def _resolve_story_phase(
             snapshot.story_phase = val
             return snapshot
 
-    # AI 未指定阶段时，按好感度自动推进
-    allow_regression = False
+    # AI 未指定阶段时，按好感度自动推进（含缓冲带降级）
+    allow_regression = True
     try:
         rules_row = char_repo.get_affection_config(conn, snapshot.character_id)
         if rules_row and rules_row["affection_rules_json"]:
@@ -399,6 +400,23 @@ def _resolve_mood_and_moments(
         val = str(delta["mood"]).strip().lower()
         if val in _VALID_MOODS:
             snapshot.mood = val
+
+    # 心情自然衰减：负面心情连续多轮无新负面事件时自动恢复到 neutral
+    _NEGATIVE_EVENTS = {"argument", "rude", "ignore", "lie", "betray", "insult",
+                        "jealousy", "misunderstanding", "love_rival_appears"}
+    event_name = str(delta.get("event", "")).strip().lower()
+    mood_set_explicitly = "mood" in delta
+
+    if event_name in _NEGATIVE_EVENTS or mood_set_explicitly:
+        snapshot.custom_vars["_mood_streak"] = 0
+    elif snapshot.mood in DECAYABLE_MOODS:
+        streak = int(snapshot.custom_vars.get("_mood_streak") or 0) + 1
+        snapshot.custom_vars["_mood_streak"] = streak
+        if streak >= MOOD_DECAY_ROUNDS:
+            snapshot.mood = "neutral"
+            snapshot.custom_vars["_mood_streak"] = 0
+    else:
+        snapshot.custom_vars["_mood_streak"] = 0
 
     if "moment" in delta and delta["moment"]:
         moments = list(snapshot.custom_vars.get("_shared_moments") or [])
@@ -517,40 +535,24 @@ def _handle_storyline_and_events(
     # ── 关系阶段升级通知 ──
     old_phase = snapshot.old_phase or snapshot.story_phase
     if snapshot.story_phase != old_phase:
-        try:
-            _, upgrade_greeting = get_greeting_for_phase(
-                conn,
-                snapshot.character_id,
-                snapshot.story_phase,
-                snapshot.storyline_id,
-            )
-            if upgrade_greeting:
-                snapshot.custom_vars["_pending_phase_upgrade"] = {
-                    "from_phase": old_phase,
-                    "to_phase": snapshot.story_phase,
-                    "greeting": upgrade_greeting,
-                }
-                from constants.story_phase import STORY_PHASE_LABELS
+        from constants.story_phase import STORY_PHASE_LABELS
 
-                phase_label = STORY_PHASE_LABELS.get(
-                    snapshot.story_phase, snapshot.story_phase
-                )
-                triggered_events.append(
-                    {
-                        "type": "phase_upgrade",
-                        "title": f"关系升级为「{phase_label}」",
-                        "description": "下次打开对话时，角色会主动和你打招呼",
-                    }
-                )
-                logger.info(
-                    "关系阶段升级: user=%s char=%s %s→%s, 触发语已暂存",
-                    snapshot.user_id,
-                    snapshot.character_id,
-                    old_phase,
-                    snapshot.story_phase,
-                )
-        except Exception as e:
-            logger.warning("阶段升级触发语处理异常: %s", e, exc_info=True)
+        phase_label = STORY_PHASE_LABELS.get(snapshot.story_phase, snapshot.story_phase)
+        old_label = STORY_PHASE_LABELS.get(old_phase, old_phase)
+        triggered_events.append(
+            {
+                "type": "phase_upgrade",
+                "title": f"关系升级为「{phase_label}」",
+                "description": f"从「{old_label}」升级为「{phase_label}」",
+            }
+        )
+        logger.info(
+            "关系阶段升级: user=%s char=%s %s→%s",
+            snapshot.user_id,
+            snapshot.character_id,
+            old_phase,
+            snapshot.story_phase,
+        )
 
     # ── 待处理剧情事件管理 ──
     if triggered_events:
@@ -625,10 +627,14 @@ def _resolve_show_bar_preference(conn: ConnType, character_id: str) -> bool:
     """从角色配置读取状态栏显隐偏好，解析失败时保持显示。"""
     try:
         rules_row = char_repo.get_affection_config(conn, character_id)
-        if rules_row and rules_row["affection_rules_json"]:
-            rules = parse_json_object(rules_row["affection_rules_json"], fallback={})
-            if "show_bar" in rules:
-                return bool(rules["show_bar"])
+        if rules_row:
+            # affection_enabled = 0 强制隐藏状态栏
+            if int(rules_row.get("affection_enabled") or 1) == 0:
+                return False
+            if rules_row["affection_rules_json"]:
+                rules = parse_json_object(rules_row["affection_rules_json"], fallback={})
+                if "show_bar" in rules:
+                    return bool(rules["show_bar"])
     except Exception:
         logger.warning(
             "解析好感度规则失败 character_id=%s", character_id, exc_info=True

@@ -126,6 +126,8 @@ const Chat = (() => {
   function _isStateBarHidden() {
     if (ChatState.lastState && ChatState.lastState.show_bar === false) return true;
     if (ChatState.currentChar) {
+      // affection_enabled = 0 视为隐藏状态栏
+      if (ChatState.currentChar.affection_enabled === 0 || ChatState.currentChar.affection_enabled === '0') return true;
       try { const rules = JSON.parse(ChatState.currentChar.affection_rules_json || '{}'); return rules.show_bar === false; } catch (_) {}
     }
     return false;
