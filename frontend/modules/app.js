@@ -7,7 +7,7 @@
      nav.innerHTML = NAV_CONFIG.map(item => `
        <div class="nav-item${item.id === currentPage ? ' active' : ''}"
             data-page="${item.id}"
-            onclick="App.nav('${item.id}')">
+            data-action="nav-page" data-page="${item.id}">
          <span class="nav-icon">${item.icon}</span>
          <span>${item.label}</span>
        </div>

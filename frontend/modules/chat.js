@@ -208,7 +208,7 @@ const Chat = (() => {
       ? Math.max(0, Math.min(100, ChatState.guestQuota.remaining_percent)) : 100;
     const statusClass = statusText.includes('已用完') ? 'exhausted' : (statusText.includes('不多') ? 'warning' : 'ok');
     bar.style.display = '';
-    bar.innerHTML = `<div class="trial-copy"><span class="trial-label">游客体验额度</span><span class="trial-status ${statusClass}">${escapeHtml(statusText)}</span></div><div class="trial-meter"><span style="width:${remainingPercent}%"></span></div><button class="trial-login-btn" onclick="Auth.openLogin()">登录保存记录</button>`;
+    bar.innerHTML = `<div class="trial-copy"><span class="trial-label">游客体验额度</span><span class="trial-status ${statusClass}">${escapeHtml(statusText)}</span></div><div class="trial-meter"><span style="width:${remainingPercent}%"></span></div><button class="trial-login-btn" data-action="open-login">登录保存记录</button>`;
   }
 
   async function refreshGuestQuota() {

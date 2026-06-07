@@ -98,5 +98,38 @@
 
     const detailChatBtn = document.getElementById('detail-chat-btn');
     if (detailChatBtn) detailChatBtn.addEventListener('click', () => CharDetail.startChat());
+
+    // ── 角色广场动态渲染元素（事件委托） ──
+    // char-grid 和 featured-banner 的内容由 utils.js renderCharGrid() 通过 innerHTML 动态生成
+    document.addEventListener('click', (e) => {
+      const actionEl = e.target.closest('[data-action]');
+      if (!actionEl) return;
+      const action = actionEl.dataset.action;
+      const idx = parseInt(actionEl.dataset.charIdx, 10);
+
+      if (action === 'open-char-detail' && !isNaN(idx) && typeof CHARACTERS !== 'undefined' && CHARACTERS[idx]) {
+        CharDetail.open(CHARACTERS[idx]);
+        return;
+      }
+      if (action === 'enter-chat' && !isNaN(idx) && typeof CHARACTERS !== 'undefined' && CHARACTERS[idx]) {
+        e.stopPropagation();
+        Chat.enterChat(CHARACTERS[idx]);
+        return;
+      }
+      if (action === 'toggle-section') {
+        const sectionKey = actionEl.dataset.section;
+        if (sectionKey && typeof toggleSection === 'function') toggleSection(sectionKey);
+        return;
+      }
+      if (action === 'open-login') {
+        Auth.openLogin();
+        return;
+      }
+      if (action === 'nav-page') {
+        const page = actionEl.dataset.page;
+        if (page) App.nav(page);
+        return;
+      }
+    });
   });
 })();

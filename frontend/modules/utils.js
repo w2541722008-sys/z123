@@ -61,9 +61,9 @@ function sanitizeCssUrl(url) {
      const safeImgSrc = escapeHtml(imgSrc || '');
      const safeIdx = featuredIdx;
      bannerEl.innerHTML = `
-       <div class="featured-banner-card" onclick="CharDetail.open(CHARACTERS[${safeIdx}])">
+       <div class="featured-banner-card" data-action="open-char-detail" data-char-idx="${safeIdx}">
          <div class="featured-banner-bg" style="background-color:${safeColor};${safeImgSrc ? `background-image:url('${safeImgSrc}');` : ''}"></div>
-         <button class="featured-banner-btn" onclick="event.stopPropagation();Chat.enterChat(CHARACTERS[${safeIdx}])">立即聊天</button>
+         <button class="featured-banner-btn" data-action="enter-chat" data-char-idx="${safeIdx}">立即聊天</button>
          <div class="featured-banner-content">
            <div class="featured-banner-label">✦ 今日推荐</div>
            <div class="featured-banner-name">${escapeHtml(featuredName)}</div>
@@ -131,7 +131,7 @@ function sanitizeCssUrl(url) {
      })();
 
      return `
-       <div class="char-card" onclick="CharDetail.open(CHARACTERS[${i}])">
+       <div class="char-card" data-action="open-char-detail" data-char-idx="${i}">
          <div class="char-cover" style="${coverStyle}">
            <span class="type-badge ${cardType}">${typeMeta.icon} ${typeMeta.label}</span>
            ${char.free ? '<span class="free-badge">免费</span>' : ''}
@@ -171,7 +171,7 @@ function sanitizeCssUrl(url) {
         <div
           id="section-header-${key}"
           class="accordion-header ${openClass ? '' : 'collapsed'}"
-          onclick="toggleSection('${key}')"
+          data-action="toggle-section" data-section="${key}"
           style="--accent:${meta.accentColor};--gradient:${meta.gradient}"
         >
           <div class="accordion-header-left">
