@@ -207,6 +207,18 @@ const ForgotPassword = (() => {
   function init() {
     bindCodeInputs();
     bindEnterKey();
+    bindButtons();
+  }
+
+  function bindButtons() {
+    document.getElementById('send-code-btn')?.addEventListener('click', sendCode);
+    document.getElementById('verify-code-btn')?.addEventListener('click', verifyCode);
+    document.getElementById('resend-btn')?.addEventListener('click', resendCode);
+    document.getElementById('back-to-step1-btn')?.addEventListener('click', () => goToStep(1));
+    document.getElementById('back-to-step2-btn')?.addEventListener('click', () => goToStep(2));
+    document.getElementById('reset-password-btn')?.addEventListener('click', resetPassword);
+    document.getElementById('go-login-btn')?.addEventListener('click', () => { window.location.href = "/"; });
+    document.getElementById('new-password-input')?.addEventListener('input', checkPasswordStrength);
   }
 
   return { init, sendCode, verifyCode, resetPassword, checkPasswordStrength, resendCode };
