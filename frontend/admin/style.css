@@ -40,6 +40,9 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: var(--font-stack); background: var(--bg-deepest); color: var(--text-primary); min-height: 100vh; }
 
+/* ---- 工具类 ---- */
+.d-none { display: none; }
+
 /* ---- 顶栏 ---- */
 .topbar {
   background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 10px 24px;

@@ -59,8 +59,8 @@
 
         <!-- 两个圆润按钮，上下排列 -->
         <div class="home-actions">
-          <button class="home-btn home-btn-outline" onclick="App.nav('square')">选择角色</button>
-          <button class="home-btn home-btn-primary" onclick="App.navToLastChat()">开始聊天</button>
+          <button class="home-btn home-btn-outline" id="home-square-btn">选择角色</button>
+          <button class="home-btn home-btn-primary" id="home-chat-btn">开始聊天</button>
         </div>
       </div>
     </section>
@@ -73,11 +73,11 @@
         <h1>选择角色</h1>
         <div class="subtitle">点击查看详情 · 开启专属陪伴</div>
       </div>
-      <div style="padding:0 16px">
+      <div class="px-16">
         <!-- 推荐横幅（动态渲染，有角色时展示第一个） -->
-        <div id="featured-banner" style="display:none;margin-top:14px"></div>
+        <div id="featured-banner" class="d-none mt-14"></div>
         <!-- 角色卡网格 -->
-        <div id="char-grid" class="char-grid" style="margin-top:14px;"></div>
+        <div id="char-grid" class="char-grid mt-14"></div>
       </div>
     </section>
 
@@ -87,24 +87,24 @@
     <section class="page" id="page-chat">
       <!-- 聊天顶栏 -->
       <div class="chat-topbar">
-        <div class="chat-back" onclick="App.nav('square')">←</div>
+        <div class="chat-back" id="chat-back-btn">←</div>
         <div id="chat-avatar" class="chat-avatar">顾</div>
         <div class="chat-meta">
           <div id="chat-name" class="chat-name">顾沉</div>
           <div id="chat-raw-name" class="chat-secondary-name">原名：顾沉</div>
           <div id="chat-sign" class="chat-sign">冷感总裁，控制欲强，但只对你温柔。</div>
         </div>
-        <div class="chat-topbar-right" onclick="ChatMenu.toggle()" title="更多">···</div>
+        <div class="chat-topbar-right" id="chat-menu-toggle" title="更多">···</div>
       </div>
 
       <!-- 关系状态栏（好感度/沉浸度 + 阶段 + 心情，AI 每轮自动更新） -->
-      <div id="chat-state-bar" class="chat-state-bar" style="display:none">
+      <div id="chat-state-bar" class="chat-state-bar d-none">
         <div class="state-bar-inner">
           <div class="state-affection">
             <span id="state-affection-label" class="state-label">好感度</span>
             <div class="affection-bar-wrap">
               <div class="affection-bar-bg">
-                <div id="affection-bar-fill" class="affection-bar-fill" style="width:30%"></div>
+                <div id="affection-bar-fill" class="affection-bar-fill"></div>
               </div>
               <span id="affection-value" class="affection-value">30</span>
             </div>
@@ -115,8 +115,8 @@
       </div>
 
       <!-- 角色状态面板（从 AI 输出的状态栏文字里解析，可折叠） -->
-      <div id="char-status-panel" class="char-status-panel" style="display:none">
-        <div class="csp-header" onclick="Chat.toggleStatusPanel()">
+      <div id="char-status-panel" class="char-status-panel d-none">
+        <div class="csp-header" id="csp-header">
           <span class="csp-title">📋 角色状态</span>
           <span class="csp-arrow" id="csp-arrow">▲</span>
         </div>
@@ -137,7 +137,7 @@
             placeholder="和他说说话……"
             rows="1"
           ></textarea>
-          <button class="send-btn" id="send-btn" onclick="Chat.send()"><span class="send-icon">➤</span></button>
+          <button class="send-btn" id="send-btn"><span class="send-icon">➤</span></button>
         </div>
       </div>
     </section>
@@ -149,11 +149,11 @@
       <div class="page-topbar">
         <h1>我的</h1>
       </div>
-      <div style="padding:16px 16px 0">
+      <div class="pt-16 px-16">
 
-        <div id="profile-header" class="profile-header" style="display:none">
+        <div id="profile-header" class="profile-header d-none">
           <div class="profile-avatar" id="profile-avatar-char">你</div>
-          <input type="file" id="avatar-file-input" accept=".jpg,.jpeg,.png,.webp" style="display:none" />
+          <input type="file" id="avatar-file-input" class="d-none" accept=".jpg,.jpeg,.png,.webp" />
           <div>
             <div class="profile-name" id="profile-name">用户昵称</div>
             <div class="profile-sub"  id="profile-email">账号信息</div>
@@ -161,8 +161,8 @@
         </div>
 
         <div class="auth-row" id="auth-row">
-          <button class="btn btn-primary" id="login-btn"  onclick="Auth.openLogin()">登录 / 注册</button>
-          <button class="btn btn-ghost"   id="logout-btn" onclick="Auth.logout()" style="display:none">退出登录</button>
+          <button class="btn btn-primary" id="login-btn">登录 / 注册</button>
+          <button class="btn btn-ghost d-none" id="logout-btn">退出登录</button>
         </div>
 
         <div class="setting-card">
@@ -212,20 +212,20 @@
   <nav class="bottom-nav" id="bottom-nav"></nav>
 
   <!-- 聊天页右上角更多菜单 -->
-  <div class="wechat-menu-overlay" id="chat-menu-overlay" onclick="ChatMenu.close(event)">
+  <div class="wechat-menu-overlay" id="chat-menu-overlay">
     <div class="wechat-menu">
       <div class="wechat-menu-group">
-        <button class="wechat-menu-item" onclick="ChatMenu.openHistory()">
+        <button class="wechat-menu-item" id="menu-open-history">
           <span class="wechat-menu-icon">🕘</span>
           <span>查看聊天记录</span>
         </button>
-        <button class="wechat-menu-item danger" onclick="ChatMenu.clearChat()">
+        <button class="wechat-menu-item danger" id="menu-clear-chat">
           <span class="wechat-menu-icon">🗑</span>
           <span>清空聊天记录</span>
         </button>
       </div>
       <div class="wechat-menu-group">
-        <button class="wechat-menu-item" onclick="ChatMenu.openRemark()">
+        <button class="wechat-menu-item" id="menu-open-remark">
           <span class="wechat-menu-icon">🏷</span>
           <span>修改备注</span>
         </button>
@@ -234,28 +234,28 @@
   </div>
 
   <!-- 聊天记录弹窗 -->
-  <div class="modal-overlay" id="history-modal" onclick="ChatMenu.closeHistory(event)">
+  <div class="modal-overlay" id="history-modal">
     <div class="modal-sheet history-sheet">
       <div class="modal-handle"></div>
       <div class="modal-title">回忆记录</div>
       <div class="modal-sub">按时间顺序查看你们之间完整的聊天过程。</div>
       <div id="history-list" class="history-list"></div>
       <div class="modal-actions">
-        <button class="btn btn-primary" onclick="ChatMenu.closeHistory()">我知道了</button>
+        <button class="btn btn-primary" id="history-close-btn">我知道了</button>
       </div>
     </div>
   </div>
 
   <!-- 修改备注弹窗 -->
-  <div class="modal-overlay" id="remark-modal" onclick="ChatMenu.closeRemark(event)">
+  <div class="modal-overlay" id="remark-modal">
     <div class="modal-sheet">
       <div class="modal-handle"></div>
       <div class="modal-title">修改备注</div>
       <div class="modal-sub">备注是你自己看到的名字，会优先显示在聊天页顶部。</div>
       <input class="input-field" id="input-remark" type="text" maxlength="40" placeholder="比如：阿沉 / 哥哥 / 1号男友" />
       <div class="modal-actions">
-        <button class="btn btn-ghost" onclick="ChatMenu.closeRemark()">取消</button>
-        <button class="btn btn-primary" onclick="ChatMenu.saveRemark()">保存备注</button>
+        <button class="btn btn-ghost" id="remark-cancel-btn">取消</button>
+        <button class="btn btn-primary" id="remark-save-btn">保存备注</button>
       </div>
     </div>
   </div>
@@ -263,25 +263,25 @@
   <!-- ============================================================
        登录弹窗
   ============================================================ -->
-  <div class="modal-overlay" id="login-modal" onclick="Auth.closeLogin(event)">
+  <div class="modal-overlay" id="login-modal">
     <div class="modal-sheet">
       <div class="modal-handle"></div>
       <!-- Tab 切换：登录 / 注册 -->
       <div class="auth-tabs">
-        <button class="auth-tab active" id="tab-login"    onclick="Auth.switchTab('login')">登录</button>
-        <button class="auth-tab"        id="tab-register" onclick="Auth.switchTab('register')">注册</button>
+        <button class="auth-tab active" id="tab-login">登录</button>
+        <button class="auth-tab"        id="tab-register">注册</button>
       </div>
       <div class="modal-sub" id="auth-modal-sub">欢迎回来，登录后聊天记录持续保存。</div>
       <input class="input-field" id="input-email"    type="email"    placeholder="邮箱" />
-      <input class="input-field" id="input-nickname" type="text"     placeholder="昵称（可选，不填用邮箱前缀）" style="display:none" />
+      <input class="input-field d-none" id="input-nickname" type="text"     placeholder="昵称（可选，不填用邮箱前缀）" />
       <input class="input-field" id="input-password" type="password" placeholder="密码（至少 6 位）" />
       <!-- 忘记密码链接 -->
-      <div style="text-align: right; margin: -8px 0 16px;">
+      <div class="forgot-password-wrap">
         <a href="/forgot-password.html" class="forgot-password-link">忘记密码？</a>
       </div>
       <div class="modal-actions">
-        <button class="btn btn-ghost"   onclick="Auth.closeLogin()">取消</button>
-        <button class="btn btn-primary" id="auth-submit-btn" onclick="Auth.doSubmit()">确认登录</button>
+        <button class="btn btn-ghost"   id="login-cancel-btn">取消</button>
+        <button class="btn btn-primary" id="auth-submit-btn">确认登录</button>
       </div>
     </div>
   </div>
@@ -289,7 +289,7 @@
   <!-- ============================================================
        剧情线选择弹窗（多开场白角色专用）
   ============================================================ -->
-  <div class="modal-overlay" id="greeting-select-modal" onclick="GreetingSelect.close(event)">
+  <div class="modal-overlay" id="greeting-select-modal">
     <div class="modal-sheet greeting-select-sheet">
       <div class="modal-handle"></div>
       <div class="greeting-select-header">
@@ -297,8 +297,8 @@
         <div class="greeting-select-desc">每条剧情线都是不同的开始，选择后将重置当前聊天记录。</div>
       </div>
       <div id="greeting-list" class="greeting-list"></div>
-      <div class="char-detail-actions" style="padding-top:0">
-        <button class="btn btn-ghost" onclick="GreetingSelect.close()">返回</button>
+      <div class="char-detail-actions pt-0">
+        <button class="btn btn-ghost" id="greeting-close-btn">返回</button>
       </div>
     </div>
   </div>
@@ -306,7 +306,7 @@
   <!-- ============================================================
        角色详情弹窗
   ============================================================ -->
-  <div class="modal-overlay" id="char-detail-modal" onclick="CharDetail.close(event)">
+  <div class="modal-overlay" id="char-detail-modal">
     <div class="modal-sheet">
       <div class="modal-handle"></div>
       <!-- 封面 -->
@@ -324,14 +324,14 @@
         <p id="detail-bio"></p>
       </div>
       <!-- 开场白预览 -->
-      <div class="char-detail-section" id="detail-opening-section" style="display:none">
+      <div class="char-detail-section d-none" id="detail-opening-section">
         <div class="char-detail-section-title">他会这样和你说话</div>
         <div id="detail-opening" class="detail-opening-preview"></div>
       </div>
       <!-- 行动按钮 -->
       <div class="char-detail-actions">
-        <button class="btn btn-ghost" onclick="CharDetail.close()">再看看</button>
-        <button class="btn btn-primary" id="detail-chat-btn" onclick="CharDetail.startChat()">开始聊天 →</button>
+        <button class="btn btn-ghost" id="detail-close-btn">再看看</button>
+        <button class="btn btn-primary" id="detail-chat-btn">开始聊天 →</button>
       </div>
     </div>
   </div>
@@ -359,6 +359,7 @@
   <script src="frontend/modules/chat-menu.js?v=20260607"></script>
   <script src="frontend/modules/char-detail.js?v=20260607"></script>
   <script src="frontend/modules/greeting-select.js?v=20260607"></script>
+  <script src="frontend/modules/csp-bindings.js?v=20260607"></script>
   <script src="frontend/modules/init.js?v=20260607"></script>
 </body>
 </html>

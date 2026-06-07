@@ -295,16 +295,28 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     # XSS 保护（旧浏览器兼容）
     response.headers["X-XSS-Protection"] = "1; mode=block"
-    # 内容安全策略 — 允许内联脚本/样式（项目使用 onclick + style attr），阻断外部资源注入
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data: https:; "
-        "connect-src 'self'; "
-        "frame-ancestors 'none'; "
-        "form-action 'self'"
-    )
+    # 内容安全策略 — 管理后台保留 unsafe-inline（动态 onclick），主应用严格模式
+    admin_csp = request.url.path.startswith("/admin") or request.url.path == "/admin.html"
+    if admin_csp:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "form-action 'self'"
+        )
+    else:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "form-action 'self'"
+        )
     # HTTPS 环境下启用 HSTS（支持反向代理）
     forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
     if request.url.scheme == "https" or forwarded_proto == "https":
