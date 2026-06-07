@@ -145,6 +145,7 @@ def create_token_pair(
     except Exception:
         if commit:
             conn.rollback()
+        logger.exception("create_token_pair 事务失败")
         raise
     finally:
         if owns_conn:
@@ -209,6 +210,7 @@ def rotate_access_token(
     except Exception:
         if owns_conn:
             conn.rollback()
+        logger.exception("rotate_access_token 事务失败")
         raise
     finally:
         if owns_conn:
@@ -265,6 +267,7 @@ def revoke_user_device_tokens(
     except Exception:
         if commit:
             conn.rollback()
+        logger.exception("revoke_user_device_tokens 事务失败")
         raise
     finally:
         if owns_conn:

@@ -29,6 +29,11 @@ def _validate_password_length(value: str) -> str:
         raise ValueError('密码至少需要8位')
     if len(value) > 64:
         raise ValueError('密码不能超过64位')
+    # 至少包含一个字母和一个数字
+    if not any(c.isalpha() for c in value):
+        raise ValueError('密码需包含至少一个字母')
+    if not any(c.isdigit() for c in value):
+        raise ValueError('密码需包含至少一个数字')
     return value
 
 

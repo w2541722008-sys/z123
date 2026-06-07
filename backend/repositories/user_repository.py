@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from core.database import ConnType
@@ -81,6 +81,7 @@ def update_user_avatar(conn: ConnType, user_id: int | str, avatar_url: str) -> N
 # Admin 相关
 # ============================================================
 
+
 def get_user_by_id(conn: ConnType, user_id: int | str) -> dict[str, Any] | None:
     """按 ID 获取用户完整信息。"""
     return conn.execute(
@@ -97,7 +98,9 @@ def get_user_id_email(conn: ConnType, user_id: int | str) -> dict[str, Any] | No
     ).fetchone()
 
 
-def get_user_id_email_nickname(conn: ConnType, user_id: int | str) -> dict[str, Any] | None:
+def get_user_id_email_nickname(
+    conn: ConnType, user_id: int | str
+) -> dict[str, Any] | None:
     """按 ID 获取用户 id、email、nickname。"""
     return conn.execute(
         "SELECT id, email, COALESCE(nickname, '') AS nickname FROM users WHERE id = %s",
@@ -129,10 +132,18 @@ def list_users(
     ).fetchall()
 
 
+def count_users(conn: ConnType, *, where_clause: str = "", params: tuple = ()) -> int:
+    """按筛选条件统计用户数量。"""
+    row = conn.execute(
+        f"SELECT COUNT(*) AS total FROM users {where_clause}",
+        params,
+    ).fetchone()
+    return int(row["total"]) if row else 0
+
+
 def export_all_users(conn: ConnType) -> list[dict[str, Any]]:
     """导出全部用户数据（含统计）。"""
-    return conn.execute(
-        """
+    return conn.execute("""
         SELECT u.id, u.email, COALESCE(u.nickname, '') AS nickname,
                COALESCE(u.plan_type, 'free') AS plan_type,
                u.plan_expires_at,
@@ -154,8 +165,7 @@ def export_all_users(conn: ConnType) -> list[dict[str, Any]]:
             GROUP BY user_id
         ) p ON p.user_id = u.id
         ORDER BY u.id DESC
-        """
-    ).fetchall()
+        """).fetchall()
 
 
 def get_user_stats(conn: ConnType, user_id: int | str) -> dict[str, Any]:
@@ -229,5 +239,8 @@ def delete_user_cascade(conn: ConnType, user_id: int | str) -> None:
     conn.execute("DELETE FROM user_story_progress WHERE user_id = %s", (user_id,))
     conn.execute("DELETE FROM membership_orders WHERE user_id = %s", (user_id,))
     conn.execute("DELETE FROM auth_tokens WHERE user_id = %s", (user_id,))
-    conn.execute("DELETE FROM password_reset_codes WHERE email = (SELECT email FROM users WHERE id = %s)", (user_id,))
+    conn.execute(
+        "DELETE FROM password_reset_codes WHERE email = (SELECT email FROM users WHERE id = %s)",
+        (user_id,),
+    )
     conn.execute("DELETE FROM users WHERE id = %s", (user_id,))

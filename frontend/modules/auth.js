@@ -164,7 +164,7 @@
    async function logout() {
      try {
        await API.logout();  // 后端会清除 Cookie
-     } catch (e) { console.warn('logout 请求失败，前端仍会清除本地状态', e); }
+     } catch (_) { /* logout 请求失败，前端仍清除本地状态 */ }
      AppState.setToken('');
      AppState.setRefreshToken('');
     try { sessionStorage.removeItem('aifriend_token_refresh'); } catch (_) {}

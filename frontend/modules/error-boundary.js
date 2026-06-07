@@ -14,7 +14,7 @@
   window.addEventListener('error', (e) => {
     // 忽略资源加载错误（img/script/link），这些由各自模块处理
     if (e.target && e.target !== window) return;
-    console.error('[全局错误]', e.error || e.message, e.filename, e.lineno);
+    console.error('[全局错误]', (e.error || e.message || '未知错误'));
     if (typeof UI !== 'undefined' && UI.toast) {
       UI.toast('页面出了点问题，请刷新重试', 'error');
     }
@@ -25,7 +25,7 @@
     const reason = e.reason;
     // AbortError 是用户主动取消请求，不需要提示
     if (reason?.name === 'AbortError') return;
-    console.error('[未处理的Promise异常]', reason);
+    console.error('[未处理的Promise异常]', (reason?.message || '未知异常'));
     if (typeof UI !== 'undefined' && UI.toast) {
       const msg = reason?.message || '操作失败，请稍后重试';
       UI.toast(msg, 'error');

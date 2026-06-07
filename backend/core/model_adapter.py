@@ -22,13 +22,25 @@ def register_circuit_breaker(cb_fn: Callable[..., Any]) -> None:
     global _get_circuit_breaker
     _get_circuit_breaker = cb_fn
 
-# 常量定义
-DEFAULT_TIMEOUT = 60
-STREAM_TIMEOUT = 120
-_MAX_ATTEMPTS = 3  # 总共 3 次尝试（1 次原始 + 2 次重试）
-_RETRY_BACKOFF_BASE = 0.5  # 指数退避基数（秒）
-_MAX_STREAM_ATTEMPTS = 2  # 流式连接最多 2 次尝试
-_STREAM_RETRY_DELAY = 0.5  # 流式重试前固定延迟（秒）
+def _env_int(key: str, default: int) -> int:
+    try:
+        return int(os.environ[key])
+    except (KeyError, ValueError):
+        return default
+
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.environ[key])
+    except (KeyError, ValueError):
+        return default
+
+# 常量定义（均支持环境变量覆盖，未设置时使用默认值）
+DEFAULT_TIMEOUT = _env_int("AI_HTTP_TIMEOUT", 60)
+STREAM_TIMEOUT = _env_int("AI_STREAM_TIMEOUT", 120)
+_MAX_ATTEMPTS = _env_int("AI_MAX_ATTEMPTS", 3)
+_RETRY_BACKOFF_BASE = _env_float("AI_RETRY_BACKOFF_BASE", 0.5)
+_MAX_STREAM_ATTEMPTS = _env_int("AI_MAX_STREAM_ATTEMPTS", 2)
+_STREAM_RETRY_DELAY = _env_float("AI_STREAM_RETRY_DELAY", 0.5)
 
 # 每线程独立 httpx.Client — httpx.Client 非线程安全，ThreadPoolExecutor 多线程并发访问
 # 同一全局实例会导致数据错乱。threading.local() 确保每个线程独享自己的连接池。

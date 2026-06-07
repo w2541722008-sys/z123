@@ -2,7 +2,8 @@
 
 覆盖：好感度计算（三防）、阶段自动推进、增量清理等核心逻辑。
 """
-from datetime import datetime, timezone, timedelta
+
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from services.character_state import (
@@ -14,6 +15,7 @@ from services.character_state import (
     _AFFECTION_BASE_RULES,
     _DAILY_AFFECTION_CAP_DEFAULT,
     _AFFECTION_DELTA_MAX,
+    get_public_character_state,
 )
 
 
@@ -66,9 +68,7 @@ class TestCalculateAffectionChange:
         rules = self._default_rules()
         # Set last event timestamp to recent time
         recent = datetime.now(timezone.utc).isoformat()
-        state = self._default_state(
-            _last_event_timestamps={"gift": recent}
-        )
+        state = self._default_state(_last_event_timestamps={"gift": recent})
         change, reason = _calculate_affection_change("gift", rules, state)
         assert change == 0
         assert "cooldown" in reason
@@ -89,7 +89,9 @@ class TestCalculateAffectionChange:
             _daily_affection_gained=999,  # 已经涨了很多
         )
         # daily_cap=0 → 不限制，应该能正常加分
-        change, reason = _calculate_affection_change("deep_conversation", rules, state, daily_cap=0)
+        change, reason = _calculate_affection_change(
+            "deep_conversation", rules, state, daily_cap=0
+        )
         assert change > 0
         # reason 中可能包含 daily_cap=0 作为调试信息，但不应包含 "daily_cap:" 拦截提示
         assert "daily_cap:" not in reason
@@ -101,20 +103,22 @@ class TestCalculateAffectionChange:
             _daily_affection_gained=50,  # 已涨50
         )
         # daily_cap=100 → 还没到上限，应该能加分
-        change, reason = _calculate_affection_change("deep_conversation", rules, state, daily_cap=100)
+        change, reason = _calculate_affection_change(
+            "deep_conversation", rules, state, daily_cap=100
+        )
         assert change > 0
 
         # daily_cap=50 → 刚好到上限，不应该加分
-        change2, reason2 = _calculate_affection_change("deep_conversation", rules, state, daily_cap=50)
+        change2, reason2 = _calculate_affection_change(
+            "deep_conversation", rules, state, daily_cap=50
+        )
         assert change2 == 0
         assert "daily_cap" in reason2
 
     def test_diminishing_returns(self):
         rules = self._default_rules()
         # 4th trigger: diminish rate = 0.0
-        state = self._default_state(
-            _daily_event_counts={"light_chat": 3}
-        )
+        state = self._default_state(_daily_event_counts={"light_chat": 3})
         change, reason = _calculate_affection_change("light_chat", rules, state)
         assert change == 0
 
@@ -138,6 +142,66 @@ class TestCalculateAffectionChange:
         state = self._default_state(story_phase="lover")
         change, _ = _calculate_affection_change("betray", rules, state)
         assert change >= -_AFFECTION_DELTA_MAX
+
+
+# ============================================================
+# get_public_character_state
+# ============================================================
+class TestPublicCharacterState:
+    def test_serializes_show_bar_events_and_storyline_name(self):
+        raw_state = {
+            "affection": 12,
+            "story_phase": "acquaintance",
+            "mood": "warm",
+            "custom_vars": {},
+            "storyline_id": "7",
+            "_triggered_events": [{"id": 1, "title": "初遇"}],
+            "_daily_affection_gained": 3,
+        }
+
+        with patch(
+            "services.character_state.get_character_state", return_value=raw_state
+        ), patch(
+            "services.character_state.char_repo.get_affection_config",
+            return_value={"affection_rules_json": {"show_bar": False}},
+        ), patch(
+            "services.character_state.story_repo.get_storyline_name",
+            return_value="主线",
+        ):
+            result = get_public_character_state(
+                object(),
+                user_id=1,
+                character_id="c1",
+            )
+
+        assert result["affection"] == 12
+        assert result["show_bar"] is False
+        assert result["triggered_events"] == [{"id": 1, "title": "初遇"}]
+        assert result["storyline_name"] == "主线"
+        assert "_daily_affection_gained" not in result
+
+    def test_show_bar_defaults_to_true_when_not_configured(self):
+        raw_state = {
+            "affection": 0,
+            "story_phase": "stranger",
+            "mood": "neutral",
+            "custom_vars": {},
+            "storyline_id": None,
+        }
+
+        with patch(
+            "services.character_state.get_character_state", return_value=raw_state
+        ), patch(
+            "services.character_state.char_repo.get_affection_config",
+            return_value={"affection_rules_json": {}},
+        ):
+            result = get_public_character_state(
+                object(),
+                user_id=1,
+                character_id="c1",
+            )
+
+        assert result["show_bar"] is True
 
 
 # ============================================================
@@ -220,7 +284,9 @@ class TestSanitizeStateDelta:
         assert "_daily_event_counts" not in result.get("custom", {})
 
     def test_unknown_fields_filtered(self):
-        result = _sanitize_state_delta({"unknown_field": "value", "event": "light_chat"})
+        result = _sanitize_state_delta(
+            {"unknown_field": "value", "event": "light_chat"}
+        )
         assert "unknown_field" not in result
         assert result["event"] == "light_chat"
 
@@ -236,9 +302,11 @@ class TestResetDailyFieldsIfNeeded:
     def test_same_day_no_reset(self):
         from services.character_state import _get_today_date
         from core.character_state_snapshot import CharacterStateSnapshot
+
         today = _get_today_date()
         snapshot = CharacterStateSnapshot(
-            user_id=1, character_id="c1",
+            user_id=1,
+            character_id="c1",
             daily_reset_date=today,
             daily_event_counts={"light_chat": 3},
             daily_affection_gained=10,
@@ -249,8 +317,10 @@ class TestResetDailyFieldsIfNeeded:
 
     def test_different_day_resets(self):
         from core.character_state_snapshot import CharacterStateSnapshot
+
         snapshot = CharacterStateSnapshot(
-            user_id=1, character_id="c1",
+            user_id=1,
+            character_id="c1",
             daily_reset_date="2020-01-01",
             daily_event_counts={"light_chat": 5},
             daily_affection_gained=15,

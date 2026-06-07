@@ -16,8 +16,6 @@ from typing import Any
 from core.config import RECENT_MESSAGE_WINDOW, logger, utc_now
 from core.database import ConnType
 from repositories import chat_repository as chat_repo
-from services.prompt_assembler import build_layered_chat_messages
-from services.character_state import apply_state_delta, get_character_state
 from services.memory_service import get_summary_for_prompt
 from services.chat_query import (
     ensure_opening_message,
@@ -116,7 +114,11 @@ def _build_recent_messages_before_target(
         return fallback_recent
 
     all_rows = chat_repo.get_messages_before_target(
-        conn, user_id, character_id, target_ts, target_message_id,
+        conn,
+        user_id,
+        character_id,
+        target_ts,
+        target_message_id,
         _MAX_MESSAGES_FOR_CONTEXT,
     )
     chronological = _project_message_rows(list(reversed(all_rows)))
@@ -148,14 +150,18 @@ def _build_continue_prompt_messages(
     current_content: str,
 ) -> list[dict[str, str]]:
     continue_messages = list(recent_messages)
-    continue_messages.append({
-        "role": "assistant",
-        "content": current_content,
-    })
-    continue_messages.append({
-        "role": "user",
-        "content": "【请继续】请接着上面的话继续说下去，保持角色设定和语气，不要重复已说过的内容。直接继续输出即可。",
-    })
+    continue_messages.append(
+        {
+            "role": "assistant",
+            "content": current_content,
+        }
+    )
+    continue_messages.append(
+        {
+            "role": "user",
+            "content": "【请继续】请接着上面的话继续说下去，保持角色设定和语气，不要重复已说过的内容。直接继续输出即可。",
+        }
+    )
     return continue_messages
 
 
@@ -200,7 +206,9 @@ def prepare_continue_context(
         character_id=character_id,
         viewer_plan=viewer_plan,
     )
-    continue_messages = _build_continue_prompt_messages(recent_messages, current_content)
+    continue_messages = _build_continue_prompt_messages(
+        recent_messages, current_content
+    )
     return character, memory_summary, continue_messages, related_assets
 
 
@@ -450,14 +458,19 @@ def save_regenerated_version(
         else:
             final_content = new_content
 
-        versions = [{
-            "content": final_content,
-            "created_at": now.isoformat(),
-            "operation": "continue" if is_append else "regenerate",
-        }]
+        versions = [
+            {
+                "content": final_content,
+                "created_at": now.isoformat(),
+                "operation": "continue" if is_append else "regenerate",
+            }
+        ]
 
         chat_repo.update_message_with_versions(
-            conn, message_id, final_content, json.dumps(versions, ensure_ascii=False),
+            conn,
+            message_id,
+            final_content,
+            json.dumps(versions, ensure_ascii=False),
         )
     except Exception as e:
         logger.warning("版本保存失败，降级为仅更新内容: %s", e, exc_info=True)

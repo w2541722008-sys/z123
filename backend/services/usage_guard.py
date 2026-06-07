@@ -9,28 +9,64 @@ from core.config import COST_ESTIMATE_CHARS_PER_TOKEN
 from core.database import ConnType
 from repositories import usage_repository as usage_repo
 
+# Token 估算系数：CJK 字符约 1.6 chars/token，Latin 约 4 chars/token
+_CJK_CHARS_PER_TOKEN = 1.6
+_LATIN_CHARS_PER_TOKEN = 4.0
 
-def estimate_tokens_from_chars(chars: int) -> int:
-    """按统一比例把字符数估算成 token 数。"""
+
+def _cjk_ratio(text: str) -> float:
+    """检测文本中 CJK 字符的占比，用于自适应 token 估算。"""
+    if not text:
+        return 0.0
+    cjk = 0
+    for ch in text:
+        cp = ord(ch)
+        if (0x4E00 <= cp <= 0x9FFF or  # CJK Unified
+            0x3400 <= cp <= 0x4DBF or  # CJK Extension A
+            0x3000 <= cp <= 0x303F or  # CJK Symbols
+            0xFF00 <= cp <= 0xFFEF or  # Halfwidth/Fullwidth
+            0x3040 <= cp <= 0x309F or  # Hiragana
+            0x30A0 <= cp <= 0x30FF or  # Katakana
+            0xAC00 <= cp <= 0xD7AF):    # Hangul
+            cjk += 1
+    return cjk / len(text)
+
+
+def estimate_tokens_from_chars(chars: int, *, cjk_ratio: float | None = None) -> int:
+    """按统一比例把字符数估算成 token 数。
+
+    cjk_ratio 为 None 时使用全局默认系数（向后兼容）；
+    传入 0~1 值时按 CJK/Latin 比例自适应计算。
+    """
     if chars <= 0:
         return 0
-    return max(1, int(chars / COST_ESTIMATE_CHARS_PER_TOKEN + 0.5))
+    if cjk_ratio is None:
+        chars_per_token = COST_ESTIMATE_CHARS_PER_TOKEN
+    else:
+        # 加权平均：CJK 权重 + Latin 权重
+        chars_per_token = cjk_ratio * _CJK_CHARS_PER_TOKEN + (1 - cjk_ratio) * _LATIN_CHARS_PER_TOKEN
+    return max(1, int(chars / chars_per_token + 0.5))
 
 
 def estimate_messages_tokens(messages: list[dict[str, str]]) -> dict[str, int]:
-    """估算整组 messages 的字符数和 token 数。"""
+    """估算整组 messages 的字符数和 token 数。自适应检测中英文比例。"""
     total_chars = 0
+    combined_text_parts = []
     for msg in messages:
         total_chars += len(msg.get("role", "")) + len(msg.get("content", "")) + 12
+        combined_text_parts.append(msg.get("content", ""))
+    ratio = _cjk_ratio("".join(combined_text_parts))
     return {
         "chars": total_chars,
-        "tokens": estimate_tokens_from_chars(total_chars),
+        "tokens": estimate_tokens_from_chars(total_chars, cjk_ratio=ratio),
     }
 
 
 def estimate_text_tokens(text: str) -> int:
-    """估算单段文本的 token 数。"""
-    return estimate_tokens_from_chars(len(text or ""))
+    """估算单段文本的 token 数，自适应检测中英文比例。"""
+    text_str = text or ""
+    ratio = _cjk_ratio(text_str)
+    return estimate_tokens_from_chars(len(text_str), cjk_ratio=ratio)
 
 
 def _day_range_utc() -> tuple[str, str]:

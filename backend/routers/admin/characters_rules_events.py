@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import Any
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
+from core.exceptions import BadRequestError, NotFoundError
 from core.schemas import PostRulePayload, StoryEventPayload
 from repositories import character_admin_story_repository as admin_repo
 from repositories import character_repository as char_repo
@@ -22,7 +23,7 @@ router = APIRouter(tags=["admin"])
 
 def _require_character(conn: ConnType, character_id: str) -> None:
     if not char_repo.check_character_exists(conn, character_id):
-        raise HTTPException(status_code=404, detail="角色不存在")
+        raise NotFoundError(detail="角色不存在")
 
 
 @router.get("/admin/character/{character_id}/post-rules")
@@ -76,7 +77,7 @@ def update_post_rule(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_post_rule(conn, rule_id, character_id):
-        raise HTTPException(status_code=404, detail="后置规则不存在")
+        raise NotFoundError(detail="后置规则不存在")
     _assert_storyline_owned(conn, character_id, body.storyline_id)
 
     admin_repo.admin_update_post_rule(
@@ -100,7 +101,7 @@ def delete_post_rule(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_post_rule(conn, rule_id, character_id):
-        raise HTTPException(status_code=404, detail="后置规则不存在")
+        raise NotFoundError(detail="后置规则不存在")
 
     admin_repo.admin_delete_post_rule(conn, rule_id)
     conn.commit()
@@ -170,7 +171,7 @@ def update_story_event(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_story_event(conn, event_id, character_id):
-        raise HTTPException(status_code=404, detail="剧情事件不存在")
+        raise NotFoundError(detail="剧情事件不存在")
     _assert_story_event_unlock_refs_owned(
         conn, character_id,
         body.unlocked_memory_ids, body.unlocked_greeting_ids, body.unlocked_storyline_id,
@@ -201,7 +202,7 @@ def delete_story_event(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_story_event(conn, event_id, character_id):
-        raise HTTPException(status_code=404, detail="剧情事件不存在")
+        raise NotFoundError(detail="剧情事件不存在")
 
     admin_repo.admin_delete_story_event(conn, event_id)
     conn.commit()

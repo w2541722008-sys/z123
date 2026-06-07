@@ -14,7 +14,7 @@ SERVER_USER="ubuntu"
 SERVER_DIR="/opt/aifriend"
 SSH_KEY="${HOME}/.ssh/id_ed25519_aifriend"
 
-SSH_OPTS=(-i "$SSH_KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=no)
+SSH_OPTS=(-i "$SSH_KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new)
 
 TARGET_BACKUP="${1:-}"
 
@@ -76,20 +76,32 @@ else
 fi
 
 echo "📦 替换当前版本为备份..."
-# 保留当前 .env 和 data 目录
+# 保留当前 .env、data 和用户上传头像目录
 cp -r "\$CURRENT_DIR/backend/.env" "/tmp/aifriend_env_backup" 2>/dev/null || true
 cp -r "\$CURRENT_DIR/backend/data" "/tmp/aifriend_data_backup" 2>/dev/null || true
+cp -r "\$CURRENT_DIR/avatars" "/tmp/aifriend_avatars_backup" 2>/dev/null || true
+
+# 安全校验：确保目标路径合法，防止误删
+if [[ "\$CURRENT_DIR" != /opt/aifriend* ]]; then
+  echo "❌ 异常路径 \$CURRENT_DIR，拒绝删除" >&2
+  exit 1
+fi
 
 rm -rf "\$CURRENT_DIR"
 cp -r "\$BACKUP_DIR" "\$CURRENT_DIR"
 
-# 恢复 .env 和 data
+# 恢复 .env、data 和用户上传头像目录
 cp "/tmp/aifriend_env_backup" "\$CURRENT_DIR/backend/.env" 2>/dev/null || true
 if [[ -d "/tmp/aifriend_data_backup" ]]; then
   cp -r "/tmp/aifriend_data_backup" "\$CURRENT_DIR/backend/data" 2>/dev/null || true
 fi
+if [[ -d "/tmp/aifriend_avatars_backup" ]]; then
+  rm -rf "\$CURRENT_DIR/avatars" 2>/dev/null || true
+  cp -r "/tmp/aifriend_avatars_backup" "\$CURRENT_DIR/avatars" 2>/dev/null || true
+fi
 rm -f "/tmp/aifriend_env_backup" 2>/dev/null || true
 rm -rf "/tmp/aifriend_data_backup" 2>/dev/null || true
+rm -rf "/tmp/aifriend_avatars_backup" 2>/dev/null || true
 
 echo "🔄 重启服务..."
 cd "\$CURRENT_DIR/backend"
@@ -151,7 +163,7 @@ main() {
   # 确认回滚
   echo
   echo "⚠️  即将回滚到: $TARGET_BACKUP"
-  echo "⚠️  当前版本将被替换，当前 .env 和 data 目录会保留"
+  echo "⚠️  当前版本将被替换，当前 .env、data 和 avatars 目录会保留"
   read -r -p "确认回滚？(y/N): " confirm
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     echo "已取消"

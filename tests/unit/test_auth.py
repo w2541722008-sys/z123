@@ -29,6 +29,7 @@ from core.auth import (
     hash_password_bcrypt,
     verify_password,
 )
+from core.exceptions import ForbiddenError, UnauthorizedError
 
 from conftest import (
     NOW_UTC,
@@ -350,9 +351,8 @@ class TestAuthDependencies:
 
     def test_get_current_user_raises_401_when_optional_user_missing(self):
         with patch("core.auth._dependencies.get_optional_user", return_value=None):
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(UnauthorizedError) as exc:
                 get_current_user(MagicMock(cookies={}), "Bearer bad")
-        assert exc.value.status_code == 401
         assert exc.value.detail == "未登录或登录已过期"
 
     def test_get_current_user_returns_user_when_optional_user_exists(self):
@@ -364,9 +364,8 @@ class TestAuthDependencies:
     def test_get_admin_user_raises_403_when_user_not_admin(self):
         user = CurrentUser(id=3, email="u@example.com", nickname="u", is_admin=False)
         with patch("core.auth._dependencies.get_current_user", return_value=user):
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(ForbiddenError) as exc:
                 get_admin_user("Bearer token")
-        assert exc.value.status_code == 403
         assert exc.value.detail == "你没有管理后台权限"
 
     def test_get_admin_user_returns_current_user_when_admin(self):

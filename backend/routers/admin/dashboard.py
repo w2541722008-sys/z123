@@ -15,7 +15,7 @@ from services.health_service import check_media_health
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
-from ._helpers import _normalize_pagination
+from ._helpers import _normalize_pagination, _validate_pagination_params
 from repositories import admin_dashboard_repository as dashboard_repo
 
 
@@ -103,6 +103,7 @@ def admin_list_audit_logs(
         page: 页码
         limit: 每页条数（最多 200）
     """
+    _validate_pagination_params(page, limit, max_limit=200)
     _, safe_limit = _normalize_pagination(page, limit, max_limit=200)
     result = dashboard_repo.list_audit_logs(
         conn, action=action, target_type=target_type, page=page, limit=limit,

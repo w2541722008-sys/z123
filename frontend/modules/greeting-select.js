@@ -65,7 +65,6 @@ const GreetingSelect = (() => {
       const msg = (err && err.message) ? err.message : JSON.stringify(err);
       if (msg && msg !== '未登录') {
         if (typeof UI !== 'undefined' && UI.toast) {
-          console.error('[GreetingSelect] clearChat error:', err);
           UI.toast('切换失败:' + msg, 'error');
         }
       }

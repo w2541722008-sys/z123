@@ -186,6 +186,8 @@ def test_reset_password_success_updates_password_and_marks_code_used(app_client)
         FakeQueryResult(one=None),
         FakeQueryResult(one=None),
         FakeQueryResult(one=None),
+        FakeQueryResult(rowcount=0),  # DELETE access tokens (revoke)
+        FakeQueryResult(rowcount=0),  # DELETE refresh tokens (revoke)
     ])
 
     with override_db(app, conn), patch("routers.auth.enforce_rate_limit"), \

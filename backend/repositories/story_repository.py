@@ -50,9 +50,7 @@ def get_triggered_event_ids(
     )
 
 
-def unlock_memories(
-    conn: ConnType, character_id: str, memory_ids: list[int]
-) -> None:
+def unlock_memories(conn: ConnType, character_id: str, memory_ids: list[int]) -> None:
     """批量激活角色记忆条目。"""
     if not memory_ids:
         return
@@ -84,9 +82,7 @@ def unlock_greetings(
     )
 
 
-def unlock_storyline(
-    conn: ConnType, character_id: str, storyline_id: int
-) -> None:
+def unlock_storyline(conn: ConnType, character_id: str, storyline_id: int) -> None:
     """激活角色剧情线。"""
     conn.execute(
         """
@@ -98,7 +94,7 @@ def unlock_storyline(
     )
 
 
-def get_storyline_name(conn: ConnType, storyline_id: int) -> str | None:
+def get_storyline_name(conn: ConnType, storyline_id: int | str) -> str | None:
     """获取剧情线名称。"""
     row = conn.execute(
         "SELECT name FROM character_storylines WHERE id = %s",
@@ -120,7 +116,9 @@ def get_recent_event_titles(conn: ConnType, event_ids: list[int]) -> list[str]:
 
 
 def get_current_storyline_id(
-    conn: ConnType, user_id: int | str, character_id: str,
+    conn: ConnType,
+    user_id: int | str,
+    character_id: str,
 ) -> int | None:
     """读取用户当前剧情线 ID。"""
     row = conn.execute(
@@ -136,7 +134,9 @@ def get_current_storyline_id(
 
 
 def is_storyline_valid(
-    conn: ConnType, storyline_id: int, character_id: str,
+    conn: ConnType,
+    storyline_id: int,
+    character_id: str,
 ) -> bool:
     """检查剧情线是否属于该角色且处于激活状态。"""
     row = conn.execute(
@@ -147,7 +147,10 @@ def is_storyline_valid(
 
 
 def set_current_storyline_id(
-    conn: ConnType, user_id: int | str, character_id: str, storyline_id: int,
+    conn: ConnType,
+    user_id: int | str,
+    character_id: str,
+    storyline_id: int,
 ) -> None:
     """设置用户当前剧情线（不修改 triggered_event_ids）。"""
     conn.execute(

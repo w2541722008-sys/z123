@@ -12,7 +12,10 @@ from core.database import ConnType
 from core.plan_constants import GUEST_PLAN
 from services.chat_query import _normalize_non_empty_message, message_projection
 from services.plan_service import get_plan_policy
-from services.prompt_assembler import build_layered_chat_messages
+from services.prompt_assembler import (
+    PromptBuildContext,
+    build_layered_chat_messages_from_context,
+)
 from services.usage_guard import get_daily_usage
 
 logger = logging.getLogger(__name__)
@@ -32,7 +35,10 @@ def build_guest_fallback_messages(
         identity += "\n" + description
 
     return [
-        {"role": "system", "content": identity + "\n\n请用第一人称自然回复，保持角色设定。"},
+        {
+            "role": "system",
+            "content": identity + "\n\n请用第一人称自然回复，保持角色设定。",
+        },
         {"role": "user", "content": user_message},
     ]
 
@@ -44,18 +50,17 @@ def build_guest_stream_messages(
 ) -> tuple[str, list[dict[str, str]]]:
     clean_text = _normalize_non_empty_message(message_text)
     fake_history = [
-        message_projection(item.role, item.content)
-        for item in guest_history
+        message_projection(item.role, item.content) for item in guest_history
     ]
     fake_history.append({"role": "user", "content": clean_text})
     try:
-        messages = build_layered_chat_messages(
-            character=character,
-            recent_messages=fake_history,
-            memory_summary="",
-            related_assets=[],
-            user_name="访客",
-            character_state=None,
+        messages = build_layered_chat_messages_from_context(
+            PromptBuildContext(
+                character=character,
+                recent_messages=fake_history,
+                related_assets=[],
+                user_name="访客",
+            )
         )
     except Exception as exc:
         logger.warning("游客 prompt 构建失败，使用降级 prompt: %s", exc, exc_info=True)
@@ -69,7 +74,9 @@ def build_guest_quota_payload(conn: ConnType, guest_ip: str) -> dict[str, Any]:
     usage = get_daily_usage(conn, guest_ip=guest_ip)
     used_tokens = max(0, int(usage["total_tokens"] or 0))
     remaining_tokens = max(0, token_limit - used_tokens)
-    remaining_percent = int(remaining_tokens * 100 / token_limit) if token_limit > 0 else 100
+    remaining_percent = (
+        int(remaining_tokens * 100 / token_limit) if token_limit > 0 else 100
+    )
 
     if remaining_tokens <= 0:
         status_text = "额度已用完"

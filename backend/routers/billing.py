@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from core.auth import CurrentUser, get_current_user
 from core.config import (
@@ -17,6 +18,7 @@ from core.config import (
     VIP_PLAN_PRICE_CENTS,
 )
 from core.database import ConnType, get_db_dep
+from core.exceptions import BadRequestError, ConflictError, NotFoundError
 from core.schemas import BillingCreateOrderPayload
 from repositories import billing_repository as billing_repo
 from services.billing_order_service import close_expired_pending_orders
@@ -28,6 +30,8 @@ router = APIRouter()
 
 
 from constants.order_status import ORDER_STATUS_CLOSED, ORDER_STATUS_PAID, ORDER_STATUS_PENDING
+
+logger = logging.getLogger(__name__)
 
 
 PLAN_PRODUCTS = {
@@ -94,11 +98,11 @@ def _cancel_pending_order(
     """用户主动取消自己的一笔待支付订单。"""
     row = _fetch_order_by_no(conn, order_no=order_no, user_id=user_id)
     if not row:
-        raise HTTPException(status_code=404, detail="订单不存在")
+        raise NotFoundError(detail="订单不存在")
     if row["status"] == ORDER_STATUS_PAID:
-        raise HTTPException(status_code=409, detail="已支付订单不能取消")
+        raise ConflictError(detail="已支付订单不能取消")
     if row["status"] == ORDER_STATUS_CLOSED:
-        raise HTTPException(status_code=409, detail="该订单已关闭，无需重复取消")
+        raise ConflictError(detail="该订单已关闭，无需重复取消")
 
     affected = billing_repo.close_pending_order(
         conn,
@@ -108,7 +112,7 @@ def _cancel_pending_order(
         new_status=ORDER_STATUS_CLOSED,
     )
     if affected != 1:
-        raise HTTPException(status_code=409, detail="订单状态已变更，请刷新后重试")
+        raise ConflictError(detail="订单状态已变更，请刷新后重试")
     if commit:
         conn.commit()
     return _serialize_order(_fetch_order_by_no(conn, order_no=order_no, user_id=user_id))
@@ -172,7 +176,7 @@ def billing_create_order(
     )
     product = PLAN_PRODUCTS.get(payload.plan_type)
     if not product:
-        raise HTTPException(status_code=400, detail="暂不支持该会员套餐")
+        raise BadRequestError(detail="暂不支持该会员套餐")
 
     order_no = _build_order_no()
     expires_at = _pending_order_expires_at()
@@ -208,6 +212,7 @@ def billing_create_order(
         conn.commit()
         created_order = _fetch_order_by_no(conn, order_no=order_no, user_id=user.id)
     except Exception:
+        logger.exception("创建订单事务失败 user_id=%s plan_type=%s", user.id, payload.plan_type)
         conn.rollback()
         raise
 
@@ -245,7 +250,7 @@ def billing_get_order(
         invalidate_user(str(user.id))
     row = _fetch_order_by_no(conn, order_no=order_no, user_id=user.id)
     if not row:
-        raise HTTPException(status_code=404, detail="订单不存在")
+        raise NotFoundError(detail="订单不存在")
     return {"order": _serialize_order(row)}
 
 
@@ -267,5 +272,6 @@ def billing_cancel_order(
             "order": order,
         }
     except Exception:
+        logger.exception("取消订单事务失败 user_id=%s order_no=%s", user.id, order_no)
         conn.rollback()
         raise

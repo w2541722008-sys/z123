@@ -85,12 +85,15 @@
     }
 
     if (!resp.ok) {
-      throw new Error(data?.detail || '请求失败');
+      const err = new Error(data?.detail || '请求失败');
+      err.status = resp.status;
+      throw err;
     }
     return data;
   }
 
    async function streamMessageToUrl(url, payload, handlers = {}, signal) {
+    const STREAM_CHUNK_TIMEOUT_MS = 30000;
     const token = AppState.getToken();
     const headers = {
       'Content-Type': 'application/json',
@@ -108,7 +111,9 @@
       if (!resp.ok) {
         let data = null;
         try { data = await resp.json(); } catch (_) { data = null; }
-        throw new Error(data?.detail || '流式请求失败');
+        const err = new Error(data?.detail || '流式请求失败');
+        err.status = resp.status;
+        throw err;
       }
 
       const reader = resp.body.getReader();
@@ -116,7 +121,22 @@
       let buffer = '';
 
       while (true) {
-        const { done, value } = await reader.read();
+        let readResult;
+        try {
+          readResult = await Promise.race([
+            reader.read(),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('SSE 读取超时')), STREAM_CHUNK_TIMEOUT_MS)
+            ),
+          ]);
+        } catch (readErr) {
+          reader.cancel();
+          if (handlers.onError) {
+            handlers.onError({ message: '响应超时，请检查网络后重试' });
+          }
+          throw readErr;
+        }
+        const { done, value } = readResult;
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });

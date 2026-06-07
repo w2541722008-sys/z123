@@ -1,19 +1,26 @@
 """
 管理后台 - 子模块（从 admin.py 自动拆分）
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from core.auth import CurrentUser, get_admin_user
 from core.database import ConnType, get_db_dep
+from core.exceptions import BadRequestError, NotFoundError
 from core.schemas import (
     AdminUserPlanUpdatePayload,
     AdminUserEditPayload,
     AdminBatchPlanPayload,
+)
+from ._helpers import (
+    _build_where_clause,
+    _normalize_pagination,
+    _validate_pagination_params,
 )
 from repositories import user_repository as user_repo
 from repositories import admin_audit_repository as audit_repo
@@ -22,12 +29,6 @@ from core.plan_constants import plan_display_name, serialize_plan_info
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
-from ._helpers import (
-    _build_where_clause,
-    _count_with_where,
-    _normalize_pagination,
-    _validate_pagination_params,
-)
 
 @router.get("/admin/users")
 def admin_list_users(
@@ -62,7 +63,7 @@ def admin_list_users(
     where_clause = _build_where_clause(conditions)
 
     # 查询总数
-    total = _count_with_where(conn, "FROM users", where_clause, params)
+    total = user_repo.count_users(conn, where_clause=where_clause, params=tuple(params))
 
     # 查询列表（分页）
     offset, safe_limit = _normalize_pagination(page, limit, max_limit=100)
@@ -78,14 +79,16 @@ def admin_list_users(
     items: list[dict[str, Any]] = []
     for row in rows:
         plan_info = serialize_plan_info(row["plan_type"], row["plan_expires_at"])
-        items.append({
-            "id": row["id"],
-            "email": row["email"],
-            "nickname": row["nickname"] or row["email"].split("@")[0],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            **plan_info,
-        })
+        items.append(
+            {
+                "id": row["id"],
+                "email": row["email"],
+                "nickname": row["nickname"] or row["email"].split("@")[0],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                **plan_info,
+            }
+        )
 
     return {
         "total": total,
@@ -105,28 +108,32 @@ def admin_export_users(conn: ConnType = Depends(get_db_dep)) -> list[dict[str, A
     items: list[dict[str, Any]] = []
     for row in rows:
         plan_info = serialize_plan_info(row["plan_type"], row["plan_expires_at"])
-        items.append({
-            "id": row["id"],
-            "email": row["email"],
-            "nickname": row["nickname"] or row["email"].split("@")[0],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "chat_count": row["chat_count"],
-            "char_count": row["char_count"],
-            "linked_char_count": row["linked_char_count"],
-            **plan_info,
-        })
+        items.append(
+            {
+                "id": row["id"],
+                "email": row["email"],
+                "nickname": row["nickname"] or row["email"].split("@")[0],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "chat_count": row["chat_count"],
+                "char_count": row["char_count"],
+                "linked_char_count": row["linked_char_count"],
+                **plan_info,
+            }
+        )
     return items
 
 
 @router.get("/admin/users/{user_id}")
-def admin_get_user(user_id: str, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
+def admin_get_user(
+    user_id: str, conn: ConnType = Depends(get_db_dep)
+) -> dict[str, Any]:
     """
     管理后台：获取用户详情（含对话数、关联角色数）。
     """
     row = user_repo.get_user_by_id(conn, user_id)
     if not row:
-        raise HTTPException(status_code=404, detail="用户不存在")
+        raise NotFoundError(detail="用户不存在")
 
     # 对话统计
     chat_row = user_repo.get_user_stats(conn, user_id)
@@ -166,7 +173,7 @@ def admin_edit_user(
     """
     user_row = user_repo.get_user_id_email(conn, user_id)
     if not user_row:
-        raise HTTPException(status_code=404, detail="用户不存在")
+        raise NotFoundError(detail="用户不存在")
 
     updates: dict[str, Any] = {}
     if body.email is not None:
@@ -175,14 +182,14 @@ def admin_edit_user(
         updates["nickname"] = body.nickname.strip()
 
     if not updates:
-        raise HTTPException(status_code=400, detail="没有提供任何更新字段")
+        raise BadRequestError(detail="没有提供任何更新字段")
 
     # 白名单校验：确保 f-string 拼接的列名来自安全来源
     # 注意：不使用 assert，因为 python -O 会跳过 assert 导致安全防护失效
     _ALLOWED_USER_UPDATE_FIELDS = {"email", "nickname"}
     invalid_fields = set(updates.keys()) - _ALLOWED_USER_UPDATE_FIELDS
     if invalid_fields:
-        raise HTTPException(status_code=400, detail=f"非法更新字段: {invalid_fields}")
+        raise BadRequestError(detail=f"非法更新字段: {invalid_fields}")
 
     user_repo.update_user_fields(conn, user_id, updates)
 
@@ -226,7 +233,7 @@ def admin_delete_user(
     """
     user_row = user_repo.get_user_id_email(conn, user_id)
     if not user_row:
-        raise HTTPException(status_code=404, detail="用户不存在")
+        raise NotFoundError(detail="用户不存在")
 
     # 按顺序删除关联数据
     user_repo.delete_user_cascade(conn, user_id)
@@ -261,8 +268,8 @@ def admin_batch_update_plan(
     if body.plan_type == "free":
         plan_expires_at = None
     else:
-        plan_expires_at = (
-            datetime.now(timezone.utc) + timedelta(days=body.duration_days)
+        plan_expires_at = datetime.now(timezone.utc) + timedelta(
+            days=body.duration_days
         )
 
     updated = 0
@@ -303,12 +310,14 @@ def admin_update_user_plan(
     """管理后台：手动设置某个用户的会员档位。"""
     user_row = user_repo.get_user_id_email_nickname(conn, user_id)
     if not user_row:
-        raise HTTPException(status_code=404, detail="用户不存在")
+        raise NotFoundError(detail="用户不存在")
 
     if body.plan_type == "free":
         plan_expires_at = None
     else:
-        plan_expires_at = (datetime.now(timezone.utc) + timedelta(days=body.duration_days))
+        plan_expires_at = datetime.now(timezone.utc) + timedelta(
+            days=body.duration_days
+        )
 
     user_repo.update_user_plan(conn, user_id, body.plan_type, plan_expires_at)
 
@@ -328,7 +337,7 @@ def admin_update_user_plan(
             "plan_expires_at": plan_expires_at,
         },
     )
-    
+
     conn.commit()
 
     invalidate_user(str(user_id))

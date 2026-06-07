@@ -8,7 +8,7 @@ SERVER_DIR="/opt/aifriend"
 SSH_KEY="${DEPLOY_SSH_KEY:-$HOME/.ssh/id_ed25519_aifriend}"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-SSH_OPTS=(-i "$SSH_KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=no)
+SSH_OPTS=(-i "$SSH_KEY" -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new)
 
 print_header() {
   echo "=========================================="
@@ -33,7 +33,7 @@ check_prerequisites() {
 }
 
 check_ssh() {
-  step "步骤 1/6: 检查服务器连接"
+  step "步骤 1/7: 检查服务器连接"
   if ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" "echo ok" >/dev/null 2>&1; then
     echo "✅ 服务器连接正常"
   else
@@ -93,8 +93,8 @@ cp -r . "../aifriend_$backup_name" 2>/dev/null || \
   cp -r . "$HOME/aifriend_$backup_name"
 echo "备份完成: aifriend_$backup_name"
 
-# 只保留最新1份备份，删除旧的
-ls -d /opt/aifriend_backup_* /opt/aifriend_20* "$HOME"/aifriend_20* 2>/dev/null | sort | head -n -1 | xargs rm -rf 2>/dev/null || true
+# 只保留最新3份备份，删除旧的
+ls -d /opt/aifriend_backup_* /opt/aifriend_20* "$HOME"/aifriend_20* 2>/dev/null | sort | head -n -3 | xargs rm -rf 2>/dev/null || true
 ENDSSH
   echo "✅ 备份完成（旧备份已自动清理）"
   echo
@@ -107,13 +107,18 @@ sync_files() {
     --exclude='__pycache__' \
     --exclude='.pytest_cache' \
     --exclude='.ruff_cache' \
+    --exclude='.mypy_cache' \
     --exclude='*.pyc' \
     --exclude='node_modules' \
     --exclude='.env' \
     --exclude='.env.*' \
     --exclude='.venv*' \
     --exclude='venv' \
+    --exclude='avatars' \
+    --exclude='backend/data' \
     --exclude='*.log' \
+    --exclude='tests' \
+    --exclude='.scratch' \
     --exclude='.DS_Store' \
     --exclude='.trae' \
     --exclude='.codebuddy' \
@@ -122,7 +127,7 @@ sync_files() {
     --exclude='*.tar.gz' \
     --exclude='admin.yaml' \
     --exclude='aifriend.conf' \
-    -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=no" \
+    -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new" \
     "$LOCAL_DIR/" \
     "$SERVER_USER@$SERVER_IP:$SERVER_DIR/"
   echo "✅ 同步完成"
@@ -139,22 +144,44 @@ find backend -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 
 cd backend
 if [[ -f requirements.txt ]]; then
-  pip3 install -r requirements.txt --quiet --break-system-packages 2>/dev/null || \
-  pip3 install -r requirements.txt --quiet 2>/dev/null || true
+  if ! pip3 install -r requirements.txt --quiet --break-system-packages 2>/dev/null && \
+     ! pip3 install -r requirements.txt --quiet 2>/dev/null; then
+    echo "❌ 依赖安装失败，部署已中止"
+    exit 1
+  fi
 fi
 
 # 执行数据库迁移（Alembic）
 if [[ -f alembic.ini ]]; then
   echo "🔄 执行数据库迁移..."
-  /opt/aifriend/backend/venv/bin/python3 -m alembic upgrade head 2>/dev/null || \
-  python3 -m alembic upgrade head 2>/dev/null || \
-  echo "⚠️ 数据库迁移失败，请手动检查"
+  if ! /opt/aifriend/backend/venv/bin/python3 -m alembic upgrade head && \
+     ! python3 -m alembic upgrade head; then
+    echo "❌ 数据库迁移失败，尝试自动恢复..."
+    LATEST_BACKUP=$(ls -dt /opt/aifriend_backup_* /opt/aifriend_20* "$HOME"/aifriend_20* "$HOME"/aifriend_backup_* 2>/dev/null | head -1)
+    if [[ -n "$LATEST_BACKUP" && -d "$LATEST_BACKUP" ]]; then
+      echo "📦 从备份恢复: $LATEST_BACKUP"
+      if [[ "/opt/aifriend" != /opt/* ]] || [[ "/opt/aifriend" == "/" ]]; then
+        echo "❌ 路径校验失败，拒绝执行 rm -rf"
+        exit 1
+      fi
+      rm -rf /opt/aifriend
+      cp -r "$LATEST_BACKUP" /opt/aifriend
+      if bash /opt/aifriend/restart.sh 2>/dev/null; then
+        echo "✅ 已自动恢复到迁移前版本"
+      else
+        echo "⚠️ 自动恢复后重启失败，请手动检查"
+      fi
+    else
+      echo "❌ 未找到备份目录，请手动执行: bash rollback.sh"
+    fi
+    exit 1
+  fi
 fi
 
 cd /opt/aifriend
 if ! bash restart.sh; then
   echo "restart.sh 执行失败，使用降级重启逻辑"
-  pkill -f uvicorn || true
+  pkill -f "uvicorn main:app.*--port 8000" || true
   sleep 2
   cd /opt/aifriend/backend
   nohup /opt/aifriend/backend/venv/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /var/log/aifriend.log 2>&1 &
@@ -167,25 +194,51 @@ ENDSSH
   echo
 }
 
+remote_health_check_once() {
+  ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
+python3 - <<'PY'
+import json
+from urllib.error import HTTPError, URLError
+from urllib.request import urlopen
+
+http_code = 0
+body = ""
+try:
+    with urlopen("http://localhost:8000/api/health", timeout=5) as resp:
+        http_code = resp.status
+        body = resp.read().decode("utf-8", errors="replace")
+except HTTPError as exc:
+    http_code = exc.code
+    body = exc.read().decode("utf-8", errors="replace")
+except (OSError, URLError) as exc:
+    print(f"000 error:{exc}")
+    raise SystemExit(1)
+
+try:
+    data = json.loads(body)
+except json.JSONDecodeError:
+    data = {}
+
+health_status = data.get("status")
+print(f"{http_code} {health_status or 'unknown'}")
+raise SystemExit(0 if http_code == 200 and data.get("status") == "ok" else 1)
+PY
+ENDSSH
+}
 
 health_check() {
   step "步骤 6/7: 健康检查门禁"
-  local http_code
-  http_code=$(ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" \
-    'curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health 2>/dev/null || echo "000"')
-
-  if [[ "$http_code" == "200" ]]; then
-    echo "✅ 健康检查通过 (HTTP $http_code)"
+  local health_output
+  if health_output=$(remote_health_check_once); then
+    echo "✅ 健康检查通过 ($health_output)"
   else
-    echo "❌ 健康检查失败 (HTTP $http_code)"
+    echo "❌ 健康检查失败 ($health_output)"
     echo "⚠️  服务可能需要更多时间启动，等待 10 秒后重试..."
     sleep 10
-    http_code=$(ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" \
-      'curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/health 2>/dev/null || echo "000"')
-    if [[ "$http_code" == "200" ]]; then
-      echo "✅ 健康检查通过 (HTTP $http_code)"
+    if health_output=$(remote_health_check_once); then
+      echo "✅ 健康检查通过 ($health_output)"
     else
-      echo "❌ 健康检查持续失败 (HTTP $http_code)"
+      echo "❌ 健康检查持续失败 ($health_output)"
       echo "⚠️  建议执行回滚: bash rollback.sh"
       echo "⚠️  查看日志: ssh $SERVER_USER@$SERVER_IP 'tail -50 /var/log/aifriend.log'"
       return 1

@@ -9,10 +9,13 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from utils.card_text import expand_macros, pick_section_text, split_structured_sections
 from utils.json_utils import parse_json_object
+
+logger = logging.getLogger(__name__)
 
 
 # 从 description 中提取 personality 的关键词列表
@@ -31,10 +34,39 @@ def _get_field(source: Any, key: str, default: Any = "") -> Any:
     return default if value is None else value
 
 
+_RUNTIME_REQUIRED_KEYS = {
+    "asset_type",
+    "primary_system_prompt",
+    "base_profile",
+    "opening_message",
+}
+_RUNTIME_RECOMMENDED_KEYS = {
+    "personality", "scenario", "world_rules", "examples",
+    "post_history_rules", "alternate_greetings", "extension_hints",
+}
+
+
+def _validate_runtime_layers(layers: dict[str, Any], character_id: str) -> None:
+    """校验 runtime_cache_json 关键字段，缺失时发出 warning 防止配置错误静默上线。"""
+    missing_required = _RUNTIME_REQUIRED_KEYS - set(layers.keys())
+    if missing_required:
+        logger.warning(
+            "角色 %s runtime_cache_json 缺少必需字段: %s，行为可能异常",
+            character_id, ", ".join(sorted(missing_required)),
+        )
+    missing_recommended = _RUNTIME_RECOMMENDED_KEYS - set(layers.keys())
+    if missing_recommended:
+        logger.info(
+            "角色 %s runtime_cache_json 缺少推荐字段: %s，将使用空值",
+            character_id, ", ".join(sorted(missing_recommended)),
+        )
+
+
 def get_runtime_layers(character: Any) -> dict[str, Any]:
     """优先读取导卡时缓存好的 runtime layers，没有再走字段兜底。"""
     runtime_layers = parse_json_object(_get_field(character, "runtime_cache_json", ""), fallback={})
     if runtime_layers:
+        _validate_runtime_layers(runtime_layers, _get_field(character, "id", "unknown"))
         return runtime_layers
     return {
         "asset_type": _get_field(character, "asset_type", "character"),

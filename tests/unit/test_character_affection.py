@@ -4,24 +4,22 @@
 所有被测试函数均为纯逻辑（无 DB 依赖）。
 """
 
-import pytest
 from datetime import datetime, timezone
 
-NOW_UTC = datetime(2026, 5, 19, 12, 0, 0, tzinfo=timezone.utc)
-
 from services.character_affection import (
+    _AFFECTION_COOLDOWN_SECONDS,
+    _AFFECTION_DELTA_MAX,
+    _AFFECTION_DIMINISHING_RETURNS,
+    _ADVENTURE_AFFECTION_RULES,
+    _AFFECTION_BASE_RULES,
+    _EVENT_NAME_MIGRATION,
+    _ROMANCE_AFFECTION_RULES,
+    _auto_advance_story_phase,
     _calculate_affection_change,
     _update_anti_abuse_counters,
-    _auto_advance_story_phase,
-    _AFFECTION_BASE_RULES,
-    _ADVENTURE_AFFECTION_RULES,
-    _ROMANCE_AFFECTION_RULES,
-    _AFFECTION_COOLDOWN_SECONDS,
-    _EVENT_NAME_MIGRATION,
-    _AFFECTION_DIMINISHING_RETURNS,
-    _DAILY_AFFECTION_CAP_DEFAULT,
-    _AFFECTION_DELTA_MAX,
 )
+
+NOW_UTC = datetime(2026, 5, 19, 12, 0, 0, tzinfo=timezone.utc)
 
 
 # ============================================================
@@ -97,6 +95,14 @@ class TestCooldowns:
         assert change > 0
         assert "cooldown" not in reason
 
+    def test_invalid_cooldown_timestamp_is_ignored_without_crashing(self):
+        rules = {"compliment": 2}
+        state = {"_last_event_timestamps": {"compliment": "bad-timestamp"}}
+        change, reason = _calculate_affection_change("compliment", rules, state)
+
+        assert change > 0
+        assert "cooldown" not in reason
+
 
 # ============================================================
 # 每日上限验证
@@ -118,20 +124,26 @@ class TestDailyCap:
     def test_daily_cap_respects_custom_value(self):
         rules = {"compliment": 2}
         state = {"_daily_affection_gained": 5}
-        change, reason = _calculate_affection_change("compliment", rules, state, daily_cap=5)
+        change, reason = _calculate_affection_change(
+            "compliment", rules, state, daily_cap=5
+        )
         assert change == 0
         assert "daily_cap" in reason
 
     def test_daily_cap_zero_means_unlimited(self):
         rules = {"compliment": 2}
         state = {"_daily_affection_gained": 999}
-        change, reason = _calculate_affection_change("compliment", rules, state, daily_cap=0)
+        change, reason = _calculate_affection_change(
+            "compliment", rules, state, daily_cap=0
+        )
         assert change > 0
 
     def test_daily_cap_remains_positive_when_room_available(self):
         rules = {"compliment": 2}
         state = {"_daily_affection_gained": 14}
-        change, reason = _calculate_affection_change("compliment", rules, state, daily_cap=15)
+        change, reason = _calculate_affection_change(
+            "compliment", rules, state, daily_cap=15
+        )
         assert change == 1
 
 
@@ -227,7 +239,9 @@ class TestCombinedMechanisms:
             "_daily_event_counts": {"deep_conversation": 1},
             "_daily_affection_gained": 14,
         }
-        change, reason = _calculate_affection_change("deep_conversation", rules, state, daily_cap=15)
+        change, reason = _calculate_affection_change(
+            "deep_conversation", rules, state, daily_cap=15
+        )
         assert change == 1
 
 

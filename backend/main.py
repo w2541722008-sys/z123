@@ -192,6 +192,45 @@ class _RequestIDLogFilter(logging.Filter):
         return True
 
 
+class _JsonFormatter(logging.Formatter):
+    """结构化 JSON 日志格式器 — 生产环境可通过 LOG_FORMAT=json 启用。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        import json as _json
+        log_entry: dict[str, object] = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S.%fZ"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+            "req_id": getattr(record, "request_id", ""),
+        }
+        if record.exc_info and record.exc_info[0]:
+            log_entry["exc"] = self.formatException(record.exc_info)
+        return _json.dumps(log_entry, ensure_ascii=False, default=str)
+
+
+def _setup_logging() -> None:
+    """根据 LOG_FORMAT 环境变量配置日志格式。
+
+    LOG_FORMAT=json → 结构化 JSON（生产环境推荐）
+    未设置或其他值 → 默认文本格式（开发环境）
+    """
+    log_fmt = os.environ.get("LOG_FORMAT", "").strip().lower()
+    if log_fmt != "json":
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(_JsonFormatter())
+    # 替换根 logger 的所有 handler，避免双份输出
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+    # uvicorn 的日志也走同一 handler
+    logging.getLogger("uvicorn").handlers = [handler]
+    logging.getLogger("uvicorn.access").handlers = [handler]
+
+
+_setup_logging()
+
 # 注册到根 logger，确保 uvicorn 和项目日志都能拿到 request_id
 logging.getLogger().addFilter(_RequestIDLogFilter())
 
@@ -372,7 +411,7 @@ _config_check_cache: list[str] | None = None
 
 
 @app.get("/api/health")
-def health() -> dict[str, str | bool | int]:
+def health() -> dict[str, Any]:
     """
     健康检查端点，用于监控服务状态。
 
@@ -401,6 +440,13 @@ def health() -> dict[str, str | bool | int]:
     return {
         "status": status,
         "time": utc_now_iso(),
+        "checks": {
+            "database": db_ok,
+            "config": config_ok,
+            "config_issues": _config_check_cache if not config_ok else [],
+            "media": media_ok,
+            "media_missing_count": int(media_health.get("missing_count", 0)),
+        },
     }
 
 

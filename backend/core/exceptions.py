@@ -23,8 +23,16 @@ class BadRequestError(AifriendError):
     """请求参数不合法 — HTTP 400。"""
 
 
+class UnauthorizedError(AifriendError):
+    """未认证或认证过期 — HTTP 401。"""
+
+
 class ForbiddenError(AifriendError):
     """权限不足 — HTTP 403。"""
+
+
+class ConflictError(AifriendError):
+    """资源冲突（如重复创建）— HTTP 409。"""
 
 
 class RateLimitError(AifriendError):

@@ -11,15 +11,19 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Header, Request
 
 from core.config import ADMIN_EMAILS
 from core.database import get_conn
+from core.exceptions import ForbiddenError, UnauthorizedError
 from core.plan_constants import serialize_plan_info
+
+logger = logging.getLogger(__name__)
 from core.auth._cache import _cache
 from core.auth._cookies import _COOKIE_NAME
 from core.auth._token import _hash_token_value
@@ -133,6 +137,7 @@ def _verify_token_and_get_user(token: str) -> CurrentUser | None:
 
         conn.commit()
     except Exception:
+        logger.exception("令牌验证事务失败")
         conn.rollback()
         raise
     finally:
@@ -184,7 +189,7 @@ def get_current_user(
     """
     user = get_optional_user(request, authorization)
     if not user:
-        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+        raise UnauthorizedError("未登录或登录已过期")
     return user
 
 
@@ -195,5 +200,5 @@ def get_admin_user(
     """要求当前登录用户必须属于管理员邮箱白名单。"""
     user = get_current_user(request, authorization)
     if not user.is_admin:
-        raise HTTPException(status_code=403, detail="你没有管理后台权限")
+        raise ForbiddenError("你没有管理后台权限")
     return user

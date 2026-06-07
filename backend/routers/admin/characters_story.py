@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from core.auth import CurrentUser, get_admin_user, get_current_user
 from core.database import ConnType, get_db_dep
+from core.exceptions import BadRequestError, NotFoundError
 from core.schemas import GreetingPayload, StorylinePayload
 from repositories import admin_audit_repository as audit_repo
 from repositories import character_admin_story_repository as admin_repo
@@ -20,7 +21,7 @@ router = APIRouter(tags=["admin"])
 
 def _require_character(conn: ConnType, character_id: str) -> None:
     if not char_repo.check_character_exists(conn, character_id):
-        raise HTTPException(status_code=404, detail="角色不存在")
+        raise NotFoundError(detail="角色不存在")
 
 
 @router.get("/admin/character/{character_id}/greetings")
@@ -77,7 +78,7 @@ def update_greeting(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_greeting(conn, greeting_id, character_id):
-        raise HTTPException(status_code=404, detail="开场白不存在")
+        raise NotFoundError(detail="开场白不存在")
     _assert_storyline_owned(conn, character_id, body.storyline_id)
 
     admin_repo.admin_update_greeting(
@@ -102,7 +103,7 @@ def delete_greeting(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_greeting(conn, greeting_id, character_id):
-        raise HTTPException(status_code=404, detail="开场白不存在")
+        raise NotFoundError(detail="开场白不存在")
 
     admin_repo.admin_delete_greeting(conn, greeting_id)
     conn.commit()
@@ -170,7 +171,7 @@ def update_storyline(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_storyline(conn, storyline_id, character_id):
-        raise HTTPException(status_code=404, detail="剧情线不存在")
+        raise NotFoundError(detail="剧情线不存在")
 
     if body.is_default:
         admin_repo.admin_clear_default_storyline(conn, character_id, exclude_id=storyline_id)
@@ -202,7 +203,7 @@ def delete_storyline(
 ) -> dict[str, Any]:
     sl = admin_repo.admin_get_storyline(conn, storyline_id, character_id)
     if not sl:
-        raise HTTPException(status_code=404, detail="剧情线不存在")
+        raise NotFoundError(detail="剧情线不存在")
 
     admin_repo.admin_detach_storyline_refs(conn, storyline_id)
     admin_repo.admin_delete_storyline(conn, storyline_id)
@@ -231,7 +232,7 @@ def storyline_delete_impact(
 ) -> dict[str, Any]:
     storyline = admin_repo.admin_get_storyline_for_impact(conn, storyline_id, character_id)
     if not storyline:
-        raise HTTPException(status_code=404, detail="剧情线不存在")
+        raise NotFoundError(detail="剧情线不存在")
 
     greetings = admin_repo.admin_list_greetings_for_storyline(conn, character_id, storyline_id)
     post_rules = admin_repo.admin_list_post_rules_for_storyline(conn, character_id, storyline_id)

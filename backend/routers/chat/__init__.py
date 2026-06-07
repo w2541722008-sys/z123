@@ -8,6 +8,7 @@
     POST /api/chat/regenerate   - 重新生成回复
     POST /api/chat/continue     - 续写回复
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -22,7 +23,13 @@ from core.config import (
     GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS,
 )
 from core.database import ConnType, get_db_dep
-from core.schemas import ChatSendPayload, ContinuePayload, GuestChatPayload, MergeGuestHistoryPayload, RegeneratePayload
+from core.schemas import (
+    ChatSendPayload,
+    ContinuePayload,
+    GuestChatPayload,
+    MergeGuestHistoryPayload,
+    RegeneratePayload,
+)
 from services.chat_send import (
     AIChatError,
     _build_chat_send_response,
@@ -34,7 +41,7 @@ from services.chat_send import (
     save_assistant_message,
     store_user_message,
 )
-from services.chat_query import count_chat_messages
+from services.chat_query import count_chat_messages, merge_guest_history
 from services.rate_limit import enforce_rate_limit, get_request_client_ip
 
 from ._route_builders import (
@@ -42,11 +49,6 @@ from ._route_builders import (
     _build_guest_route_response,
     _build_retry_route_response,
 )
-
-# ============================================================
-# 测试 patch 入口（routers.chat.enforce_rate_limit 供 mock 使用）
-# ============================================================
-from services.rate_limit import enforce_rate_limit  # noqa: F401
 
 router = APIRouter(tags=["chat"])
 
@@ -168,7 +170,9 @@ def chat_send(
     conn: ConnType = Depends(get_db_dep),
 ):
     _enforce_user_chat_rate_limit(user.id, detail="聊天请求过于频繁")
-    return _build_chat_send_route_response(conn=conn, user=user, payload=payload, request=request)
+    return _build_chat_send_route_response(
+        conn=conn, user=user, payload=payload, request=request
+    )
 
 
 @router.post("/chat/stream")
@@ -179,7 +183,9 @@ def chat_stream(
     conn: ConnType = Depends(get_db_dep),
 ):
     _enforce_user_chat_rate_limit(user.id, detail="聊天请求过于频繁")
-    return _build_main_route_response(conn=conn, user=user, payload=payload, request=request)
+    return _build_main_route_response(
+        conn=conn, user=user, payload=payload, request=request
+    )
 
 
 @router.post("/chat/guest-stream")
@@ -245,27 +251,12 @@ def chat_merge_guest_history(
 
     仅合并最近 50 条，跳过已存在的内容（按 (user_id, character_id, role, content) 去重）。
     """
-    from services.chat_send import store_user_message, save_assistant_message
-
-    merged = 0
-    for item in payload.messages:
-        role = (item.get("role") or "").strip()
-        content = (item.get("content") or "").strip()
-        if role not in ("user", "assistant") or not content:
-            continue
-        existing = conn.execute(
-            "SELECT id FROM chat_messages WHERE user_id=%s AND character_id=%s AND role=%s AND content=%s LIMIT 1",
-            (user.id, payload.character_id, role, content),
-        ).fetchone()
-        if existing:
-            continue
-        if role == "user":
-            store_user_message(conn, user.id, payload.character_id, content, commit=False)
-        else:
-            save_assistant_message(conn, user.id, payload.character_id, content, commit=False)
-        merged += 1
-
-    conn.commit()
+    merged = merge_guest_history(
+        conn,
+        user_id=user.id,
+        character_id=payload.character_id,
+        messages=payload.messages,
+    )
     return {"ok": True, "merged": merged}
 
 

@@ -15,10 +15,10 @@ from typing import Any
 
 from core.database import ConnType
 
-
 # ============================================================
 # 开场白 (character_greetings)
 # ============================================================
+
 
 def admin_list_greetings(conn: ConnType, character_id: str) -> list[dict[str, Any]]:
     return conn.execute(
@@ -54,8 +54,14 @@ def admin_create_greeting(
         RETURNING id
         """,
         (
-            character_id, story_phase, mood, content, storyline_id,
-            priority, 1 if is_active else 0, comment,
+            character_id,
+            story_phase,
+            mood,
+            content,
+            storyline_id,
+            priority,
+            1 if is_active else 0,
+            comment,
         ),
     )
     return cur.fetchone()["id"]
@@ -68,6 +74,15 @@ def admin_get_greeting(
         "SELECT id FROM character_greetings WHERE id = %s AND character_id = %s",
         (greeting_id, character_id),
     ).fetchone()
+
+
+def admin_list_greeting_ids(conn: ConnType, character_id: str) -> set[str]:
+    """列出角色下所有开场白 ID。"""
+    rows = conn.execute(
+        "SELECT id FROM character_greetings WHERE character_id = %s",
+        (character_id,),
+    ).fetchall()
+    return {str(row["id"]) for row in rows}
 
 
 def admin_update_greeting(
@@ -90,8 +105,14 @@ def admin_update_greeting(
         WHERE id = %s
         """,
         (
-            story_phase, mood, content, storyline_id,
-            priority, 1 if is_active else 0, comment, greeting_id,
+            story_phase,
+            mood,
+            content,
+            storyline_id,
+            priority,
+            1 if is_active else 0,
+            comment,
+            greeting_id,
         ),
     )
 
@@ -103,6 +124,7 @@ def admin_delete_greeting(conn: ConnType, greeting_id: str) -> None:
 # ============================================================
 # 剧情线 (character_storylines)
 # ============================================================
+
 
 def admin_list_storylines(conn: ConnType, character_id: str) -> list[dict[str, Any]]:
     return conn.execute(
@@ -158,9 +180,17 @@ def admin_create_storyline(
         RETURNING id
         """,
         (
-            character_id, storyline_id, title, name, description,
-            unlock_score, unlock_condition, stages_json,
-            1 if is_default else 0, 1 if is_active else 0, sort_order,
+            character_id,
+            storyline_id,
+            title,
+            name,
+            description,
+            unlock_score,
+            unlock_condition,
+            stages_json,
+            1 if is_default else 0,
+            1 if is_active else 0,
+            sort_order,
         ),
     )
     return cur.fetchone()["id"]
@@ -200,9 +230,17 @@ def admin_update_storyline(
         WHERE id = %s
         """,
         (
-            storyline_id_field, title, name, description,
-            unlock_score, unlock_condition, stages_json,
-            1 if is_default else 0, 1 if is_active else 0, sort_order, storyline_id,
+            storyline_id_field,
+            title,
+            name,
+            description,
+            unlock_score,
+            unlock_condition,
+            stages_json,
+            1 if is_default else 0,
+            1 if is_active else 0,
+            sort_order,
+            storyline_id,
         ),
     )
 
@@ -286,6 +324,7 @@ def admin_list_story_events_for_storyline(
 # 后置规则 (character_post_rules)
 # ============================================================
 
+
 def admin_list_post_rules(conn: ConnType, character_id: str) -> list[dict[str, Any]]:
     return conn.execute(
         """
@@ -319,8 +358,13 @@ def admin_create_post_rule(
         RETURNING id
         """,
         (
-            character_id, name, content, storyline_id, story_phase,
-            priority, 1 if is_active else 0,
+            character_id,
+            name,
+            content,
+            storyline_id,
+            story_phase,
+            priority,
+            1 if is_active else 0,
         ),
     )
     return cur.fetchone()["id"]
@@ -354,8 +398,13 @@ def admin_update_post_rule(
         WHERE id = %s
         """,
         (
-            name, content, storyline_id, story_phase,
-            priority, 1 if is_active else 0, rule_id,
+            name,
+            content,
+            storyline_id,
+            story_phase,
+            priority,
+            1 if is_active else 0,
+            rule_id,
         ),
     )
 
@@ -367,6 +416,7 @@ def admin_delete_post_rule(conn: ConnType, rule_id: str) -> None:
 # ============================================================
 # 剧情事件 (story_events)
 # ============================================================
+
 
 def admin_list_story_events(conn: ConnType, character_id: str) -> list[dict[str, Any]]:
     return conn.execute(
@@ -408,9 +458,18 @@ def admin_create_story_event(
         RETURNING id
         """,
         (
-            character_id, event_id, title, description, trigger_score,
-            trigger_custom_key, unlocked_memory_ids, unlocked_greeting_ids,
-            unlocked_storyline_id, event_content, sort_order, 1 if is_active else 0,
+            character_id,
+            event_id,
+            title,
+            description,
+            trigger_score,
+            trigger_custom_key,
+            unlocked_memory_ids,
+            unlocked_greeting_ids,
+            unlocked_storyline_id,
+            event_content,
+            sort_order,
+            1 if is_active else 0,
         ),
     )
     return cur.fetchone()["id"]
@@ -451,9 +510,17 @@ def admin_update_story_event(
         WHERE id = %s
         """,
         (
-            title, description, trigger_score, trigger_custom_key,
-            unlocked_memory_ids, unlocked_greeting_ids, unlocked_storyline_id,
-            event_content, sort_order, 1 if is_active else 0, event_id,
+            title,
+            description,
+            trigger_score,
+            trigger_custom_key,
+            unlocked_memory_ids,
+            unlocked_greeting_ids,
+            unlocked_storyline_id,
+            event_content,
+            sort_order,
+            1 if is_active else 0,
+            event_id,
         ),
     )
 

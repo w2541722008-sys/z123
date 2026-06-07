@@ -78,6 +78,22 @@ if (fs.existsSync(adminIndexPath) && fs.existsSync(actionsJsPath)) {
   }
 }
 
+// 4. 检查 admin 登录启动逻辑
+console.log('🔍 检查 admin 登录启动逻辑...');
+const adminApiPath = path.join(ADMIN_DIR, 'js/api.js');
+if (fs.existsSync(adminApiPath)) {
+  const adminApiJs = fs.readFileSync(adminApiPath, 'utf8');
+  if (adminApiJs.includes('localStorage 中无 aifriend_token')) {
+    errors.push('❌ admin 启动仍硬依赖 localStorage token，Cookie 登录会被误拦截');
+  }
+  if (!/credentials\s*:\s*['"]include['"]/.test(adminApiJs)) {
+    errors.push('❌ AdminAPI.apiFetch 未默认携带 credentials: include');
+  }
+  if (/if\s*\(\s*!token\s*\)/.test(adminApiJs)) {
+    errors.push('❌ admin bootstrap 仍在请求 /auth/me 前直接拦截空 token');
+  }
+}
+
 // 输出结果
 console.log('\n' + '='.repeat(60));
 if (errors.length === 0) {

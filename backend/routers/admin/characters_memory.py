@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
+from core.exceptions import BadRequestError, NotFoundError
 from core.schemas import MemoryCategoryPayload, MemoryEntryPayload
 from repositories import character_admin_memory_repository as admin_repo
 from repositories import character_repository as char_repo
@@ -16,7 +17,7 @@ router = APIRouter(tags=["admin"])
 
 def _require_character(conn: ConnType, character_id: str) -> None:
     if not char_repo.check_character_exists(conn, character_id):
-        raise HTTPException(status_code=404, detail="角色不存在")
+        raise NotFoundError(detail="角色不存在")
 
 
 @router.get("/admin/character/{character_id}/memories")
@@ -82,7 +83,7 @@ def update_memory(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     if not admin_repo.admin_get_memory(conn, memory_id, character_id):
-        raise HTTPException(status_code=404, detail="记忆条目不存在")
+        raise NotFoundError(detail="记忆条目不存在")
     _assert_memory_category_owned(conn, character_id, body.category_id)
 
     admin_repo.admin_update_memory(
@@ -112,7 +113,7 @@ def delete_memory(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     if not admin_repo.admin_get_memory(conn, memory_id, character_id):
-        raise HTTPException(status_code=404, detail="记忆条目不存在")
+        raise NotFoundError(detail="记忆条目不存在")
 
     admin_repo.admin_delete_memory(conn, memory_id)
     conn.commit()
@@ -165,7 +166,7 @@ def update_memory_category(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     if not admin_repo.admin_get_memory_category(conn, category_id, character_id):
-        raise HTTPException(status_code=404, detail="记忆分类不存在")
+        raise NotFoundError(detail="记忆分类不存在")
 
     admin_repo.admin_update_memory_category(
         conn,
@@ -186,12 +187,11 @@ def delete_memory_category(
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     if not admin_repo.admin_get_memory_category(conn, category_id, character_id):
-        raise HTTPException(status_code=404, detail="记忆分类不存在")
+        raise NotFoundError(detail="记忆分类不存在")
 
     mem_count = admin_repo.admin_count_memories_in_category(conn, category_id)
     if mem_count > 0:
-        raise HTTPException(
-            status_code=400,
+        raise BadRequestError(
             detail=f"该分类下还有 {mem_count} 个记忆条目，请先移除或修改这些条目",
         )
 
@@ -208,7 +208,7 @@ def memory_category_delete_impact(
 ) -> dict[str, object]:
     category = admin_repo.admin_get_memory_category_for_impact(conn, category_id, character_id)
     if not category:
-        raise HTTPException(status_code=404, detail="记忆分类不存在")
+        raise NotFoundError(detail="记忆分类不存在")
 
     memories = admin_repo.admin_list_memories_in_category(conn, character_id, category_id)
 

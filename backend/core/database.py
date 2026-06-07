@@ -184,6 +184,13 @@ def get_conn() -> ConnWrapper:
     if _connection_pool is None:
         raise RuntimeError("数据库连接池未初始化，请先调用 init_db_pool()")
     raw = _connection_pool.getconn()
+    # 健康检查：防止从池中取到已被服务端断开的死连接
+    try:
+        raw.cursor().execute("SELECT 1")
+    except psycopg2.Error:
+        logger.warning("连接池健康检查失败，丢弃死连接并重新获取")
+        _connection_pool.putconn(raw, close=True)
+        raw = _connection_pool.getconn()
     return ConnWrapper(raw, _connection_pool)
 
 

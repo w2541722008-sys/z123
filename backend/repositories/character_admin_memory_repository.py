@@ -15,10 +15,10 @@ from typing import Any
 
 from core.database import ConnType
 
-
 # ============================================================
 # 记忆条目 (character_memories)
 # ============================================================
+
 
 def admin_list_memories(conn: ConnType, character_id: str) -> list[dict[str, Any]]:
     return conn.execute(
@@ -60,16 +60,27 @@ def admin_create_memory(
         RETURNING id
         """,
         (
-            character_id, keywords, trigger_logic, content, category_id,
-            position, priority, 1 if is_active else 0, comment,
-            1 if selective else 0, 1 if constant else 0,
-            sticky, cooldown,
+            character_id,
+            keywords,
+            trigger_logic,
+            content,
+            category_id,
+            position,
+            priority,
+            1 if is_active else 0,
+            comment,
+            1 if selective else 0,
+            1 if constant else 0,
+            sticky,
+            cooldown,
         ),
     )
     return cur.fetchone()["id"]
 
 
-def admin_get_memory(conn: ConnType, memory_id: str, character_id: str) -> dict[str, Any] | None:
+def admin_get_memory(
+    conn: ConnType, memory_id: str, character_id: str
+) -> dict[str, Any] | None:
     return conn.execute(
         "SELECT id FROM character_memories WHERE id = %s AND character_id = %s",
         (memory_id, character_id),
@@ -103,10 +114,19 @@ def admin_update_memory(
         WHERE id = %s
         """,
         (
-            keywords, trigger_logic, content, category_id, position, priority,
-            1 if is_active else 0, comment,
-            1 if selective else 0, 1 if constant else 0,
-            sticky, cooldown, memory_id,
+            keywords,
+            trigger_logic,
+            content,
+            category_id,
+            position,
+            priority,
+            1 if is_active else 0,
+            comment,
+            1 if selective else 0,
+            1 if constant else 0,
+            sticky,
+            cooldown,
+            memory_id,
         ),
     )
 
@@ -119,7 +139,10 @@ def admin_delete_memory(conn: ConnType, memory_id: str) -> None:
 # 记忆分类 (memory_categories)
 # ============================================================
 
-def admin_list_memory_categories(conn: ConnType, character_id: str) -> list[dict[str, Any]]:
+
+def admin_list_memory_categories(
+    conn: ConnType, character_id: str
+) -> list[dict[str, Any]]:
     return conn.execute(
         """
         SELECT id, name, description, color, sort_order, created_at, updated_at
@@ -159,6 +182,15 @@ def admin_get_memory_category(
         "SELECT id FROM memory_categories WHERE id = %s AND character_id = %s",
         (category_id, character_id),
     ).fetchone()
+
+
+def admin_list_memory_ids(conn: ConnType, character_id: str) -> set[str]:
+    """列出角色下所有记忆条目 ID。"""
+    rows = conn.execute(
+        "SELECT id FROM character_memories WHERE character_id = %s",
+        (character_id,),
+    ).fetchall()
+    return {str(row["id"]) for row in rows}
 
 
 def admin_update_memory_category(

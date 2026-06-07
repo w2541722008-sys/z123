@@ -5,10 +5,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
+from core.exceptions import BadRequestError, NotFoundError
 from core.plan_constants import plan_display_name
 
 router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
@@ -100,5 +101,5 @@ def admin_get_order(order_id: int, conn: ConnType = Depends(get_db_dep)) -> dict
     """管理后台：获取订单完整详情。"""
     row = billing_repo.get_order_with_user_by_id(conn, order_id)
     if not row:
-        raise HTTPException(status_code=404, detail="订单不存在")
+        raise NotFoundError(detail="订单不存在")
     return _serialize_order_row(row)

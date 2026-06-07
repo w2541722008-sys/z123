@@ -112,9 +112,11 @@ DEBUG = os.environ.get("DEBUG", "false").lower() in ("true", "1", "yes")
 if SECRET_FILE.exists():
     APP_SECRET = SECRET_FILE.read_text(encoding="utf-8").strip()
 else:
-    # 首次运行时生成随机密钥并保存
+    # 首次运行时生成随机密钥并保存（权限 600，仅所有者可读写）
     APP_SECRET = secrets.token_hex(32)
-    SECRET_FILE.write_text(APP_SECRET, encoding="utf-8")
+    _fd = os.open(str(SECRET_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(_fd, "w", encoding="utf-8") as _f:
+        _f.write(APP_SECRET)
 
 
 # ============================================================

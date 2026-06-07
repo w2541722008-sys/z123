@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # 第三方库导入
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request
 from fastapi.responses import JSONResponse
 
 # 本地模块导入
@@ -47,6 +47,7 @@ from core.auth import (
     verify_password,
     _is_admin_email,
 )
+from core.exceptions import BadRequestError, UnauthorizedError
 from core.config import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     LOGIN_RATE_LIMIT_COUNT,
@@ -125,7 +126,7 @@ def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = D
         包含用户信息的对象（token 通过 HttpOnly Cookie 传递）
 
     Raises:
-        HTTPException: 400 邮箱已被注册
+        BadRequestError: 邮箱已被注册
     """
     client_ip = get_request_client_ip(request)
     enforce_rate_limit(
@@ -140,7 +141,7 @@ def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = D
     try:
         # 步骤 1：检查邮箱是否已存在
         if user_repo.check_email_exists(conn, normalized_email):
-            raise HTTPException(status_code=400, detail="该邮箱已被注册")
+            raise BadRequestError(detail="该邮箱已被注册")
 
         # 步骤 2：密码哈希（bcrypt，rounds=12）
         password_hash = hash_password_bcrypt(payload.password)
@@ -185,6 +186,7 @@ def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = D
         set_refresh_cookie(response, tokens["refresh_token"])
         return response
     except Exception:
+        logger.exception("用户注册事务失败 email=%s", normalized_email)
         conn.rollback()
         raise
 
@@ -207,7 +209,7 @@ def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends
         包含 token 和用户信息的对象
 
     Raises:
-        HTTPException: 401 邮箱或密码错误
+        UnauthorizedError: 邮箱或密码错误
 
     安全说明：
         - 统一返回 "邮箱或密码错误"，不区分是邮箱不存在还是密码错误
@@ -235,12 +237,12 @@ def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends
         row = user_repo.find_user_by_email(conn, normalized_email)
 
         if not row:
-            raise HTTPException(status_code=401, detail="邮箱或密码错误")
+            raise UnauthorizedError(detail="邮箱或密码错误")
 
         # 步骤 2：验证密码
         algo = row["password_algo"] or "sha256"
         if not verify_password(payload.password, row["password_hash"], algo):
-            raise HTTPException(status_code=401, detail="邮箱或密码错误")
+            raise UnauthorizedError(detail="邮箱或密码错误")
 
         # 步骤 3：平滑迁移 - 旧 SHA-256 密码升级为 bcrypt
         if algo != "bcrypt":
@@ -274,6 +276,7 @@ def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends
         set_refresh_cookie(response, tokens["refresh_token"])
         return response
     except Exception:
+        logger.exception("用户登录事务失败 email=%s", normalized_email)
         conn.rollback()
         raise
 
@@ -363,13 +366,13 @@ def auth_refresh(request: Request, conn: ConnType = Depends(get_db_dep)) -> JSON
         refresh_token = request.cookies.get(_COOKIE_NAME)
 
     if not refresh_token:
-        raise HTTPException(status_code=401, detail="缺少 refresh token")
+        raise UnauthorizedError(detail="缺少 refresh token")
 
     device_fp = generate_device_fingerprint(request)
     new_access = rotate_access_token(refresh_token, device_fingerprint=device_fp, conn=conn)
 
     if not new_access:
-        raise HTTPException(status_code=401, detail="refresh token 无效或已过期")
+        raise UnauthorizedError(detail="refresh token 无效或已过期")
 
     response = JSONResponse({
         "access_token": new_access,
@@ -429,6 +432,7 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request, background
             background_tasks.add_task(send_reset_code_email, user_email, code)
         return {"ok": True, "message": "如果该邮箱已注册，验证码会发送至您的邮箱，10 分钟内有效"}
     except Exception:
+        logger.exception("密码重置请求事务失败 email=%s", normalized_email)
         conn.rollback()
         raise
 
@@ -463,6 +467,10 @@ def reset_password(payload: ResetPasswordPayload, request: Request, conn: ConnTy
 
     try:
         user_id, user_email = execute_password_reset(conn, normalized_email, payload.code, payload.new_password)
+        # 吊销该用户所有设备的 token，强制重新登录
+        from core.auth import revoke_user_device_tokens
+        revoke_user_device_tokens(user_id, conn=conn, commit=False)
+
         conn.commit()
 
         from services.cache_service import invalidate_user
@@ -471,5 +479,6 @@ def reset_password(payload: ResetPasswordPayload, request: Request, conn: ConnTy
         logger.info("密码重置成功: %s", user_email)
         return {"ok": True, "message": "密码重置成功，请使用新密码登录"}
     except Exception:
+        logger.exception("密码重置执行事务失败 email=%s", normalized_email)
         conn.rollback()
         raise

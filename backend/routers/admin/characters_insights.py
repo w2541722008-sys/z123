@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
 from core.auth import get_admin_user
 from core.database import ConnType, get_db_dep
+from core.exceptions import NotFoundError
 from core.schemas import KeywordTestPayload
 from services.character_insights_service import (
     get_character_config_summary,
@@ -24,7 +25,7 @@ router = APIRouter(tags=["admin"])
 def admin_character_config_summary(character_id: str, conn: ConnType = Depends(get_db_dep)) -> dict[str, Any]:
     result = get_character_config_summary(conn, character_id)
     if not result:
-        raise HTTPException(status_code=404, detail="角色不存在")
+        raise NotFoundError(detail="角色不存在")
     return result
 
 
@@ -39,7 +40,7 @@ def admin_message_preview(
 ) -> dict[str, Any]:
     char_row = get_message_preview_data(conn, character_id)
     if not char_row:
-        raise HTTPException(status_code=404, detail="角色不存在")
+        raise NotFoundError(detail="角色不存在")
 
     character_state = {
         "affection": max(0, min(100, affection)),
@@ -74,5 +75,5 @@ def test_keywords(
     conn: ConnType = Depends(get_db_dep),
 ) -> list[dict[str, Any]]:
     if not check_character_exists(conn, character_id):
-        raise HTTPException(status_code=404, detail="角色不存在")
+        raise NotFoundError(detail="角色不存在")
     return test_character_keywords(conn, character_id, body.text)

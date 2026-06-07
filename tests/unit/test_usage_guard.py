@@ -66,9 +66,15 @@ class TestEstimateMessagesTokens:
     def test_single_message(self):
         msgs = [{"role": "user", "content": "hello"}]
         result = estimate_messages_tokens(msgs)
-        # chars = len("user") + len("hello") + 12 = 4 + 5 + 12 = 21
+        # chars = len("user") + len("hello") + 12 = 21, 英文用 Latin 系数
         assert result["chars"] == 21
-        assert result["tokens"] == estimate_tokens_from_chars(21)
+        assert result["tokens"] == 5  # 21/4.0 ≈ 5
+
+    def test_chinese_content_uses_cjk_coefficient(self):
+        msgs = [{"role": "user", "content": "你好世界"}]
+        result = estimate_messages_tokens(msgs)
+        assert result["chars"] == 20  # 4+4+12=20
+        assert result["tokens"] == 13  # 20/1.6 ≈ 13
 
     def test_multiple_messages(self):
         msgs = [
@@ -97,7 +103,18 @@ class TestEstimateMessagesTokens:
 class TestEstimateTextTokens:
 
     def test_normal_text(self):
-        assert estimate_text_tokens("hello world") == estimate_tokens_from_chars(11)
+        # 纯英文 "hello world" 11 chars → 11/4.0 ≈ 3
+        assert estimate_text_tokens("hello world") == 3
+
+    def test_chinese_text(self):
+        # 纯中文 "你好世界" 4 chars → 4/1.6 ≈ 3
+        assert estimate_text_tokens("你好世界") == 3
+
+    def test_mixed_text(self):
+        # 混合 "hi你好" 4 chars: 2 Latin + 2 CJK → ratio=0.5
+        # coefficient = 0.5*1.6 + 0.5*4.0 = 2.8 → 4/2.8 ≈ 1
+        result = estimate_text_tokens("hi你好")
+        assert result >= 1
 
     def test_empty_string(self):
         assert estimate_text_tokens("") == 0

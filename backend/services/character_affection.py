@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,32 +22,51 @@ from services.cache_service import cache_get, cache_set
 from utils.json_utils import parse_json_object
 
 # 向后兼容别名（旧代码可能通过 from services.character_affection import _AFFECTION_BASE_RULES 引用）
-_AFFECTION_BASE_RULES = AFFECTION_BASE_RULES
-_AFFECTION_COOLDOWN_SECONDS = AFFECTION_COOLDOWN_SECONDS
-_AFFECTION_DIMINISHING_RETURNS = AFFECTION_DIMINISHING_RETURNS
-_DAILY_AFFECTION_CAP_DEFAULT = DAILY_AFFECTION_CAP_DEFAULT
-_PHASE_THRESHOLDS = PHASE_THRESHOLDS
-_PHASE_GAIN_MULTIPLIER = PHASE_GAIN_MULTIPLIER
-_AFFECTION_DELTA_MAX = AFFECTION_DELTA_MAX
-_EVENT_NAME_MIGRATION = EVENT_NAME_MIGRATION
+_AFFECTION_BASE_RULES: dict[str, int] = AFFECTION_BASE_RULES
+_AFFECTION_COOLDOWN_SECONDS: dict[str, int] = AFFECTION_COOLDOWN_SECONDS
+_AFFECTION_DIMINISHING_RETURNS: list[float] = AFFECTION_DIMINISHING_RETURNS
+_DAILY_AFFECTION_CAP_DEFAULT: int = DAILY_AFFECTION_CAP_DEFAULT
+_PHASE_THRESHOLDS: dict[str, int] = PHASE_THRESHOLDS
+_PHASE_GAIN_MULTIPLIER: dict[str, float] = PHASE_GAIN_MULTIPLIER
+_AFFECTION_DELTA_MAX: int = AFFECTION_DELTA_MAX
+_EVENT_NAME_MIGRATION: dict[str, str] = EVENT_NAME_MIGRATION
 
 
 # 冒险剧情专属事件
 _ADVENTURE_AFFECTION_RULES: dict[str, int] = {
-    "explore": 2, "discover": 4, "problem_resolved": 5, "challenge_won": 6,
-    "obstacle_cleared": 10, "choice_made": 3, "npc_helped": 3, "secret_found": 7,
-    "milestone": 8, "setback": -4, "unexpected_danger": -3, "relationship_lost": -6, "opportunity_missed": -2,
+    "explore": 2,
+    "discover": 4,
+    "problem_resolved": 5,
+    "challenge_won": 6,
+    "obstacle_cleared": 10,
+    "choice_made": 3,
+    "npc_helped": 3,
+    "secret_found": 7,
+    "milestone": 8,
+    "setback": -4,
+    "unexpected_danger": -3,
+    "relationship_lost": -6,
+    "opportunity_missed": -2,
 }
 
 # 恋爱剧情专属事件
 _ROMANCE_AFFECTION_RULES: dict[str, int] = {
-    "flirt": 2, "date": 5, "first_hug": 7, "kiss": 8, "confession": 10,
-    "intimate_moment": 6, "jealousy": -3, "misunderstanding": -4, "reconciliation": 5,
-    "love_rival_appears": -2, "heartfelt_talk": 4, "surprise_gift": 3,
+    "flirt": 2,
+    "date": 5,
+    "first_hug": 7,
+    "kiss": 8,
+    "confession": 10,
+    "intimate_moment": 6,
+    "jealousy": -3,
+    "misunderstanding": -4,
+    "reconciliation": 5,
+    "love_rival_appears": -2,
+    "heartfelt_talk": 4,
+    "surprise_gift": 3,
 }
 
-_VALID_STORY_PHASES = tuple(phase.value for phase in StoryPhase)
-_VALID_MOODS = tuple(mood.value for mood in Mood)
+_VALID_STORY_PHASES: tuple[str, ...] = tuple(str(phase.value) for phase in StoryPhase)
+_VALID_MOODS: tuple[str, ...] = tuple(str(mood.value) for mood in Mood)
 
 
 def get_affection_rules(conn: ConnType, character_id: str) -> dict[str, int]:
@@ -89,7 +109,12 @@ def get_affection_rules(conn: ConnType, character_id: str) -> dict[str, int]:
 
 
 def is_affection_enabled(conn: ConnType, character_id: str) -> bool:
-    row = char_repo.get_affection_config(conn, character_id)
+    cache_key = f"affection_cfg:{character_id}"
+    row = cache_get(cache_key)
+    if row is None:
+        row = char_repo.get_affection_config(conn, character_id)
+        if row is not None:
+            cache_set(cache_key, row, ttl=300)
     if not row:
         return True
     if int(row["affection_enabled"] or 1) == 0:
@@ -108,7 +133,12 @@ def get_daily_cap(conn: ConnType, character_id: str) -> int:
         = 0  → 不限制每日上限（适合剧情沙盒）
     未配置时返回默认值 15。
     """
-    row = char_repo.get_affection_config(conn, character_id)
+    cache_key = f"affection_cfg:{character_id}"
+    row = cache_get(cache_key)
+    if row is None:
+        row = char_repo.get_affection_config(conn, character_id)
+        if row is not None:
+            cache_set(cache_key, row, ttl=300)
     if not row or not row["affection_rules_json"]:
         return _DAILY_AFFECTION_CAP_DEFAULT
     rules_json = parse_json_object(row["affection_rules_json"], fallback={})
@@ -140,10 +170,16 @@ def calculate_affection_change(
     if base_change < 0:
         phase = current_state.get("story_phase", "stranger")
         negative_multiplier = {
-            "stranger": 0.8, "acquaintance": 1.0, "friend": 1.2, "lover": 1.5,
+            "stranger": 0.8,
+            "acquaintance": 1.0,
+            "friend": 1.2,
+            "lover": 1.5,
         }.get(phase, 1.0)
         actual = max(int(base_change * negative_multiplier), -_AFFECTION_DELTA_MAX)
-        return actual, f"negative event, phase={phase}, multiplier={negative_multiplier}"
+        return (
+            actual,
+            f"negative event, phase={phase}, multiplier={negative_multiplier}",
+        )
 
     cooldown_secs = _AFFECTION_COOLDOWN_SECONDS.get(event, 600)
     last_ts_map = current_state.get("_last_event_timestamps", {})
@@ -153,9 +189,14 @@ def calculate_affection_change(
             last_dt = datetime.fromisoformat(last_ts)
             elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
             if elapsed < cooldown_secs:
-                return 0, f"cooldown: event={event}, remaining={int(cooldown_secs - elapsed)}s"
+                return (
+                    0,
+                    f"cooldown: event={event}, remaining={int(cooldown_secs - elapsed)}s",
+                )
         except (ValueError, TypeError) as exc:
-            logging.warning("冷却时间戳解析失败 event=%s ts=%s: %s", event, last_ts, exc)
+            logging.warning(
+                "冷却时间戳解析失败 event=%s ts=%s: %s", event, last_ts, exc
+            )
 
     # 日上限检查（daily_cap=0 时跳过，不限制）
     daily_gained = current_state.get("_daily_affection_gained", 0)
@@ -164,7 +205,11 @@ def calculate_affection_change(
 
     daily_counts = current_state.get("_daily_event_counts", {})
     trigger_count = int(daily_counts.get(event, 0))
-    diminish_rate = _AFFECTION_DIMINISHING_RETURNS[trigger_count] if trigger_count < len(_AFFECTION_DIMINISHING_RETURNS) else 0.0
+    diminish_rate = (
+        _AFFECTION_DIMINISHING_RETURNS[trigger_count]
+        if trigger_count < len(_AFFECTION_DIMINISHING_RETURNS)
+        else 0.0
+    )
 
     phase = current_state.get("story_phase", "stranger")
     phase_multiplier = _PHASE_GAIN_MULTIPLIER.get(phase, 1.0)
@@ -214,14 +259,18 @@ def auto_advance_story_phase(
         allow_regression: 是否允许阶段回退（虐恋/悬疑等题材需要）
     """
     phases_order = list(_VALID_STORY_PHASES)
-    current_idx = phases_order.index(current_phase) if current_phase in phases_order else 0
+    current_idx = (
+        phases_order.index(current_phase) if current_phase in phases_order else 0
+    )
 
     if allow_regression:
         # 允许回退：直接根据好感度计算应该处于的阶段
         best_idx = 0  # 默 stranger
         for phase_name, threshold in _PHASE_THRESHOLDS.items():
             if affection >= threshold:
-                candidate_idx = phases_order.index(phase_name) if phase_name in phases_order else 0
+                candidate_idx = (
+                    phases_order.index(phase_name) if phase_name in phases_order else 0
+                )
                 if candidate_idx > best_idx:
                     best_idx = candidate_idx
         return phases_order[best_idx]
@@ -230,7 +279,9 @@ def auto_advance_story_phase(
     best_idx = current_idx
     for phase_name, threshold in _PHASE_THRESHOLDS.items():
         if affection >= threshold:
-            candidate_idx = phases_order.index(phase_name) if phase_name in phases_order else 0
+            candidate_idx = (
+                phases_order.index(phase_name) if phase_name in phases_order else 0
+            )
             if candidate_idx > best_idx:
                 best_idx = candidate_idx
     return phases_order[best_idx]

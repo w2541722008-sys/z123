@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -10,13 +9,12 @@ from core.database import ConnType, get_db_dep
 from core.schemas import CharacterProfileUpdatePayload, ClearChatPayload
 from repositories import character_repository as char_repo
 
-logger = logging.getLogger(__name__)
 from repositories import chat_repository as chat_repo
 from services.character_session_service import (
     clear_chat_history_with_greeting,
     reset_character_chat_state,
 )
-from services.character_state import get_character_state
+from services.character_state import get_public_character_state
 from services.chat_query import ensure_opening_message, get_character_or_404
 from utils.json_utils import parse_json_list, parse_json_object
 from services.cache_service import cache_get, cache_set
@@ -27,7 +25,6 @@ from core.plan_constants import (
     normalize_required_plan,
     plan_display_name,
 )
-from core.config import logger
 
 router = APIRouter()
 
@@ -50,12 +47,17 @@ def _serialize_character_for_client(
 
     # 图片 URL 版本号：基于路径内容生成，路径不变则版本不变，变更后浏览器自动拉新
     import hashlib
-    _img_version = hashlib.md5((avatar_value + "|" + cover_value).encode()).hexdigest()[:8]
+
+    _img_version = hashlib.md5((avatar_value + "|" + cover_value).encode()).hexdigest()[
+        :8
+    ]
 
     avatar_img = f"/api/avatar/{char_id}?v={_img_version}" if avatar_value else ""
     cover_img = f"/api/cover/{char_id}?v={_img_version}" if cover_value else ""
     opening_message = row["opening_message"] or ""
-    required_plan = normalize_required_plan(row["required_plan"] if "required_plan" in row.keys() else "guest")
+    required_plan = normalize_required_plan(
+        row["required_plan"] if "required_plan" in row.keys() else "guest"
+    )
 
     return {
         "id": char_id,
@@ -92,7 +94,10 @@ def _get_accessible_character(conn: ConnType, character_id: str, viewer_plan: st
 
 
 @router.get("/characters")
-def list_characters(user: CurrentUser | None = Depends(get_optional_user), conn: ConnType = Depends(get_db_dep)) -> list[dict[str, Any]]:
+def list_characters(
+    user: CurrentUser | None = Depends(get_optional_user),
+    conn: ConnType = Depends(get_db_dep),
+) -> list[dict[str, Any]]:
     """获取可见角色列表（按 home_priority 排序）。优先从缓存读取。"""
     viewer_plan = _get_viewer_plan(user)
     cache_key = "character_list_all"
@@ -103,7 +108,9 @@ def list_characters(user: CurrentUser | None = Depends(get_optional_user), conn:
         cache_set(cache_key, cached_rows, ttl=3600)
 
     visible_rows = [
-        row for row in cached_rows if can_access_required_plan(viewer_plan, row.get("required_plan", "guest"))
+        row
+        for row in cached_rows
+        if can_access_required_plan(viewer_plan, row.get("required_plan", "guest"))
     ]
     overrides_map = char_repo.get_user_overrides_map(conn, user.id if user else None)
     return [
@@ -226,7 +233,9 @@ def get_character_greetings(
 
     if not greetings:
         fallback = "你好，很高兴认识你。"
-        greetings.append({"index": 0, "label": "默认开场", "preview": fallback, "content": fallback})
+        greetings.append(
+            {"index": 0, "label": "默认开场", "preview": fallback, "content": fallback}
+        )
         first_mes = fallback
 
     return {
@@ -245,22 +254,13 @@ def get_character_state_api(
 ) -> dict[str, Any]:
     """获取用户与某角色的关系状态（好感度、剧情阶段、心情）。"""
     _get_accessible_character(conn, character_id, user.effective_plan)
-    state = get_character_state(conn, user.id, character_id)
-    clean_state = {k: v for k, v in state.items() if not k.startswith("_")}
-    # 从角色卡配置中提取 show_bar 偏好，供前端控制状态栏显隐
-    show_bar = True
-    try:
-        row = conn.execute(
-            "SELECT affection_rules_json FROM characters WHERE id = %s",
-            (character_id,),
-        ).fetchone()
-        if row and row["affection_rules_json"]:
-            rules = parse_json_object(row["affection_rules_json"], fallback={})
-            if "show_bar" in rules:
-                show_bar = bool(rules["show_bar"])
-    except Exception:
-        logger.warning("解析好感度规则失败 character_id=%s", character_id, exc_info=True)
-    return {"state": clean_state, "show_bar": show_bar}
+    public_state = get_public_character_state(
+        conn,
+        user_id=user.id,
+        character_id=character_id,
+    )
+    show_bar = bool(public_state.pop("show_bar", True))
+    return {"state": public_state, "show_bar": show_bar}
 
 
 @router.post("/character/state/reset")
@@ -317,7 +317,9 @@ def chat_history(
 
     total = chat_repo.count_chat_history(conn, user.id, character_id)
     offset = (page - 1) * page_size
-    messages = chat_repo.get_chat_history(conn, user.id, character_id, limit=page_size, offset=offset)
+    messages = chat_repo.get_chat_history(
+        conn, user.id, character_id, limit=page_size, offset=offset
+    )
 
     return {
         "character": _serialize_character_for_client(conn, char_row, user.id),

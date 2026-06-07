@@ -2,9 +2,7 @@
 应用生命周期与基础端点契约测试
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
-from datetime import datetime, timezone
 
 
 class TestLifespanMigration:
@@ -27,7 +25,9 @@ class TestLifespanMigration:
     def test_load_allowed_origins_reads_env_and_strips_values(self):
         from main import _load_allowed_origins
 
-        result = _load_allowed_origins({"ALLOWED_ORIGINS": " https://a.com , http://b.com ,, "})
+        result = _load_allowed_origins(
+            {"ALLOWED_ORIGINS": " https://a.com , http://b.com ,, "}
+        )
 
         assert result == ["https://a.com", "http://b.com"]
 
@@ -51,7 +51,9 @@ class TestLifespanMigration:
         _register_api_routers(fake_app)
 
         assert len(fake_app.include_router.call_args_list) == 6
-        prefixes = [call.kwargs["prefix"] for call in fake_app.include_router.call_args_list]
+        prefixes = [
+            call.kwargs["prefix"] for call in fake_app.include_router.call_args_list
+        ]
         assert prefixes == ["/api"] * 6
 
     def test_serve_html_file_returns_404_when_missing(self, tmp_path):
@@ -108,3 +110,11 @@ class TestHealthCheckOptimization:
         data = response.json()
         assert "status" in data
         assert "time" in data
+
+    def test_health_check_supports_head_method(self, app_client):
+        """外部监控使用 HEAD 请求时也应返回 200。"""
+        _, client = app_client
+        response = client.head("/api/health")
+
+        assert response.status_code == 200
+        assert response.content == b""

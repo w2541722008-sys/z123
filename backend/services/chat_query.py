@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import Any
 
 from core.exceptions import BadRequestError, NotFoundError
-from core.config import logger
 from core.database import ConnType
 from repositories import chat_repository as chat_repo
 from services.cache_service import get_character, set_character
@@ -34,7 +33,9 @@ def message_projection(role: Any, content: Any) -> dict[str, Any]:
     }
 
 
-def _message_with_id_projection(message_id: Any, role: Any, content: Any) -> dict[str, Any]:
+def _message_with_id_projection(
+    message_id: Any, role: Any, content: Any
+) -> dict[str, Any]:
     return {
         "id": str(message_id),
         "role": role,
@@ -51,7 +52,7 @@ def get_character_or_404(
     viewer_plan: str | None = None,
 ) -> Any:
     """获取角色，不存在时抛出 404。优先从缓存读取。"""
-    
+
     # 尝试从缓存获取
     cached = get_character(character_id)
     if cached:
@@ -66,9 +67,11 @@ def get_character_or_404(
             raise NotFoundError(detail="角色不存在")
         # 存入缓存
         set_character(character_id, row)
-    
+
     if viewer_plan is not None:
-        required_plan = row["required_plan"] if "required_plan" in row.keys() else "guest"
+        required_plan = (
+            row["required_plan"] if "required_plan" in row.keys() else "guest"
+        )
         ensure_plan_access(
             viewer_plan,
             required_plan,
@@ -86,7 +89,7 @@ def ensure_opening_message(
 ) -> None:
     """
     确保用户首次和角色对话时，数据库里有一条角色的开场白。
-    
+
     同时处理关系阶段升级的触发语：如果有暂存的升级消息，
     在用户已有聊天记录的情况下，以角色主动消息的形式插入。
     """
@@ -106,6 +109,7 @@ def ensure_opening_message(
             )
             # 清除已消费的升级标记（直接 SQL，避免循环导入 character_state.upsert）
             import json
+
             state["custom_vars"].pop("_pending_phase_upgrade", None)
             conn.execute(
                 """
@@ -113,7 +117,11 @@ def ensure_opening_message(
                 SET custom_vars = %s, updated_at = now()
                 WHERE user_id = %s AND character_id = %s
                 """,
-                (json.dumps(state["custom_vars"], ensure_ascii=False), user_id, character_id),
+                (
+                    json.dumps(state["custom_vars"], ensure_ascii=False),
+                    user_id,
+                    character_id,
+                ),
             )
             if commit:
                 conn.commit()
@@ -121,17 +129,19 @@ def ensure_opening_message(
 
     if chat_repo.message_exists(conn, user_id, character_id):
         return  # 已有消息，不需要开场白
-    
+
     # 获取当前关系阶段和剧情线
     story_phase = state.get("story_phase", "stranger") if state else "stranger"
     storyline_id = state.get("storyline_id") if state else None
-    
+
     # 获取对应阶段和剧情线的开场白
-    greeting_id, greeting = get_greeting_for_phase(conn, character_id, story_phase, storyline_id)
-    
+    greeting_id, greeting = get_greeting_for_phase(
+        conn, character_id, story_phase, storyline_id
+    )
+
     if not greeting:
         return
-    
+
     # 插入开场白与更新 use_count 保持同一事务
     conn.execute(
         """
@@ -185,7 +195,46 @@ def count_chat_messages(conn: ConnType, user_id: int | str, character_id: str) -
     return chat_repo.count_chat_history(conn, user_id, character_id)
 
 
-def get_last_chat_time(conn: ConnType, user_id: int | str, character_id: str) -> str | None:
+def merge_guest_history(
+    conn: ConnType,
+    *,
+    user_id: int | str,
+    character_id: str,
+    messages: list[dict[str, Any]],
+    commit: bool = True,
+) -> int:
+    """将游客本地历史合并到账号，按 role/content 去重。"""
+    merged = 0
+    for item in messages[:50]:
+        role = (item.get("role") or "").strip()
+        content = (item.get("content") or "").strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        if chat_repo.message_with_content_exists(
+            conn,
+            user_id=user_id,
+            character_id=character_id,
+            role=role,
+            content=content,
+        ):
+            continue
+        chat_repo.insert_message(
+            conn,
+            user_id=user_id,
+            character_id=character_id,
+            role=role,
+            content=content,
+        )
+        merged += 1
+
+    if commit:
+        conn.commit()
+    return merged
+
+
+def get_last_chat_time(
+    conn: ConnType, user_id: int | str, character_id: str
+) -> str | None:
     """获取用户与角色最近一条 assistant 消息的 created_at 时间戳，用于判断久未聊天。"""
     return chat_repo.get_last_assistant_message_time(conn, user_id, character_id)
 
@@ -193,7 +242,7 @@ def get_last_chat_time(conn: ConnType, user_id: int | str, character_id: str) ->
 def get_linked_assets(conn: ConnType, character_id: str) -> list[Any]:
     """
     获取角色关联的资产列表（世界卡/剧情卡等）。
-    
+
     当前 MVP 阶段暂未建立关联表，默认返回空列表。
     """
     return []
@@ -210,10 +259,10 @@ def get_message_for_regenerate_or_continue(
 ) -> tuple[dict[str, Any], str]:
     """
     获取要 regenerate/continue 的目标 assistant 消息及角色信息。
-    
+
     返回：
         (message_row, character_id)
-    
+
     异常：
         HTTPException 404: 消息不存在或不属于当前用户
         HTTPException 400: 消息不是 assistant 类型

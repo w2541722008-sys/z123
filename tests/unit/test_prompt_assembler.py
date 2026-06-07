@@ -10,8 +10,6 @@ prompt_assembler 模块单元测试
   - 需要数据库的函数（get_character_memories_from_db 等）
 """
 
-import pytest
-
 from services.prompt_assembler import (
     _append_post_history_then_user,
     _append_runtime_tail,
@@ -29,6 +27,9 @@ from services.prompt_assembler import (
     _select_mode_builder,
     _split_last_user_message,
     _world_info_layer_pairs,
+    PromptBuildContext,
+    build_layered_chat_messages,
+    build_layered_chat_messages_from_context,
     parse_json_object,
     resolve_world_info,
 )
@@ -152,10 +153,12 @@ class TestSplitLastUserMessage:
 
 class TestRuntimeLayerHelpers:
     def test_world_info_layer_pairs_builds_before_and_after_parts(self):
-        layer_pairs, wi_before, wi_after = _world_info_layer_pairs({
-            "world_info_before": "前置世界",
-            "world_info_after": "后置世界",
-        })
+        layer_pairs, wi_before, wi_after = _world_info_layer_pairs(
+            {
+                "world_info_before": "前置世界",
+                "world_info_after": "后置世界",
+            }
+        )
 
         assert layer_pairs == [("【世界信息-前置】", "前置世界")]
         assert wi_before == "前置世界"
@@ -275,7 +278,41 @@ class TestResolveWorldInfo:
 
 
 class TestFinalMessagesContract:
-    def test_character_mode_final_messages_include_profile_world_rules_post_rules_and_current_user(self):
+    def test_prompt_build_context_matches_legacy_api(self):
+        character = {
+            "id": "luna",
+            "name": "露娜",
+            "card_type": "intimate",
+            "asset_type": "character",
+            "system_prompt": "你是露娜，要保持温柔。",
+            "description": "角色背景：在海边长大。",
+            "opening_message": "你好",
+        }
+        recent_messages = [
+            {"role": "assistant", "content": "上一轮回复"},
+            {"role": "user", "content": "请继续说说你的故事"},
+        ]
+
+        legacy = build_layered_chat_messages(
+            character,
+            recent_messages,
+            memory_summary="长期记忆：用户喜欢温柔风格。",
+            user_name="小明",
+        )
+        via_context = build_layered_chat_messages_from_context(
+            PromptBuildContext(
+                character=character,
+                recent_messages=recent_messages,
+                memory_summary="长期记忆：用户喜欢温柔风格。",
+                user_name="小明",
+            )
+        )
+
+        assert via_context == legacy
+
+    def test_character_mode_final_messages_include_profile_world_rules_post_rules_and_current_user(
+        self,
+    ):
         runtime_bundle = {
             "asset_type": "character",
             "primary_system_prompt": "你是露娜，要保持温柔。",
@@ -320,7 +357,9 @@ class TestFinalMessagesContract:
         assert "回复规则提醒" in system_text
         assert "每次回复不超过三段" in system_text
 
-        assert any(m["role"] == "assistant" and m["content"] == "上一轮回复" for m in result)
+        assert any(
+            m["role"] == "assistant" and m["content"] == "上一轮回复" for m in result
+        )
         # P4: 用户消息不再与规则合并，保持纯净
         last_user = result[-1]
         assert last_user["role"] == "user"
@@ -330,6 +369,7 @@ class TestFinalMessagesContract:
 # ============================================================
 # 以下测试从 test_prompt_assembler_service.py 合并而来
 # ============================================================
+
 
 class TestBuildSingleSystemPrompt:
     """验证 _build_single_system_prompt 的主 prompt + layers 组装逻辑。"""
@@ -369,6 +409,7 @@ class TestBuildSingleSystemPrompt:
 
     def test_with_token_budget(self):
         from services.token_budget import TokenBudget
+
         budget = TokenBudget(context_tokens=4096, output_reserve=512)
         result = _build_single_system_prompt("main prompt", [], budget=budget)
         assert "main prompt" in result

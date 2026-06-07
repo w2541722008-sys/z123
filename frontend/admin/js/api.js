@@ -82,7 +82,7 @@ const AdminAPI = (() => {
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
-    const res = await fetch(url, { ...opts, headers });
+    const res = await fetch(url, { credentials: 'include', ...opts, headers });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       if (res.status === 401 && !opts._retried) {
@@ -123,16 +123,11 @@ const AdminAPI = (() => {
 
   /**
    * 启动时检查管理员权限
-   * 检测 token → 请求 /auth/me → 验证 is_admin
+   * 请求 /auth/me → 验证 is_admin
    * @returns {Promise<boolean>} 是否通过权限检查
    */
   async function bootstrapAdminPage() {
     if (_bootstrapped) return true;
-    const token = localStorage.getItem(TOKEN_KEY) || '';
-    if (!token) {
-      renderAccessDenied('还没检测到登录令牌（localStorage 中无 aifriend_token）。请先在前台登录管理员账号，再刷新本页面。');
-      return false;
-    }
     try {
       const me = await apiFetch(`${_baseUrl}/auth/me`);
       _currentUser = me || null;

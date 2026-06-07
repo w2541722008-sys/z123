@@ -13,22 +13,26 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
 from typing import Any
 
 from core.config import AI_CHAT_MAX_OUTPUT_TOKENS, logger
 from core.database import ConnType, get_conn
 from core.model_adapter import get_ai_config, request_chat_completion
-from services.prompt_assembler import build_layered_chat_messages
+from services.prompt_assembler import (
+    PromptBuildContext,
+    build_layered_chat_messages_from_context,
+)
 from utils.json_utils import parse_json_object, to_json_string
-from core.plan_constants import GUEST_PLAN, plan_display_name
 from services.plan_service import get_plan_policy
-from services.character_state import apply_state_delta, get_character_state
+from services.character_state import (
+    apply_state_delta,
+    get_character_state,
+    get_public_character_state,
+)
 from services.usage_guard import (
     enforce_daily_budget,
     estimate_messages_tokens,
     estimate_text_tokens,
-    get_daily_usage,
     log_ai_request,
 )
 from utils.stream_filter import normalize_reply_text, parse_state_update_tag
@@ -38,9 +42,7 @@ from services.chat_query import (
     _normalize_non_empty_message,
     _load_recent_messages_and_summary,
     get_linked_assets,
-    count_chat_messages,
     get_last_chat_time,
-    message_projection,
 )
 
 
@@ -66,7 +68,7 @@ def prepare_chat_context(
 ) -> tuple[Any, str, list[dict[str, str]], str]:
     """
     准备聊天所需的上下文数据。
-    
+
     返回：
         (character, clean_text, recent_messages, memory_summary)
     """
@@ -87,7 +89,7 @@ def prepare_chat_context(
 
     if commit:
         conn.commit()
-    
+
     return character, clean_text, recent_messages, memory_summary
 
 
@@ -146,7 +148,7 @@ def build_reply_with_fallback(
 ) -> tuple[str, dict[str, Any] | None]:
     """
     组装 Prompt → 调用 AI → 解析状态增量 → 返回 (cleaned_reply, new_state)。
-    
+
     AI 调用失败时抛出 AIChatError，由调用方决定如何向用户展示错误。
     """
     # 读取当前关系状态
@@ -156,18 +158,23 @@ def build_reply_with_fallback(
         character_state = get_character_state(conn, user_id, character["id"])
         last_chat_time = get_last_chat_time(conn, user_id, character["id"])
 
-    messages = build_layered_chat_messages(
-        character, recent_messages, memory_summary,
-        related_assets=related_assets, user_name=user_name,
-        character_state=character_state,
-        conn=conn,
-        last_chat_time=last_chat_time,
-        user_id=user_id,
+    messages = build_layered_chat_messages_from_context(
+        PromptBuildContext(
+            character=character,
+            recent_messages=recent_messages,
+            memory_summary=memory_summary,
+            related_assets=related_assets,
+            user_name=user_name,
+            character_state=character_state,
+            conn=conn,
+            last_chat_time=last_chat_time,
+            user_id=user_id,
+        )
     )
 
     if conn is not None and user_id is not None and character_state is not None:
         _persist_wi_state(conn, user_id, character["id"], character_state)
-    
+
     try:
         raw_reply = request_chat_completion(
             messages,
@@ -185,8 +192,10 @@ def build_reply_with_fallback(
     new_state: dict[str, Any] | None = None
     if delta and conn is not None and user_id is not None:
         try:
-            new_state = apply_state_delta(conn, user_id, character["id"], delta, commit=commit)
-        except Exception as exc:
+            new_state = apply_state_delta(
+                conn, user_id, character["id"], delta, commit=commit
+            )
+        except Exception:
             logger.exception(
                 "角色状态更新失败 user_id=%s character_id=%s delta=%s",
                 user_id,
@@ -200,19 +209,24 @@ def build_reply_with_fallback(
 def build_mock_reply(character: Any, user_message: str) -> str:
     """
     生成 fallback mock 回复。
-    
+
     当真实 AI 调用失败时使用，根据 mock_reply_style 轮换回复风格。
     """
     # jsonb 列：psycopg2 自动解析为 Python list，兼容旧 text 格式
     raw_styles = character.get("mock_reply_style", "[]")
-    styles: list[str] = raw_styles if isinstance(raw_styles, list) else json.loads(raw_styles or "[]")
+    styles: list[str] = (
+        raw_styles if isinstance(raw_styles, list) else json.loads(raw_styles or "[]")
+    )
     if not styles:
         return "我在，你继续说。"
     fingerprint = sum(ord(ch) for ch in user_message) % len(styles)
     base: str = styles[fingerprint]
 
     # 通用情感关键词额外拼接
-    if any(keyword in user_message for keyword in ["累", "困", "难受", "烦", "崩溃", "委屈", "哭"]):
+    if any(
+        keyword in user_message
+        for keyword in ["累", "困", "难受", "烦", "崩溃", "委屈", "哭"]
+    ):
         return "%s先别想别的，先说说你现在的感受。" % base
 
     if any(keyword in user_message for keyword in ["想你", "喜欢你", "爱你", "爱上了"]):
@@ -292,12 +306,17 @@ def _prepare_prompt_context_result(
         current_content=current_content,
         character=character,
         memory_summary=memory_summary,
-        prompt_messages=prompt_messages if prompt_messages is not None else (fallback_prompt_messages or []),
+        prompt_messages=(
+            prompt_messages
+            if prompt_messages is not None
+            else (fallback_prompt_messages or [])
+        ),
         related_assets=related_assets,
     )
 
 
 # 游客流式函数已移入 services.chat_stream._guest，请直接从该模块导入
+
 
 # ============================================================
 # 用户流式构建
@@ -443,7 +462,12 @@ def _log_failed_chat_request(
             error_detail=error_detail,
         )
     except Exception:
-        logger.warning("AI 请求日志记录失败 user_id=%s character_id=%s", user_id, character_id, exc_info=True)
+        logger.warning(
+            "AI 请求日志记录失败 user_id=%s character_id=%s",
+            user_id,
+            character_id,
+            exc_info=True,
+        )
     finally:
         log_conn.close()
 
@@ -488,45 +512,12 @@ def _resolve_public_character_state(
     character_id: str,
     delta: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    if delta:
-        raw_state = apply_state_delta(conn, user_id, character_id, delta, commit=False)
-    else:
-        raw_state = get_character_state(conn, user_id, character_id)
-    if not raw_state:
-        return {}
-    result = {
-        k: v
-        for k, v in raw_state.items()
-        if not str(k).startswith("_")
-    }
-    # 暴露剧情事件给前端（Optimization B：去掉下划线前缀使前端可见）
-    if "_triggered_events" in raw_state:
-        result["triggered_events"] = raw_state["_triggered_events"]
-    # 从角色卡配置中提取 show_bar 偏好，供前端控制状态栏显隐
-    try:
-        rules_row = conn.execute(
-            "SELECT affection_rules_json FROM characters WHERE id = %s",
-            (character_id,),
-        ).fetchone()
-        if rules_row and rules_row["affection_rules_json"]:
-            rules = parse_json_object(rules_row["affection_rules_json"], fallback={})
-            if "show_bar" in rules:
-                result["show_bar"] = bool(rules["show_bar"])
-    except Exception:
-        logger.warning("解析好感度规则失败 character_id=%s", character_id, exc_info=True)
-    # 追加剧情线名称（前端状态栏展示用）
-    storyline_id = raw_state.get("storyline_id")
-    if storyline_id and conn is not None:
-        try:
-            sl_row = conn.execute(
-                "SELECT name FROM character_storylines WHERE id = %s",
-                (storyline_id,),
-            ).fetchone()
-            if sl_row and sl_row["name"]:
-                result["storyline_name"] = sl_row["name"]
-        except Exception:
-            logger.warning("查询剧情线名称失败 storyline_id=%s", storyline_id, exc_info=True)
-    return result
+    return get_public_character_state(
+        conn,
+        user_id=user_id,
+        character_id=character_id,
+        delta=delta,
+    )
 
 
 def _prepare_user_ai_budget(
@@ -558,15 +549,18 @@ def _build_user_stream_messages_and_budget(
 ) -> dict[str, Any]:
     character_state = get_character_state(conn, user.id, character_id)
     last_chat_time = get_last_chat_time(conn, user.id, character_id)
-    stream_messages = build_layered_chat_messages(
-        character,
-        prompt_messages,
-        memory_summary,
-        related_assets=related_assets,
-        user_name=user.nickname,
-        character_state=character_state,
-        conn=conn,
-        last_chat_time=last_chat_time,
+    stream_messages = build_layered_chat_messages_from_context(
+        PromptBuildContext(
+            character=character,
+            recent_messages=prompt_messages,
+            memory_summary=memory_summary,
+            related_assets=related_assets,
+            user_name=user.nickname,
+            character_state=character_state,
+            conn=conn,
+            last_chat_time=last_chat_time,
+            user_id=user.id,
+        )
     )
     # WI sticky/cooldown 状态已被 build_layered_chat_messages 写入 character_state.custom_vars
     # 立即持久化到 DB，确保流式响应完成后状态不丢失

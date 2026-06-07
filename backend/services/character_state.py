@@ -31,28 +31,21 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any
 
-from core.config import utc_now
 from constants import Mood, StoryPhase
 from core.database import ConnType
 from core.character_state_snapshot import CharacterStateSnapshot
 from repositories import character_repository as char_repo
 from repositories import character_state_repository as state_repo
 from repositories import story_repository as story_repo
-from services.cache_service import cache_get, cache_set
 from services.story_event_service import check_and_trigger_story_events
 from utils.json_utils import parse_json_object
 from constants.affection import (
     AFFECTION_BASE_RULES,
-    AFFECTION_COOLDOWN_SECONDS,
     AFFECTION_DELTA_MAX,
-    AFFECTION_DIMINISHING_RETURNS,
     DAILY_AFFECTION_CAP_DEFAULT,
-    EVENT_NAME_MIGRATION,
-    PHASE_GAIN_MULTIPLIER,
-    PHASE_THRESHOLDS,
 )
 from services.character_affection import (
     auto_advance_story_phase,
@@ -98,7 +91,9 @@ def get_greeting_for_phase(
     # 1. 尝试从多阶段开场白表中获取（含剧情线匹配优先级）
     row = None
     if storyline_id:
-        row = char_repo.get_best_greeting_for_storyline(conn, character_id, story_phase, storyline_id)
+        row = char_repo.get_best_greeting_for_storyline(
+            conn, character_id, story_phase, storyline_id
+        )
         if not row:
             logger.info(
                 "未找到剧情线 %s 的开场白，将尝试通用开场白",
@@ -124,14 +119,18 @@ def _get_today_date() -> str:
 # ============================================================
 # 状态读写
 # ============================================================
-def get_character_state(conn: ConnType, user_id: int | str, character_id: str, *, for_update: bool = False) -> dict[str, Any]:
+def get_character_state(
+    conn: ConnType, user_id: int | str, character_id: str, *, for_update: bool = False
+) -> dict[str, Any]:
     """读取用户对某角色的当前关系状态，不存在时返回默认值。
 
     Args:
         for_update: 若为 True，对 character_states 行加 SELECT ... FOR UPDATE 行级锁，
                     防止并发请求之间的丢失更新。仅在事务中使用。
     """
-    row = state_repo.get_character_state(conn, user_id, character_id, for_update=for_update)
+    row = state_repo.get_character_state(
+        conn, user_id, character_id, for_update=for_update
+    )
     storyline_id = story_repo.get_current_storyline_id(conn, user_id, character_id)
 
     if not row:
@@ -149,14 +148,20 @@ def get_character_state(conn: ConnType, user_id: int | str, character_id: str, *
         "mood": row["mood"] or "neutral",
         "custom_vars": parse_json_object(row["custom_vars"], fallback={}),
         "storyline_id": storyline_id,
-        "_daily_event_counts": parse_json_object(row["daily_event_counts"] or "{}", fallback={}),
+        "_daily_event_counts": parse_json_object(
+            row["daily_event_counts"] or "{}", fallback={}
+        ),
         "_daily_affection_gained": int(row["daily_affection_gained"] or 0),
-        "_last_event_timestamps": parse_json_object(row["last_event_timestamps"] or "{}", fallback={}),
+        "_last_event_timestamps": parse_json_object(
+            row["last_event_timestamps"] or "{}", fallback={}
+        ),
         "_daily_reset_date": row["daily_reset_date"] or "",
     }
 
 
-def _reset_daily_fields_if_needed(snapshot: CharacterStateSnapshot | dict) -> CharacterStateSnapshot | dict:
+def _reset_daily_fields_if_needed(
+    snapshot: CharacterStateSnapshot | dict,
+) -> CharacterStateSnapshot | dict:
     """惰性日重置：如果不是今天，归零当天统计。
 
     兼容 dict 和 CharacterStateSnapshot 两种输入，游客路径传入的是普通 dict。
@@ -183,7 +188,11 @@ def upsert_character_state(
 ) -> None:
     """写入（插入或更新）一条关系状态记录。"""
     affection = max(0, min(100, int(snapshot.affection)))
-    story_phase = snapshot.story_phase if snapshot.story_phase in _VALID_STORY_PHASES else "stranger"
+    story_phase = (
+        snapshot.story_phase
+        if snapshot.story_phase in _VALID_STORY_PHASES
+        else "stranger"
+    )
     mood = snapshot.mood if snapshot.mood in _VALID_MOODS else "neutral"
     daily_reset_date = snapshot.daily_reset_date or _get_today_date()
 
@@ -195,9 +204,13 @@ def upsert_character_state(
         story_phase=story_phase,
         mood=mood,
         custom_vars_json=json.dumps(snapshot.custom_vars, ensure_ascii=False),
-        daily_event_counts_json=json.dumps(snapshot.daily_event_counts, ensure_ascii=False),
+        daily_event_counts_json=json.dumps(
+            snapshot.daily_event_counts, ensure_ascii=False
+        ),
         daily_affection_gained=snapshot.daily_affection_gained,
-        last_event_timestamps_json=json.dumps(snapshot.last_event_timestamps, ensure_ascii=False),
+        last_event_timestamps_json=json.dumps(
+            snapshot.last_event_timestamps, ensure_ascii=False
+        ),
         daily_reset_date=daily_reset_date,
     )
     if commit:
@@ -209,7 +222,12 @@ def upsert_character_state(
 # ============================================================
 
 _STATE_UPDATE_ALLOWED_FIELDS = {
-    "affection", "event", "story_phase", "mood", "moment", "custom",
+    "affection",
+    "event",
+    "story_phase",
+    "mood",
+    "moment",
+    "custom",
 }
 
 _CUSTOM_VARS_BLACKLIST = {
@@ -240,7 +258,9 @@ def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
 
         if key == "affection":
             if isinstance(value, (int, float)):
-                sanitized[key] = max(-AFFECTION_DELTA_MAX, min(AFFECTION_DELTA_MAX, int(value)))
+                sanitized[key] = max(
+                    -AFFECTION_DELTA_MAX, min(AFFECTION_DELTA_MAX, int(value))
+                )
             elif isinstance(value, str):
                 sanitized[key] = value[:20]
 
@@ -284,6 +304,7 @@ def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
 # apply_state_delta 处理器（使用 CharacterStateSnapshot 流水线）
 # ============================================================
 
+
 def _resolve_affection_delta(
     conn: ConnType,
     snapshot: CharacterStateSnapshot,
@@ -299,12 +320,22 @@ def _resolve_affection_delta(
             daily_cap = get_daily_cap(conn, snapshot.character_id)
             # 将 snapshot 转为旧 dict 传给现有函数（渐进迁移，后续可改造这些函数）
             current_dict = snapshot.to_dict()
-            affection_change, _ = calculate_affection_change(event_name, rules, current_dict, daily_cap=daily_cap)
+            affection_change, _ = calculate_affection_change(
+                event_name, rules, current_dict, daily_cap=daily_cap
+            )
             # 同步反滥用计数器回 snapshot
-            anti_abuse = update_anti_abuse_counters(current_dict, event_name, affection_change)
-            snapshot.daily_event_counts = anti_abuse.get("_daily_event_counts", snapshot.daily_event_counts)
-            snapshot.daily_affection_gained = anti_abuse.get("_daily_affection_gained", snapshot.daily_affection_gained)
-            snapshot.last_event_timestamps = anti_abuse.get("_last_event_timestamps", snapshot.last_event_timestamps)
+            anti_abuse = update_anti_abuse_counters(
+                current_dict, event_name, affection_change
+            )
+            snapshot.daily_event_counts = anti_abuse.get(
+                "_daily_event_counts", snapshot.daily_event_counts
+            )
+            snapshot.daily_affection_gained = anti_abuse.get(
+                "_daily_affection_gained", snapshot.daily_affection_gained
+            )
+            snapshot.last_event_timestamps = anti_abuse.get(
+                "_last_event_timestamps", snapshot.last_event_timestamps
+            )
             snapshot.affection = max(0, min(100, snapshot.affection + affection_change))
         elif "affection" in delta:
             raw = str(delta["affection"]).strip()
@@ -342,12 +373,20 @@ def _resolve_story_phase(
     try:
         rules_row = char_repo.get_affection_config(conn, snapshot.character_id)
         if rules_row and rules_row["affection_rules_json"]:
-            rules_json = parse_json_object(rules_row["affection_rules_json"], fallback={})
+            rules_json = parse_json_object(
+                rules_row["affection_rules_json"], fallback={}
+            )
             allow_regression = bool(rules_json.get("allow_regression", False))
     except Exception:
-        logger.warning("解析 affection_rules_json 失败 character_id=%s", snapshot.character_id, exc_info=True)
+        logger.warning(
+            "解析 affection_rules_json 失败 character_id=%s",
+            snapshot.character_id,
+            exc_info=True,
+        )
 
-    snapshot.story_phase = auto_advance_story_phase(snapshot.affection, snapshot.story_phase, allow_regression=allow_regression)
+    snapshot.story_phase = auto_advance_story_phase(
+        snapshot.affection, snapshot.story_phase, allow_regression=allow_regression
+    )
     return snapshot
 
 
@@ -423,21 +462,37 @@ def _handle_storyline_and_events(
 
     if new_storyline_id is not None:
         try:
-            if story_repo.is_storyline_valid(conn, new_storyline_id, snapshot.character_id):
+            if story_repo.is_storyline_valid(
+                conn, new_storyline_id, snapshot.character_id
+            ):
                 story_repo.set_current_storyline_id(
-                    conn, snapshot.user_id, snapshot.character_id, new_storyline_id,
+                    conn,
+                    snapshot.user_id,
+                    snapshot.character_id,
+                    new_storyline_id,
                 )
                 # 内存传播，消除 SQL#11 防御性重读
                 snapshot.storyline_id = new_storyline_id
             else:
-                logger.warning("剧情线ID无效或不属于当前角色: storyline_id=%s, character_id=%s", new_storyline_id, snapshot.character_id)
+                logger.warning(
+                    "剧情线ID无效或不属于当前角色: storyline_id=%s, character_id=%s",
+                    new_storyline_id,
+                    snapshot.character_id,
+                )
         except Exception as e:
-            logger.warning("剧情线切换失败 storyline_id=%s: %s", new_storyline_id, e, exc_info=True)
+            logger.warning(
+                "剧情线切换失败 storyline_id=%s: %s", new_storyline_id, e, exc_info=True
+            )
 
     # ── 检查并触发剧情事件 ──
     triggered_events = check_and_trigger_story_events(
-        conn, snapshot.user_id, snapshot.character_id, snapshot.affection, snapshot.story_phase,
-        custom_vars=snapshot.custom_vars, commit=False,
+        conn,
+        snapshot.user_id,
+        snapshot.character_id,
+        snapshot.affection,
+        snapshot.story_phase,
+        custom_vars=snapshot.custom_vars,
+        commit=False,
     )
 
     # ── 剧情线切换通知 ──
@@ -446,21 +501,28 @@ def _handle_storyline_and_events(
         try:
             sl_name = story_repo.get_storyline_name(conn, new_storyline_id)
             if sl_name:
-                triggered_events.append({
-                    "type": "storyline_changed",
-                    "title": f"进入【{sl_name}】",
-                    "description": ""
-                })
+                triggered_events.append(
+                    {
+                        "type": "storyline_changed",
+                        "title": f"进入【{sl_name}】",
+                        "description": "",
+                    }
+                )
                 snapshot.custom_vars["_force_refresh_greeting"] = True
         except Exception:
-            logger.warning("剧情线切换查询失败 storyline_id=%s", new_storyline_id, exc_info=True)
+            logger.warning(
+                "剧情线切换查询失败 storyline_id=%s", new_storyline_id, exc_info=True
+            )
 
     # ── 关系阶段升级通知 ──
     old_phase = snapshot.old_phase or snapshot.story_phase
     if snapshot.story_phase != old_phase:
         try:
             _, upgrade_greeting = get_greeting_for_phase(
-                conn, snapshot.character_id, snapshot.story_phase, snapshot.storyline_id,
+                conn,
+                snapshot.character_id,
+                snapshot.story_phase,
+                snapshot.storyline_id,
             )
             if upgrade_greeting:
                 snapshot.custom_vars["_pending_phase_upgrade"] = {
@@ -469,15 +531,23 @@ def _handle_storyline_and_events(
                     "greeting": upgrade_greeting,
                 }
                 from constants.story_phase import STORY_PHASE_LABELS
-                phase_label = STORY_PHASE_LABELS.get(snapshot.story_phase, snapshot.story_phase)
-                triggered_events.append({
-                    "type": "phase_upgrade",
-                    "title": f"关系升级为「{phase_label}」",
-                    "description": "下次打开对话时，角色会主动和你打招呼",
-                })
+
+                phase_label = STORY_PHASE_LABELS.get(
+                    snapshot.story_phase, snapshot.story_phase
+                )
+                triggered_events.append(
+                    {
+                        "type": "phase_upgrade",
+                        "title": f"关系升级为「{phase_label}」",
+                        "description": "下次打开对话时，角色会主动和你打招呼",
+                    }
+                )
                 logger.info(
                     "关系阶段升级: user=%s char=%s %s→%s, 触发语已暂存",
-                    snapshot.user_id, snapshot.character_id, old_phase, snapshot.story_phase,
+                    snapshot.user_id,
+                    snapshot.character_id,
+                    old_phase,
+                    snapshot.story_phase,
                 )
         except Exception as e:
             logger.warning("阶段升级触发语处理异常: %s", e, exc_info=True)
@@ -510,7 +580,8 @@ def _persist_and_finalize(
     if commit:
         conn.commit()
 
-    result = get_character_state(conn, snapshot.user_id, snapshot.character_id)
+    # 数据已在 snapshot 中，无需重新查询数据库
+    result = snapshot.to_dict()
     if snapshot.triggered_events:
         result["_triggered_events"] = snapshot.triggered_events
 
@@ -534,7 +605,9 @@ def apply_state_delta(
 
     # 读取当前状态，构建快照
     state_dict = get_character_state(conn, user_id, character_id, for_update=True)
-    snapshot = CharacterStateSnapshot.from_legacy_dict(state_dict, user_id, character_id)
+    snapshot = CharacterStateSnapshot.from_legacy_dict(
+        state_dict, user_id, character_id
+    )
     snapshot = _reset_daily_fields_if_needed(snapshot)
 
     # 流水线处理
@@ -546,3 +619,64 @@ def apply_state_delta(
 
     # 持久化
     return _persist_and_finalize(conn, snapshot, commit=commit)
+
+
+def _resolve_show_bar_preference(conn: ConnType, character_id: str) -> bool:
+    """从角色配置读取状态栏显隐偏好，解析失败时保持显示。"""
+    try:
+        rules_row = char_repo.get_affection_config(conn, character_id)
+        if rules_row and rules_row["affection_rules_json"]:
+            rules = parse_json_object(rules_row["affection_rules_json"], fallback={})
+            if "show_bar" in rules:
+                return bool(rules["show_bar"])
+    except Exception:
+        logger.warning(
+            "解析好感度规则失败 character_id=%s", character_id, exc_info=True
+        )
+    return True
+
+
+def _serialize_public_character_state(
+    conn: ConnType,
+    raw_state: dict[str, Any],
+    character_id: str,
+) -> dict[str, Any]:
+    """把内部状态转换为前端可见状态。"""
+    if not raw_state:
+        return {}
+
+    result = {k: v for k, v in raw_state.items() if not str(k).startswith("_")}
+
+    # 暴露剧情事件给前端，去掉内部下划线前缀。
+    if "_triggered_events" in raw_state:
+        result["triggered_events"] = raw_state["_triggered_events"]
+
+    result["show_bar"] = _resolve_show_bar_preference(conn, character_id)
+
+    storyline_id = raw_state.get("storyline_id")
+    if storyline_id:
+        try:
+            storyline_name = story_repo.get_storyline_name(conn, storyline_id)
+            if storyline_name:
+                result["storyline_name"] = storyline_name
+        except Exception:
+            logger.warning(
+                "查询剧情线名称失败 storyline_id=%s", storyline_id, exc_info=True
+            )
+
+    return result
+
+
+def get_public_character_state(
+    conn: ConnType,
+    *,
+    user_id: int | str,
+    character_id: str,
+    delta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """读取或更新后返回前端可见的角色状态。"""
+    if delta:
+        raw_state = apply_state_delta(conn, user_id, character_id, delta, commit=False)
+    else:
+        raw_state = get_character_state(conn, user_id, character_id)
+    return _serialize_public_character_state(conn, raw_state, character_id)
