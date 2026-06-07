@@ -95,8 +95,8 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL 环境变量未设置，请在 .env 文件中配置 Supabase 连接字符串")
 
 # 数据库连接池配置（可通过环境变量覆盖）
-DB_POOL_MIN_CONN = _int_env("DB_POOL_MIN_CONN", 1, minimum=1, maximum=20)
-DB_POOL_MAX_CONN = _int_env("DB_POOL_MAX_CONN", 20, minimum=5, maximum=50)
+DB_POOL_MIN_CONN = _int_env("DB_POOL_MIN_CONN", 2, minimum=1, maximum=20)
+DB_POOL_MAX_CONN = _int_env("DB_POOL_MAX_CONN", 5, minimum=3, maximum=50)
 
 
 # ============================================================
