@@ -36,8 +36,8 @@ _SUMMARY_SECTION_TITLES: list[tuple[str, str]] = [
 ]
 
 _SUMMARY_SECTION_LIMITS: dict[str, int] = {
-    "profile": 8,
-    "preferences": 5,
+    "profile": 10,
+    "preferences": 8,
     "events": 8,
     "relationship": 8,
     "pending": 5,
@@ -318,18 +318,17 @@ def build_structured_memory_summary_fallback(
         "[用户画像]",
         *pick(user_lines[:2], limit=2),
         "[用户偏好]",
-        *(["- 从近期对话中暂未提炼出稳定偏好"] if not user_lines else [f"- 用户最近反复提到：{user_lines[-1][:60]}"]),
+        "- 暂未提炼出稳定偏好（摘要生成中，下次对话可更新）",
         "[近期事件]",
         *pick(user_lines, limit=3),
         "[待跟进事项]",
-        *(["- 暂无明确待跟进事项"] if not user_lines else [f"- 可在后续对话跟进：{user_lines[-1][:60]}"]),
+        "- 暂无明确待跟进事项",
         "[关系状态]",
         *(["- 角色持续与用户保持对话，关系在稳定推进"] if assistant_lines else ["- 暂无稳定信息"]),
     ]
 
-    if existing_summary.strip():
-        return existing_summary.strip() + "\n" + "\n".join(structured)
-    return "\n".join(structured)
+    summary_text = "\n".join(structured)
+    return merge_summary_text(existing_summary, summary_text)
 
 
 def merge_summary_text(existing_summary: str, new_summary_text: str) -> str:

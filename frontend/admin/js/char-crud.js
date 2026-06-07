@@ -11,10 +11,12 @@ function openCreateCharModal() {
   document.getElementById('new-char-tags').value = '';
   document.getElementById('new-char-type').value = 'intimate';
   document.getElementById('new-char-scenario-type').value = 'adventure';
+  document.getElementById('new-char-archetype').value = '';
   document.getElementById('new-char-required-plan').value = 'guest';
   document.getElementById('new-char-priority').value = '10';
   document.getElementById('new-char-visible').checked = true;
   document.getElementById('scenario-type-group').style.display = 'none';
+  document.getElementById('archetype-group').style.display = '';
   document.getElementById('create-char-modal').style.display = 'flex';
 
   // 监听卡类型变化
@@ -22,6 +24,8 @@ function openCreateCharModal() {
   typeSelect.onchange = function() {
     const scenarioGroup = document.getElementById('scenario-type-group');
     scenarioGroup.style.display = this.value === 'scenario' ? '' : 'none';
+    const archetypeGroup = document.getElementById('archetype-group');
+    archetypeGroup.style.display = this.value === 'intimate' ? '' : 'none';
   };
 }
 
@@ -40,6 +44,7 @@ async function createCharacter() {
   const systemPrompt = document.getElementById('new-char-system-prompt').value.trim();
   const opening = document.getElementById('new-char-opening').value.trim();
   const tagsStr = document.getElementById('new-char-tags').value.trim();
+  const archetype = document.getElementById('new-char-archetype').value;
   const cardType = document.getElementById('new-char-type').value;
   const requiredPlan = document.getElementById('new-char-required-plan').value;
   const priority = parseInt(document.getElementById('new-char-priority').value) || 10;
@@ -96,6 +101,13 @@ async function createCharacter() {
     });
     closeCreateCharModal();
     toast('✅ 角色创建成功！');
+    // 原型存在时立即写入 runtime_cache_json
+    if (archetype) {
+      await AdminAPI.apiFetch(`${AdminAPI.API}/character/${id}`, {
+        method: 'POST',
+        body: JSON.stringify({ updates: { rl__archetype: archetype } }),
+      });
+    }
     await loadCharList();
     await selectChar(id);
   } catch (e) {

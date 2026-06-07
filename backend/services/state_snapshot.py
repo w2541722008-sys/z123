@@ -33,6 +33,8 @@ def _build_state_lines(
     phase: str,
     mood: str,
     phase_behaviors: dict[str, Any],
+    *,
+    archetype: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """构建核心状态文本行，返回 (state_lines, update_instruction)。"""
     if card_type == "scenario":
@@ -50,7 +52,7 @@ def _build_state_lines(
         phase_label = STORY_PHASE_LABELS.get(phase, phase)
         mood_label = MOOD_LABELS.get(mood, mood)
         update_instruction = STATE_UPDATE_INSTRUCTION
-        tendency = _get_behavior_tendency(phase, mood, phase_behaviors=phase_behaviors)
+        tendency = _get_behavior_tendency(phase, mood, phase_behaviors=phase_behaviors, archetype=archetype)
         state_lines = [
             "【当前关系状态（每轮自动更新）】",
             f"- 好感度：{affection}/100",
@@ -162,7 +164,7 @@ def _append_pending_context(state_lines: list[str], custom_vars: dict[str, Any])
             state_lines.append(f"- 【触发剧情事件：{title}】{content[:100]}")
 
     silent_rounds = int(custom_vars.get("_silent_rounds") or 0)
-    if silent_rounds >= 3:
+    if silent_rounds >= 6:
         state_lines.append(
             f"- 💡 提示：已连续{silent_rounds}轮未记录互动，如本轮有值得记录的内容可补充上报"
         )
@@ -192,6 +194,7 @@ def _inject_affection_anchor(
     shared_moments: list[str],
     last_chat_time: str | None,
     card_type: str,
+    custom_vars: dict[str, Any] | None = None,
 ) -> None:
     """注入情感锚点和主动回忆到 runtime_bundle 的 world_info_after。"""
     if not shared_moments:
@@ -200,13 +203,19 @@ def _inject_affection_anchor(
     proactive_cared = False
     candidates = shared_moments[-5:]
 
+    # 轮换选取锚点，避免连续多轮重复同一段回忆
+    last_idx = int(custom_vars.get("_last_anchor_index") or -1) if custom_vars else -1
+    next_idx = (last_idx + 1) % len(candidates)
+    anchor = candidates[next_idx]
+    if custom_vars is not None:
+        custom_vars["_last_anchor_index"] = next_idx
+
     # 长时间未互动时注入主动回忆
     if last_chat_time:
         try:
             last_dt = datetime.fromisoformat(str(last_chat_time))
             hours_since = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600
             if hours_since >= 24:
-                anchor = random.choice(candidates)
                 if card_type == "scenario":
                     proactive_text = (
                         f"【剧情回响】距离上一次互动已过去较长时间（{int(hours_since)}小时）。回忆起「{anchor}」，"
@@ -226,7 +235,6 @@ def _inject_affection_anchor(
 
     # 默认注入共同回忆锚点
     if not proactive_cared:
-        anchor = random.choice(candidates)
         if card_type == "scenario":
             anchor_text = (
                 f"【共同回忆】{anchor}"
@@ -272,10 +280,11 @@ def inject_state_snapshot(
         _get_field(character, "phase_behaviors_json", ""), fallback={},
     )
     storyline_id = character_state.get("storyline_id") if character_state else None
+    archetype = runtime_bundle.get("archetype") or None
 
     # 3. 构建核心状态行
     state_lines, update_instruction = _build_state_lines(
-        card_type, affection, phase, mood, phase_behaviors,
+        card_type, affection, phase, mood, phase_behaviors, archetype=archetype,
     )
 
     # 4. 丰富上下文
@@ -288,7 +297,7 @@ def inject_state_snapshot(
 
     # 6. 注入情感锚点
     shared_moments = list(custom_vars.get("_shared_moments") or [])
-    _inject_affection_anchor(runtime_bundle, shared_moments, last_chat_time, card_type)
+    _inject_affection_anchor(runtime_bundle, shared_moments, last_chat_time, card_type, custom_vars)
 
     # 7. 状态快照放到 world_info_after 最前面
     existing_after = runtime_bundle.get("world_info_after") or ""

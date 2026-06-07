@@ -62,7 +62,7 @@ class TestCalculateAffectionChange:
         state = self._default_state(story_phase="lover")
         change, _ = _calculate_affection_change("argument", rules, state)
         base = rules["argument"]  # -5
-        assert change == int(base * 1.5)  # -7
+        assert change == int(base * 1.0)  # -5
 
     def test_cooldown_blocks_positive(self):
         rules = self._default_rules()
@@ -127,8 +127,8 @@ class TestCalculateAffectionChange:
         state = self._default_state(story_phase="friend")
         change, _ = _calculate_affection_change("deep_conversation", rules, state)
         base = rules["deep_conversation"]  # 4
-        # friend multiplier = 0.6, first time diminish = 1.0
-        expected = int(round(base * 1.0 * 0.6))
+        # friend multiplier = 0.7, first time diminish = 1.0
+        expected = int(round(base * 1.0 * 0.7))
         assert change == expected
 
     def test_change_capped_at_base(self):

@@ -34,9 +34,14 @@ DAILY_AFFECTION_CAP_DEFAULT = 15
 # 好感度阶段阈值
 PHASE_THRESHOLDS: dict[str, int] = {"acquaintance": 20, "friend": 50, "lover": 80}
 
-# 各阶段好感度增长倍率
+# 各阶段好感度增长倍率（随亲密度上升缓慢递减，防止刷分但不让正反馈归零）
 PHASE_GAIN_MULTIPLIER: dict[str, float] = {
-    "stranger": 1.0, "acquaintance": 0.8, "friend": 0.6, "lover": 0.4,
+    "stranger": 1.0, "acquaintance": 0.85, "friend": 0.7, "lover": 0.55,
+}
+
+# 各阶段好感度损失倍率（越高阶段越宽容，与正面事件的递减逻辑对称）
+PHASE_LOSS_MULTIPLIER: dict[str, float] = {
+    "stranger": 0.8, "acquaintance": 0.9, "friend": 1.0, "lover": 1.0,
 }
 
 # 单次事件好感度最大变化值

@@ -320,7 +320,7 @@ def _inject_life_profile(
     character: Any,
     card_type: str,
 ) -> None:
-    """阶段2：注入人生档案（仅对话陪伴类型）。"""
+    """阶段2：注入人生档案（仅对话陪伴类型），存入独立字段供 prompt_builder 作为独立 layer 使用。"""
     if card_type != "intimate":
         return
     life_profile = parse_json_object(
@@ -328,7 +328,7 @@ def _inject_life_profile(
     )
     if not life_profile or not any(life_profile.values()):
         return
-    profile_lines = ["【角色人生档案】"]
+    profile_lines: list[str] = []
     if life_profile.get("basic_info"):
         profile_lines.append(life_profile["basic_info"])
     if life_profile.get("childhood"):
@@ -343,13 +343,8 @@ def _inject_life_profile(
         profile_lines.append(f"\n生活习惯：\n{life_profile['habits']}")
     if life_profile.get("important_events"):
         profile_lines.append(f"\n重要经历：\n{life_profile['important_events']}")
-    profile_text = "\n".join(profile_lines)
-    existing_after = runtime_bundle.get("world_info_after") or ""
-    runtime_bundle["world_info_after"] = (
-        (profile_text + "\n\n" + existing_after).strip()
-        if existing_after
-        else profile_text
-    )
+    if profile_lines:
+        runtime_bundle["life_profile"] = "\n".join(profile_lines)
 
 
 def _resolve_world_info_triggers(

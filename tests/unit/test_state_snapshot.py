@@ -118,9 +118,9 @@ class TestAppendPendingContext:
     def test_adds_silence_reminder(self):
         from services.state_snapshot import _append_pending_context
         lines = []
-        _append_pending_context(lines, {"_silent_rounds": 5})
+        _append_pending_context(lines, {"_silent_rounds": 6})
         assert len(lines) == 1
-        assert "已连续5轮" in lines[0]
+        assert "已连续6轮" in lines[0]
 
     def test_no_silence_reminder_for_low_count(self):
         from services.state_snapshot import _append_pending_context

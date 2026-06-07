@@ -15,6 +15,7 @@ from constants.affection import (
     DAILY_AFFECTION_CAP_DEFAULT,
     EVENT_NAME_MIGRATION,
     PHASE_GAIN_MULTIPLIER,
+    PHASE_LOSS_MULTIPLIER,
     PHASE_THRESHOLDS,
 )
 from repositories import character_repository as char_repo
@@ -28,6 +29,7 @@ _AFFECTION_DIMINISHING_RETURNS: list[float] = AFFECTION_DIMINISHING_RETURNS
 _DAILY_AFFECTION_CAP_DEFAULT: int = DAILY_AFFECTION_CAP_DEFAULT
 _PHASE_THRESHOLDS: dict[str, int] = PHASE_THRESHOLDS
 _PHASE_GAIN_MULTIPLIER: dict[str, float] = PHASE_GAIN_MULTIPLIER
+_PHASE_LOSS_MULTIPLIER: dict[str, float] = PHASE_LOSS_MULTIPLIER
 _AFFECTION_DELTA_MAX: int = AFFECTION_DELTA_MAX
 _EVENT_NAME_MIGRATION: dict[str, str] = EVENT_NAME_MIGRATION
 
@@ -169,12 +171,7 @@ def calculate_affection_change(
 
     if base_change < 0:
         phase = current_state.get("story_phase", "stranger")
-        negative_multiplier = {
-            "stranger": 0.8,
-            "acquaintance": 1.0,
-            "friend": 1.2,
-            "lover": 1.5,
-        }.get(phase, 1.0)
+        negative_multiplier = _PHASE_LOSS_MULTIPLIER.get(phase, 1.0)
         actual = max(int(base_change * negative_multiplier), -_AFFECTION_DELTA_MAX)
         return (
             actual,

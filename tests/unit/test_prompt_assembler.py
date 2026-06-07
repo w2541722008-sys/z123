@@ -246,11 +246,8 @@ class TestRuntimeLayerHelpers:
 
         assert result[0] == {"role": "system", "content": "sys"}
         assert "background_context" in result[1]["content"]
-        # 记忆摘要后追加一条 assistant 确认，保证角色交替
-        assert "背景信息" in result[2]["content"]
-        assert result[3] == {"role": "assistant", "content": "历史回复"}
-        # last_user_msg 直接追加为独立 user 消息
-        assert result[4] == {"role": "user", "content": "当前问题"}
+        assert result[2] == {"role": "assistant", "content": "历史回复"}
+        assert result[3] == {"role": "user", "content": "当前问题"}
 
 
 class TestMergeAlternateGreetings:

@@ -53,6 +53,7 @@ const READONLY_META = {
 const RL_FIELD_META = {
   primary_system_prompt: { label: '主System Prompt（深层）', desc: '从角色卡解析出的核心指令', rows: 4, cardTypes: 'both' },
   base_profile:          { label: '📖 角色档案（base_profile）', desc: '角色的人物背景、身份、外貌、性格等主要设定——最核心的内容在这里', rows: 20, cardTypes: 'both' },
+  archetype:            { label: '🎭 角色原型', desc: '决定角色的行为模式。不选则由系统按通用规则处理', type: 'select', options: [['','（不设置）'],['温柔','温柔 — 治愈包容，情感安全感的提供者'],['高冷','高冷/傲娇 — 外表冷淡内心温暖，反差是核心魅力'],['天然呆','天然呆 — 没有心机的真诚，每句话都来自另一个视角'],['成熟','成熟 — 沉稳可靠，力量在克制中体现'],['病娇','病娇 — 极致占有，爱和危险一体两面']], cardTypes: 'intimate' },
   personality:           { label: '性格描述', desc: '角色性格特征', rows: 6, cardTypes: 'both' },
   scenario:              { label: '🎬 场景设定', desc: '剧情沙盒专属：故事发生的时间/地点/背景', rows: 8, cardTypes: 'scenario' },
   world_rules:           { label: '🌐 世界规则', desc: '世界观设定、规则、禁忌', rows: 10, cardTypes: 'both' },
@@ -81,7 +82,7 @@ const READONLY_SECTION_FIELDS = ['asset_type', 'embedded_format', 'mock_reply_st
 
 // runtime_layers 显示顺序
 const RL_DISPLAY_ORDER = [
-  'base_profile', 'personality', 'scenario', 'world_rules', 'examples',
+  'archetype', 'base_profile', 'personality', 'scenario', 'world_rules', 'examples',
   'post_history_rules', 'alternate_greetings',
   'world_info_before', 'world_info_after', 'conditional_entries',
   'primary_system_prompt', 'opening_message', 'structured_outline', 'extension_hints',
@@ -358,7 +359,7 @@ function renderEditPanel(c) {
   // 核心字段根据类型区分
   const CORE_RL_FIELDS = cardType === 'scenario'
     ? ['base_profile', 'examples', 'scenario', 'alternate_greetings', 'world_rules']
-    : ['base_profile', 'examples', 'personality', 'world_rules'];
+    : ['archetype', 'base_profile', 'examples', 'personality', 'world_rules'];
 
   // 新手模式：只显示核心字段
   const rlFieldsToShow = isBeginnerMode ? ['base_profile', 'examples'] : RL_DISPLAY_ORDER;

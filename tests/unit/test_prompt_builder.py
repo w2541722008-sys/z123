@@ -169,6 +169,7 @@ class TestAlternateSamplesText:
 
 
 # ============================================================
+# ============================================================
 # _get_behavior_tendency — 行为倾向提取
 # ============================================================
 class TestGetBehaviorTendency:
@@ -204,6 +205,44 @@ class TestGetBehaviorTendency:
     def test_unknown_phase_returns_empty_modifier_only(self):
         result = _get_behavior_tendency("nonexistent", "happy", card_type="intimate")
         assert isinstance(result, str)
+
+    def test_gentle_archetype_friend_phase(self):
+        result = _get_behavior_tendency("friend", "happy", archetype="温柔")
+        assert "温柔" in result or "港湾" in result or "安慰" in result
+
+    def test_yandere_archetype_lover_phase(self):
+        result = _get_behavior_tendency("lover", "melting", archetype="病娇")
+        assert "离开" in result or "属于" in result or "警告" in result
+
+    def test_unknown_archetype_falls_back_to_default(self):
+        result = _get_behavior_tendency("stranger", "neutral", archetype="nonexistent")
+        assert "刚认识" in result
+
+    def test_none_archetype_falls_back_to_default(self):
+        result = _get_behavior_tendency("stranger", "neutral", archetype=None)
+        assert "刚认识" in result
+
+    def test_archetype_with_mood_modifier(self):
+        """原型行为倾向 + 心情修饰词 拼接"""
+        result = _get_behavior_tendency("friend", "cold", archetype="高冷")
+        assert "冷" in result  # mood modifier should be appended
+
+    def test_phase_behaviors_overrides_archetype(self):
+        """phase_behaviors_json 自定义覆盖原型"""
+        result = _get_behavior_tendency(
+            "friend", "happy",
+            phase_behaviors={"friend": "自定义规则"},
+            archetype="温柔",
+        )
+        assert result == "自定义规则"
+
+    def test_all_archetypes_have_four_phases(self):
+        """每个原型都有 stranger/acquaintance/friend/lover 四个阶段的模板"""
+        from constants.archetypes import ARCHETYPE_TENDENCIES
+        for arch_key, phases in ARCHETYPE_TENDENCIES.items():
+            for phase in ("stranger", "acquaintance", "friend", "lover"):
+                assert phase in phases, f"{arch_key} missing phase {phase}"
+                assert len(phases[phase]) > 20, f"{arch_key}.{phase} too short"
 
 
 # ============================================================

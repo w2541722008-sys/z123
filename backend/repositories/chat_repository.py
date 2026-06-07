@@ -235,7 +235,8 @@ def update_message_with_versions(
            SET content = %s,
                versions = %s::jsonb,
                current_version_index = 0,
-               updated_at = now()
+               updated_at = now(),
+               is_summarized = 0
            WHERE id = %s""",
         (content, versions_json, message_id),
     )
@@ -249,7 +250,7 @@ def update_message_content(
     """简单更新消息内容。"""
     conn.execute(
         """UPDATE chat_messages
-           SET content = %s, updated_at = now()
+           SET content = %s, updated_at = now(), is_summarized = 0
            WHERE id = %s""",
         (content, message_id),
     )

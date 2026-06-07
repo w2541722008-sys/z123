@@ -128,6 +128,7 @@ def build_runtime_bundle(character: Any, related_assets: list[Any] | None = None
         "primary_system_prompt": primary_layers.get("primary_system_prompt") or _get_field(character, "system_prompt", ""),
         "base_profile": primary_layers.get("base_profile") or _get_field(character, "description", ""),
         "personality": primary_layers.get("personality") or "",
+        "archetype": primary_layers.get("archetype") or "",
         "scenario": primary_layers.get("scenario") or "",
         "world_rules": primary_layers.get("world_rules") or "",
         "examples": primary_layers.get("examples") or "",

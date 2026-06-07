@@ -7,9 +7,11 @@ Prompt 构建器 — 将运行时上下文组装为 LLM messages 列表。
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from constants import Mood, StoryPhase
+from constants.archetypes import ARCHETYPE_TENDENCIES, _DEFAULT_TENDENCIES
 from core.plan_constants import DEFAULT_CARD_TYPE
 from services.token_budget import (
     TokenBudget,
@@ -17,6 +19,8 @@ from services.token_budget import (
     PRIMARY_SYSTEM_MAX_CHARS as _PRIMARY_SYSTEM_MAX_CHARS,
     TOTAL_SYSTEM_MAX_CHARS as _TOTAL_SYSTEM_MAX_CHARS,
 )
+
+logger = logging.getLogger(__name__)
 from services.runtime_bundle import _get_field
 
 
@@ -76,6 +80,7 @@ def _get_behavior_tendency(
     *,
     card_type: str = DEFAULT_CARD_TYPE,
     phase_behaviors: dict | None = None,
+    archetype: str | None = None,
 ) -> str:
     # 角色卡自定义行为规则优先
     if phase_behaviors and isinstance(phase_behaviors, dict):
@@ -101,14 +106,14 @@ def _get_behavior_tendency(
             "melting": "沉浸其中，氛围浓烈",
         }
     else:
-        # 对话陪伴：精简版（控制在70字以内，避免AI注意力分散）
-        phase_tendencies = {
-            "stranger": "刚认识，有好奇但不想越界。礼貌但有距离感，不主动追问私事。",
-            "acquaintance": "有些熟悉，觉得聊得来。愿意分享日常，记住对方提到的事。",
-            "friend": "已是朋友，把对方当特别的人。主动关心，愿意分享烦恼，偶尔有微妙心动。",
-            "lover": "确认关系，有明确依赖和爱意。直接表达想念，用亲昵称呼，偶尔撒娇吃醋。",
-        }
-        # 心情表现：精简版（40字以内）+ 恢复机制
+        # 对话陪伴：原型模板优先，未命中回退到通用硬编码
+        if archetype and archetype in ARCHETYPE_TENDENCIES:
+            phase_tendencies = ARCHETYPE_TENDENCIES[archetype]
+        else:
+            if archetype:
+                logger.warning(f"未知角色原型 archetype={archetype}，回退到默认行为倾向")
+            phase_tendencies = _DEFAULT_TENDENCIES
+        # 心情表现：精简版（40字以内）+ 恢复机制（保持不动）
         mood_modifiers = {
             "cold": "有点冷淡。回答简短，不太想聊。如果对方真诚关心，态度会软化。",
             "angry": "有点生气。说话直接带刺。如果对方道歉或哄，会逐渐消气。",
@@ -168,6 +173,7 @@ def _mode_sections(runtime_bundle: dict[str, Any], character: Any, mode: str) ->
     world_rules = runtime_bundle.get("world_rules") or ""
     scenario = runtime_bundle.get("scenario") or ""
     personality = runtime_bundle.get("personality") or ""
+    life_profile = runtime_bundle.get("life_profile") or ""
     alternate_text = _alternate_samples_text(runtime_bundle.get("alternate_greetings") or [])
     related_text = _related_assets_text(runtime_bundle)
 
@@ -175,11 +181,15 @@ def _mode_sections(runtime_bundle: dict[str, Any], character: Any, mode: str) ->
         sections = [
             (related_text, ""),
             ("【角色底稿】", base_profile),
+        ]
+        if life_profile:
+            sections.append(("【角色人生档案】", life_profile))
+        sections.extend([
             ("【性格与表达风格】", personality),
             ("【当前关系与场景】", scenario),
             ("【世界规则/补充设定】", world_rules),
             ("【示例对话风格参考（注意区分角色与用户的台词）】", examples),
-        ]
+        ])
         if alternate_text:
             sections.append(("", alternate_text))
     elif mode == "scenario":
@@ -201,6 +211,10 @@ def _mode_sections(runtime_bundle: dict[str, Any], character: Any, mode: str) ->
             sections.append(("", related_text))
         sections.extend([
             ("【角色底稿】", base_profile),
+        ])
+        if life_profile:
+            sections.append(("【角色人生档案】", life_profile))
+        sections.extend([
             ("【性格与表达风格】", personality),
             ("【当前关系与剧情场景】", scenario),
             ("【世界规则/补充设定】", world_rules),
@@ -233,8 +247,6 @@ def _append_memory_and_history(
                 "</background_context>"
             )
         })
-        messages.append({"role": "assistant", "content": "好的，我已了解这些背景信息，会在回复中自然地体现。"})
-
     candidate = recent_messages[-recent_message_window:]
 
     if budget is not None:
