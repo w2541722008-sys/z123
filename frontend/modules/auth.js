@@ -34,6 +34,7 @@
        loginTab.classList.remove('active');
        subEl.textContent    = '注册后会持续保存聊天记录和关键记忆，后续体验会更连贯。';
        nickEl.style.display = '';
+       nickEl.classList.remove('d-none');
        submitEl.textContent = '立即注册';
      }
    }
@@ -203,6 +204,7 @@
       document.getElementById('profile-email').textContent = user.email;
       loginBtn.style.display  = 'none';
       logoutBtn.style.display = '';
+      logoutBtn.classList.remove('d-none');
     } else {
       profileHeader.style.display = 'none';
       loginBtn.style.display  = '';

@@ -174,6 +174,7 @@ const ChatStatusPanel = (() => {
     });
 
     panel.style.display = '';
+    panel.classList.remove('d-none');
     const bodyEl2 = document.getElementById('csp-body');
     const arrowEl2 = document.getElementById('csp-arrow');
     if (bodyEl2) bodyEl2.classList.toggle('collapsed', _collapsed);

@@ -57,6 +57,7 @@ function sanitizeCssUrl(url) {
      const featuredSub = featuredChar.subtitle || '';
      const featuredIdx = CHARACTERS.indexOf(featuredChar);
      bannerEl.style.display = '';
+     bannerEl.classList.remove('d-none');
      const safeColor = window.AIFriendShared.sanitizeCssColor(featuredChar.color, '#1a1b30');
      const safeImgSrc = escapeHtml(imgSrc || '');
      const safeIdx = featuredIdx;

@@ -178,6 +178,7 @@ const Chat = (() => {
       storylineEl.textContent = '📖 ' + storylineName;
     } else if (storylineEl) { storylineEl.remove(); }
     barEl.style.display = '';
+    barEl.classList.remove('d-none');
     return { prevAffection, newAffection };
   }
   ChatState.renderStateBar = renderStateBar;

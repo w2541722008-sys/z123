@@ -70,6 +70,7 @@
        const previewText = openingText.length > 200 ? openingText.slice(0, 200).trimEnd() + '…' : openingText;
        openingEl.textContent = previewText;
        openingSection.style.display = '';
+       openingSection.classList.remove('d-none');
      } else {
        openingSection.style.display = 'none';
      }
