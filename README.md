@@ -12,9 +12,9 @@
 ## 技术栈
 
 - 后端：Python 3.10+、FastAPI、Uvicorn、httpx、psycopg2（ThreadedConnectionPool）
-- 数据库：PostgreSQL（Supabase）+ Alembic 迁移（14 个版本）
+- 数据库：PostgreSQL（Supabase）+ Alembic 迁移（16 个版本）
 - 前端：原生 HTML/CSS/JavaScript（IIFE 模块模式）
-- 测试：pytest（1149+ tests）+ Node.js 脚本
+- 测试：pytest（1242+ tests）+ Node.js 脚本
 
 ## 本地开发
 
@@ -39,7 +39,7 @@ pip install -r requirements.txt
 cd backend && python3 -m alembic upgrade head
 ```
 
-当前迁移版本（14 个）：001~014。
+当前迁移版本（16 个）：001~016。
 
 ### 4) 启动后端
 
@@ -78,4 +78,6 @@ bash deploy.sh
 - **角色导入**：[docs/CHARACTER_IMPORT_SOP.md](docs/CHARACTER_IMPORT_SOP.md)
 - **管理后台**：[docs/ADMIN_PANEL_GUIDE.md](docs/ADMIN_PANEL_GUIDE.md)
 - **前端架构**：[docs/FRONTEND_ARCHITECTURE.md](docs/FRONTEND_ARCHITECTURE.md)
+- **数据库备份**：[docs/DATABASE_BACKUP_GUIDE.md](docs/DATABASE_BACKUP_GUIDE.md)
+- **架构决策**：[docs/adr/](docs/adr/)（4 篇 ADR）
 - **部署脚本**：`deploy.sh` / `restart.sh` / `rollback.sh` / `setup_server.sh` / `verify_server.sh`

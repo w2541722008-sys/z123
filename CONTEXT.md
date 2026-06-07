@@ -67,11 +67,11 @@
 **FakeQueryResult**：与 FakeSequenceConn 配合使用，定义模拟查询的返回数据和 fetchone/fetchall 行为。
 
 **测试分层**：
-- `tests/unit/` — 单元测试（30 文件），无需数据库
+- `tests/unit/` — 单元测试（37 文件），无需数据库
 - `tests/services/` — 服务层测试（12 文件）
-- `tests/routers/` — 路由层测试（7 文件）
-- `tests/contracts/` — 契约测试（5 文件）
-- `tests/integration/` — 集成测试（4 文件），需真实数据库
+- `tests/routers/` — 路由层测试（8 文件）
+- `tests/contracts/` — 契约测试（4 文件）
+- `tests/integration/` — 集成测试（3 文件），需真实数据库
 - `tests/regression/` — 回归测试（1 文件）
 - `tests/load/` — 压力测试（1 文件）
 

@@ -19,7 +19,7 @@
 
 ## 数据库
 
-- **Schema 管理**：使用 Alembic 迁移框架（`backend/alembic/versions/`，共 14 个版本）
+- **Schema 管理**：使用 Alembic 迁移框架（`backend/alembic/versions/`，共 16 个版本）
 - **初始化**：`cd backend && python3 -m alembic upgrade head`
 
 ## 历史记录

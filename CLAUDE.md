@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Setup
+# Setup（在项目根目录执行）
 cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
-cp backend/.env.example backend/.env   # 然后编辑 .env 配置 DATABASE_URL、AIFRIEND_API_KEY 等
+cp .env.example .env   # 然后编辑 .env 配置 DATABASE_URL、AIFRIEND_API_KEY 等
 
 # Run dev server
 cd backend && python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
@@ -38,14 +38,14 @@ routers/ → services/ → repositories/ → core/ + constants/
 
 - `backend/main.py` — FastAPI 应用入口，注册所有路由到 `/api`，托管前端静态文件
 - `backend/core/` — 基础设施层：`auth/`（JWT + 缓存回调注入，6 文件子包）、`schemas/`（Pydantic 模型，8 文件子包）、`database.py`（ThreadedConnectionPool）、`config.py`、`exceptions.py`（领域异常）、`character_state_snapshot.py`、`model_adapter.py`（AI 模型适配）、`plan_constants.py`（会员档位常量）
-- `backend/services/` — 业务逻辑层（27 个模块）。核心服务：`chat_send.py`、`chat_stream/`（流式子包，3 文件）、`chat_stream_service.py`（向后兼容 shim）、`chat_query.py`、`chat_retry.py`、`prompt_assembler.py`、`prompt_builder.py`、`runtime_bundle.py`、`token_budget.py`、`character_state.py`、`character_affection.py`、`character_insights_service.py`、`character_session_service.py`、`story_event_service.py`、`memory_service.py`、`state_snapshot.py`、`world_info_service.py`、`password_reset_service.py`、`plan_service.py`、`billing_order_service.py`、`cache_service.py`、`rate_limit.py`、`usage_guard.py`、`circuit_breaker.py`、`health_service.py`、`email.py`、`db_monitor.py`
+- `backend/services/` — 业务逻辑层（26 个模块）。核心服务：`chat_send.py`、`chat_stream/`（流式子包，3 文件）、`chat_query.py`、`chat_retry.py`、`prompt_assembler.py`、`prompt_builder.py`、`runtime_bundle.py`、`token_budget.py`、`character_state.py`、`character_affection.py`、`character_insights_service.py`、`character_session_service.py`、`story_event_service.py`、`memory_service.py`、`state_snapshot.py`、`world_info_service.py`、`password_reset_service.py`、`plan_service.py`、`billing_order_service.py`、`cache_service.py`、`rate_limit.py`、`usage_guard.py`、`circuit_breaker.py`、`health_service.py`、`email.py`、`db_monitor.py`
 - `backend/routers/` — 路由层：`auth.py`、`billing.py`、`characters.py`、`chat/`（包式路由，含 `_route_builders.py`）、`media.py`、`admin/`（按域拆分：`_router.py` + `_helpers.py` + `characters_core.py`、`characters_insights.py`、`characters_memory.py`、`characters_rules_events.py`、`characters_story.py` + `users.py` + `orders.py` + `dashboard.py`）
 - `backend/repositories/` — 纯 SQL 层（14 个模块）：`auth_repository.py`、`billing_repository.py`、`character_repository.py`、`character_admin_memory_repository.py`、`character_admin_story_repository.py`、`character_memory_repository.py`、`character_state_repository.py`、`chat_repository.py`、`story_repository.py`、`user_repository.py`、`admin_audit_repository.py`、`admin_dashboard_repository.py`、`usage_repository.py`、`__init__.py`
-- `backend/constants/` — 枚举常量：`mood.py`（Mood 枚举 + 中英文标签映射）、`story_phase.py`（StoryPhase 枚举 + 标签映射，含 scenario 卡专用语义）、`prompt_templates.py`（AI 提示模板）
+- `backend/constants/` — 枚举常量：`mood.py`（Mood 枚举 + 中英文标签映射）、`story_phase.py`（StoryPhase 枚举 + 标签映射）、`prompt_templates.py`（AI 提示模板）、`affection.py`（好感度等级常量）、`order_status.py`（订单状态枚举）
 - `backend/utils/` — 通用工具：`card_text.py`、`json_utils.py`、`stream_filter.py`
 - `frontend/modules/` — 原生 JS IIFE 模块（用户端聊天 UI，18 个模块）
 - `frontend/admin/js/` — 管理后台 JS 模块（18 个模块）
-- `tests/` — `unit/`（30 文件）、`services/`（12 文件）、`routers/`（8 文件）、`contracts/`（5 文件）、`integration/`（需真实 DB，4 文件）、`regression/`（1 文件）、`load/`（1 文件）
+- `tests/` — `unit/`（37 文件）、`services/`（12 文件）、`routers/`（8 文件）、`contracts/`（4 文件）、`integration/`（需真实 DB，3 文件）、`regression/`（1 文件）、`load/`（1 文件）
 
 ## 协作规则（必须严格遵守）
 
