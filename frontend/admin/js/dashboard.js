@@ -8,7 +8,7 @@
 async function loadDashboard() {
   const box = document.getElementById('dashboard-content');
   if (!box) return;
-  box.innerHTML = '<div class="no-results">加载中…</div>';
+  box.innerHTML = skeletonHtml(2, 4);
   try {
     const [stats, trend, mediaMissing] = await Promise.all([
       AdminAPI.apiFetch(`${AdminAPI.API}/dashboard/stats`),
@@ -56,25 +56,25 @@ function renderDashboard(stats, trend, mediaMissing = {}) {
 
   box.innerHTML = `
     <div class="dashboard-grid">
-      <div class="stat-card purple">
+      <div class="stat-card purple clickable" data-action="switch-system-tab" data-tab="membership" title="点击查看用户管理">
         <div class="stat-icon">👥</div>
         <div class="stat-value">${stats.total_users ?? 0}</div>
         <div class="stat-label">总用户数</div>
         <div class="stat-sub">今日 +${stats.today_new_users ?? 0}</div>
       </div>
-      <div class="stat-card green">
+      <div class="stat-card green clickable" data-action="switch-system-tab" data-tab="membership" title="点击查看会员管理">
         <div class="stat-icon">💰</div>
         <div class="stat-value">${stats.paid_users ?? 0}</div>
         <div class="stat-label">付费用户</div>
         <div class="stat-sub">付费率 ${stats.paid_rate ?? 0}%</div>
       </div>
-      <div class="stat-card blue">
+      <div class="stat-card blue clickable" data-action="switch-system-tab" data-tab="membership" data-scroll="orders" title="点击查看订单管理">
         <div class="stat-icon">📦</div>
         <div class="stat-value">${stats.today_orders ?? 0}</div>
         <div class="stat-label">今日订单</div>
         <div class="stat-sub">¥${((stats.today_revenue || 0) / 100).toFixed(2)} 今日收入</div>
       </div>
-      <div class="stat-card yellow">
+      <div class="stat-card yellow clickable" data-action="switch-system-tab" data-tab="membership" title="即将到期的用户">
         <div class="stat-icon">⏰</div>
         <div class="stat-value">${stats.expiring_soon ?? 0}</div>
         <div class="stat-label">即将到期</div>

@@ -18,8 +18,12 @@ function renderCharListSidebar() {
   }
   if (!chars.length) {
     container.innerHTML = '<div class="empty-state"><div>无匹配角色</div></div>';
+    const countEl = document.getElementById('char-count');
+    if (countEl) countEl.textContent = '0';
     return;
   }
+  const countEl = document.getElementById('char-count');
+  if (countEl) countEl.textContent = chars.length;
   const typeMap = { intimate: '💞对话陪伴', scenario: '🎭剧情沙盒' };
   container.innerHTML = chars.map(c => {
     const typeBadge = typeMap[c.card_type] || c.card_type;
@@ -30,7 +34,7 @@ function renderCharListSidebar() {
     const visBadge = c.is_visible
       ? '<span class="badge badge-visible">可见</span>'
       : '<span class="badge badge-hidden">隐藏</span>';
-    return `<div class="char-item ${c.id === AdminState.currentCharId ? 'active' : ''}" data-action="select-char" data-char-id="${escHtml(String(c.id || ''))}">
+    return `<div class="char-item ${c.id === AdminState.currentCharId ? 'active' : ''}" data-action="select-char" data-char-id="${escHtml(String(c.id || ''))}" tabindex="0">
       <div class="char-name">${escHtml(c.name)}</div>
       <div class="char-meta">
         <span class="${typeCls}">${typeBadge}</span>
@@ -51,6 +55,8 @@ async function loadCharList() {
     }
     if (!chars.length) {
       container.innerHTML = '<div class="empty-state"><div>暂无角色</div></div>';
+      const countEl = document.getElementById('char-count');
+      if (countEl) countEl.textContent = '0';
       return;
     }
     renderCharListSidebar();

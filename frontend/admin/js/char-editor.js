@@ -161,8 +161,8 @@ function makeFieldHtml(fieldId, label, desc, type, val, extraOpts) {
     inputHtml = `<input type="number" id="field-${fieldId}" value="${val ?? 0}" />`;
   } else if (type === 'readonly_textarea') {
     const rows = extraOpts?.rows || 4;
-    inputHtml = `<textarea readonly rows="${rows}" style="opacity:.92;cursor:default;width:100%;background:#0f0f13;border:1px solid #2a2a3a;border-radius:8px;color:#9ca3af;padding:10px 12px;font-size:13px;line-height:1.5;resize:vertical;">${escHtml(String(val ?? ''))}</textarea>`;
-  } else   if (type === 'life_profile') {
+    inputHtml = `<textarea readonly class="field-readonly" rows="${rows}">${escHtml(String(val ?? ''))}</textarea>`;
+  } else if (type === 'life_profile') {
     return renderLifeProfileEditor(val);
   } else if (type === 'phase_behaviors') {
     return renderPhaseBehaviorsEditor(val);
@@ -308,10 +308,10 @@ function renderEditPanel(c) {
     <div class="char-id">ID: ${c.id} &nbsp;|&nbsp; 类型: ${c.card_type || '?'} &nbsp;|&nbsp; 来源: ${escHtml(c.source_path || '未知')}</div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
       <div style="font-size:12px;color:var(--text-dim);">
-        ${isBeginnerMode ? '🎯 新手模式：只显示核心字段' : '🔧 完整模式：显示所有字段'}
+        ${isBeginnerMode ? '新手模式：只显示核心字段' : '完整模式：显示所有字段'}
       </div>
-      <button class="btn btn-ghost btn-sm" data-action="toggle-beginner-mode">
-        ${isBeginnerMode ? '切换到完整模式' : '切换到新手模式'}
+      <button class="mode-toggle ${isBeginnerMode ? 'beginner' : 'advanced'}" data-action="toggle-beginner-mode">
+        <span class="toggle-dot"></span> ${isBeginnerMode ? '🎯 新手模式' : '🔧 完整模式'}
       </button>
     </div>
     ${buildEditGuideHtml(c)}`;
@@ -329,7 +329,8 @@ function renderEditPanel(c) {
       if (!hasCore) continue;
     }
 
-    html += `<div class="section-title">${section.title}</div>`;
+    html += `<div class="section-title" data-action="toggle-section-collapse"><span>${section.title}</span></div>`;
+    html += `<div class="section-content">`;
     for (const field of section.fields) {
       const meta = FIXED_FIELD_META[field];
       if (!meta) continue;
@@ -342,16 +343,19 @@ function renderEditPanel(c) {
       }
       html += makeFieldHtml(field, meta.label, meta.desc, meta.type, c[field] ?? '', meta);
     }
+    html += `</div>`;
   }
 
   // 新手模式：隐藏只读字段
   if (!isBeginnerMode) {
-    html += `<div class="section-title">📎 导入与资源（只读）</div>`;
+    html += `<div class="section-title collapsed" data-action="toggle-section-collapse"><span>📎 导入与资源（只读）</span></div>`;
+    html += `<div class="section-content collapsed">`;
     for (const field of READONLY_SECTION_FIELDS) {
       const meta = READONLY_META[field];
       if (!meta) continue;
       html += makeFieldHtml(field, meta.label, meta.desc, 'readonly_textarea', c[field] ?? '', meta);
     }
+    html += `</div>`;
   }
 
   // runtime_layers 字段（根据 card_type 和模式过滤）
@@ -393,9 +397,8 @@ function renderEditPanel(c) {
   }
 
   if (rlFields.length > 0) {
-    html += `<div class="section-title">🎭 角色核心内容（AI实际看到的设定）
-      <span style="font-size:11px;color:#666;font-weight:400">— 这里才是角色的真正内容</span>
-    </div>`;
+    html += `<div class="section-title" data-action="toggle-section-collapse"><span>🎭 角色核心内容（AI实际看到的设定）</span></div>`;
+    html += `<div class="section-content">`;
 
     for (const rlKey of rlFields) {
       const fullKey = `rl__${rlKey}`;
@@ -410,12 +413,14 @@ function renderEditPanel(c) {
       AdminState.currentRlFields.push(rlKey);
       html += makeFieldHtml(fullKey, label, desc, 'textarea', val, { rows });
     }
+    html += `</div>`;
   }
 
   html += `<div class="save-bar">
     <button class="btn btn-success" data-action="save-char">💾 保存修改</button>
     <button class="btn btn-danger" data-action="delete-current-character">🗑️ 删除角色</button>
     <span id="save-status" class="save-status"></span>
+    <span id="dirty-indicator" class="dirty-indicator d-none">● 有未保存修改</span>
   </div>
   </div>`;
 
@@ -428,7 +433,15 @@ function renderEditPanel(c) {
 
   // 监听编辑面板所有输入变更，标记为未保存
   panel.querySelectorAll('input, textarea, select').forEach(function(el) {
-    el.addEventListener('input', function() { AdminState.isDirty = true; });
-    el.addEventListener('change', function() { AdminState.isDirty = true; });
+    el.addEventListener('input', function() {
+      AdminState.isDirty = true;
+      const dirtyEl = document.getElementById('dirty-indicator');
+      if (dirtyEl) dirtyEl.classList.remove('d-none');
+    });
+    el.addEventListener('change', function() {
+      AdminState.isDirty = true;
+      const dirtyEl = document.getElementById('dirty-indicator');
+      if (dirtyEl) dirtyEl.classList.remove('d-none');
+    });
   });
 }

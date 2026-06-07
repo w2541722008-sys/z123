@@ -1,6 +1,9 @@
 const CHARACTER_ACTION_HANDLERS = {
   'load-char-list': () => loadCharList(),
-  'open-create-char-modal': () => openCreateCharModal(),
+  'open-create-char-modal': () => {
+    openCreateCharModal();
+    _closeMobileSidebar();
+  },
   'close-create-char-modal': () => closeCreateCharModal(),
   'create-character': () => createCharacter(),
   'save-char': () => saveChar(),
@@ -10,10 +13,34 @@ const CHARACTER_ACTION_HANDLERS = {
   'reset-affection-rules': () => resetAffectionRulesEditor(),
   'toggle-beginner-mode': () => toggleBeginnerMode(),
   'hide-guide': () => hideGuide(),
+  'toggle-section-collapse': (trigger) => {
+    const titleEl = trigger.closest('.section-title');
+    if (!titleEl) return;
+    titleEl.classList.toggle('collapsed');
+    const content = titleEl.nextElementSibling;
+    if (content && content.classList.contains('section-content')) {
+      content.classList.toggle('collapsed');
+    }
+  },
   'select-char': (trigger) => {
-    if (trigger.dataset.charId) selectChar(trigger.dataset.charId);
+    if (trigger.dataset.charId) {
+      selectChar(trigger.dataset.charId);
+      _closeMobileSidebar();
+    }
+  },
+  'toggle-mobile-sidebar': () => {
+    const sidebar = document.querySelector('.sidebar');
+    const backdrop = document.getElementById('sidebar-backdrop');
+    if (sidebar) sidebar.classList.toggle('mobile-open');
+    if (backdrop) backdrop.classList.toggle('active');
   },
 };
+
+/** 关闭移动端侧边栏 */
+function _closeMobileSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  if (sidebar) sidebar.classList.remove('mobile-open');
+}
 
 const ADVANCED_ACTION_HANDLERS = {
   'open-memory-modal': () => openMemoryModal(),
@@ -67,14 +94,32 @@ const MEMBERSHIP_ACTION_HANDLERS = {
   'open-order-detail': (trigger) => openOrderDetail(trigger.dataset.orderId || ''),
   'export-users-csv': () => exportUsersCSV(),
   'export-orders-csv': () => exportOrdersCSV(),
+  'switch-membership-subtab': (trigger) => switchMembershipSubtab(trigger.dataset.subTab || 'users'),
 };
 
 const DASHBOARD_ACTION_HANDLERS = {
   'load-dashboard': () => loadDashboard(),
   'load-media-missing': (trigger) => loadMediaMissing((trigger?.dataset?.refresh || 'false') === 'true'),
   'load-audit-logs': () => loadAuditLogs(),
+  'clear-audit-date-filter': () => {
+    const from = document.getElementById('audit-date-from');
+    const to = document.getElementById('audit-date-to');
+    if (from) from.value = '';
+    if (to) to.value = '';
+    AdminState.auditPage = 1;
+    loadAuditLogs();
+  },
   'admin-reload': () => location.reload(),
-  'switch-system-tab': (trigger) => switchSystemTab(trigger.dataset.tab || 'dashboard'),
+  'switch-system-tab': (trigger) => {
+    switchSystemTab(trigger.dataset.tab || 'dashboard');
+    // 支持跳转到页面内的特定区域（如订单区）
+    if (trigger.dataset.scroll) {
+      setTimeout(() => {
+        const target = document.getElementById(trigger.dataset.scroll + '-search');
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    }
+  },
 };
 
 const ACTION_HANDLERS = {

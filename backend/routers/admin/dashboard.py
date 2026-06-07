@@ -91,6 +91,8 @@ def admin_dashboard_trend(days: int = 7, conn: ConnType = Depends(get_db_dep)) -
 def admin_list_audit_logs(
     action: str = "",
     target_type: str = "",
+    date_from: str = "",
+    date_to: str = "",
     page: int = 1,
     limit: int = 50,
     conn: ConnType = Depends(get_db_dep),
@@ -101,13 +103,17 @@ def admin_list_audit_logs(
     参数：
         action: 按操作类型筛选（delete_user/edit_user/update_plan/batch_update 等）
         target_type: 按对象类型筛选（user/order/character）
+        date_from: 起始日期（YYYY-MM-DD）
+        date_to: 结束日期（YYYY-MM-DD）
         page: 页码
         limit: 每页条数（最多 200）
     """
     _validate_pagination_params(page, limit, max_limit=200)
     _, safe_limit = _normalize_pagination(page, limit, max_limit=200)
     result = dashboard_repo.list_audit_logs(
-        conn, action=action, target_type=target_type, page=page, limit=limit,
+        conn, action=action, target_type=target_type,
+        date_from=date_from, date_to=date_to,
+        page=page, limit=limit,
     )
 
     return {

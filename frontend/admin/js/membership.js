@@ -12,8 +12,8 @@ async function loadMembershipData() {
   const usersWrap = document.getElementById('membership-users-table-wrap');
   const ordersWrap = document.getElementById('membership-orders-table-wrap');
   if (!usersWrap || !ordersWrap) return;
-  usersWrap.innerHTML = '<div class="no-results">加载中…</div>';
-  ordersWrap.innerHTML = '<div class="no-results">加载中…</div>';
+  usersWrap.innerHTML = skeletonHtml(0, 5);
+  ordersWrap.innerHTML = skeletonHtml(0, 5);
 
   const userSearch = document.getElementById('user-search')?.value || '';
   const userPlan = document.getElementById('user-plan-filter')?.value || '';
@@ -50,6 +50,20 @@ function filterOrders() {
   loadMembershipData();
 }
 
+// ============================================================
+// 子标签页切换
+// ============================================================
+function switchMembershipSubtab(tab) {
+  document.querySelectorAll('.sub-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.subTab === tab);
+  });
+  document.querySelectorAll('.sub-tab-panel').forEach(panel => {
+    panel.style.display = 'none';
+  });
+  const target = document.getElementById('sub-tab-' + tab);
+  if (target) target.style.display = '';
+}
+
 // 防抖版本的搜索函数（400ms 延迟，避免每敲一个字符就请求一次）
 const debouncedFilterUsers = debounce(filterUsers, 400);
 const debouncedFilterOrders = debounce(filterOrders, 400);
@@ -79,6 +93,7 @@ function renderMembershipUsers() {
   }
 
   box.innerHTML = `
+    <div class="table-scroll">
     <table class="user-table">
       <thead>
         <tr>
@@ -110,7 +125,8 @@ function renderMembershipUsers() {
           </tr>
         `).join('')}
       </tbody>
-    </table>`;
+    </table>
+    </div>`;
 
   if (pagerEl) renderPager(pagerEl, page, totalPages, total, (p) => { AdminState.membershipData.usersPage = p; loadMembershipData(); });
 }
@@ -143,6 +159,7 @@ function renderMembershipOrders() {
   const statusCls = { pending: 'badge-free', paid: 'badge-vip', expired: 'badge-hidden', closed: 'badge-hidden', refunded: 'badge-svip' };
 
   box.innerHTML = `
+    <div class="table-scroll">
     <table class="order-table">
       <thead>
         <tr>
@@ -173,7 +190,8 @@ function renderMembershipOrders() {
           </tr>
         `).join('')}
       </tbody>
-    </table>`;
+    </table>
+    </div>`;
 
   if (pagerEl) renderPager(pagerEl, page, totalPages, total, (p) => { AdminState.membershipData.ordersPage = p; loadMembershipData(); });
 }
@@ -243,9 +261,16 @@ async function openUserDetail(userId) {
   if (!body) return;
   body.innerHTML = '<div class="no-results">加载中…</div>';
   document.getElementById('user-detail-modal').style.display = 'flex';
-  document.getElementById('user-detail-delete-btn').onclick = () => confirmDeleteUser(userId);
+  // 通过 data 属性传递用户信息给事件委托处理器
+  const deleteBtn = document.getElementById('user-detail-delete-btn');
+  if (deleteBtn) {
+    deleteBtn.dataset.userId = String(userId);
+    deleteBtn.dataset.userEmail = '';
+  }
   try {
     const u = await AdminAPI.apiFetch(`${AdminAPI.API}/users/${userId}`);
+    const deleteBtn = document.getElementById('user-detail-delete-btn');
+    if (deleteBtn) deleteBtn.dataset.userEmail = u.email || '';
     body.innerHTML = `
       <div class="detail-grid">
         <div class="dg-item"><div class="dg-label">用户 ID</div><div class="dg-value">#${u.id}</div></div>

@@ -6,15 +6,29 @@
  */
 
 /**
- * 显示底部 Toast 提示
+ * 显示底部 Toast 提示（支持多条堆叠）
  * @param {string} msg - 提示文案
  * @param {number} duration - 显示时长（毫秒），默认 2500
  */
 function toast(msg, duration = 2500) {
-  const el = document.getElementById('toast');
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const el = document.createElement('div');
+  el.className = 'toast-item';
   el.textContent = msg;
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), duration);
+  container.appendChild(el);
+  // 触发 reflow 后添加 show class 实现渐入动画
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => {
+    el.classList.remove('show');
+    el.addEventListener('transitionend', () => el.remove(), { once: true });
+    // 保底移除（防止 transitionend 不触发）
+    setTimeout(() => { if (el.parentNode) el.remove(); }, 500);
+  }, duration);
 }
 
 /**
@@ -216,4 +230,21 @@ function debounce(fn, delay = 400) {
     clearTimeout(timer);
     timer = setTimeout(() => fn.apply(this, args), delay);
   };
+}
+
+/**
+ * 生成骨架屏 HTML
+ * @param {number} cards - 骨架卡片数量，默认 0
+ * @param {number} lines - 骨架行数，默认 3
+ * @returns {string}
+ */
+function skeletonHtml(cards = 0, lines = 3) {
+  let html = '';
+  for (let i = 0; i < cards; i++) {
+    html += '<div class="skeleton skeleton-card" style="margin-bottom:14px"></div>';
+  }
+  for (let i = 0; i < lines; i++) {
+    html += `<div class="skeleton skeleton-line${i === lines - 1 ? ' short' : ''}"></div>`;
+  }
+  return html;
 }

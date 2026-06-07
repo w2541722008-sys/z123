@@ -158,10 +158,16 @@ def list_audit_logs(
     *,
     action: str = "",
     target_type: str = "",
+    date_from: str = "",
+    date_to: str = "",
     page: int = 1,
     limit: int = 50,
 ) -> dict[str, Any]:
-    """返回分页审计日志列表，支持按操作类型和对象类型筛选。
+    """返回分页审计日志列表，支持按操作类型、对象类型和时间范围筛选。
+
+    参数：
+        date_from: 起始日期（YYYY-MM-DD），含当天
+        date_to: 结束日期（YYYY-MM-DD），含当天
 
     返回 {"total": int, "rows": list[dict]}，分页和序列化由调用方处理。
     """
@@ -174,6 +180,12 @@ def list_audit_logs(
     if target_type:
         conditions.append("target_type = %s")
         params.append(target_type)
+    if date_from:
+        conditions.append("created_at >= %s::date")
+        params.append(date_from)
+    if date_to:
+        conditions.append("created_at < (%s::date + interval '1 day')")
+        params.append(date_to)
 
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 

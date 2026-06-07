@@ -10,11 +10,17 @@ async function loadAuditLogs() {
   const pagerEl = document.getElementById('audit-pager');
   const countLabel = document.getElementById('audit-count-label');
   if (!box) return;
-  box.innerHTML = '<div class="no-results">加载中…</div>';
+  box.innerHTML = skeletonHtml(0, 4);
 
   const action = document.getElementById('audit-action-filter')?.value || '';
+  const dateFrom = document.getElementById('audit-date-from')?.value || '';
+  const dateTo = document.getElementById('audit-date-to')?.value || '';
   try {
-    const res = await AdminAPI.apiFetch(`${AdminAPI.API}/audit-logs?action=${encodeURIComponent(action)}&page=${AdminState.auditPage}&limit=50`);
+    const params = new URLSearchParams({ page: String(AdminState.auditPage), limit: '50' });
+    if (action) params.set('action', action);
+    if (dateFrom) params.set('date_from', dateFrom);
+    if (dateTo) params.set('date_to', dateTo);
+    const res = await AdminAPI.apiFetch(`${AdminAPI.API}/audit-logs?${params.toString()}`);
     const logs = res.logs || [];
     const total = res.total || 0;
     const totalPages = Math.ceil(total / 50);

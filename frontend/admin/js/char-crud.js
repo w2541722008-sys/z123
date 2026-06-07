@@ -1,4 +1,23 @@
+/** 显示字段内联错误 */
+function _showFieldError(fieldId, message) {
+  const el = document.getElementById(fieldId);
+  if (!el) { toast(message); return; }
+  const group = el.closest('.form-group');
+  if (group) {
+    group.classList.add('has-error');
+    const errDiv = document.createElement('div');
+    errDiv.className = 'form-error-msg';
+    errDiv.textContent = message;
+    group.appendChild(errDiv);
+  }
+  el.focus();
+  toast(message);
+}
+
 function openCreateCharModal() {
+  // 清除所有之前的验证错误
+  document.querySelectorAll('#create-char-modal .form-group.has-error').forEach(el => el.classList.remove('has-error'));
+  document.querySelectorAll('#create-char-modal .form-error-msg').forEach(el => el.remove());
   document.getElementById('new-char-id').value = '';
   document.getElementById('new-char-name').value = '';
   document.getElementById('new-char-abbr').value = '';
@@ -34,6 +53,10 @@ function closeCreateCharModal() {
 }
 
 async function createCharacter() {
+  // 清除所有之前的验证错误
+  document.querySelectorAll('#create-char-modal .form-group.has-error').forEach(el => el.classList.remove('has-error'));
+  document.querySelectorAll('#create-char-modal .form-error-msg').forEach(el => el.remove());
+
   const id = document.getElementById('new-char-id').value.trim();
   const name = document.getElementById('new-char-name').value.trim();
   const abbr = document.getElementById('new-char-abbr').value.trim();
@@ -51,19 +74,19 @@ async function createCharacter() {
   const isVisible = document.getElementById('new-char-visible').checked ? 1 : 0;
 
   if (!id) {
-    toast('请输入角色ID');
+    _showFieldError('new-char-id', '请输入角色ID');
     return;
   }
   if (!name) {
-    toast('请输入角色名');
+    _showFieldError('new-char-name', '请输入角色名');
     return;
   }
   if (!systemPrompt) {
-    toast('请输入主指令（System Prompt）');
+    _showFieldError('new-char-system-prompt', '请输入主指令（System Prompt）');
     return;
   }
   if (!/^[a-zA-Z0-9_]+$/.test(id)) {
-    toast('角色ID只能包含英文、数字和下划线');
+    _showFieldError('new-char-id', '角色ID只能包含英文、数字和下划线');
     return;
   }
 
@@ -193,7 +216,7 @@ async function saveChar() {
   const statusEl = document.getElementById('save-status');
   const fabLabel = document.getElementById('fab-label');
   if (statusEl) { statusEl.textContent = '保存中...'; statusEl.className = 'save-status'; }
-  if (fabLabel) { fabLabel.textContent = '保存中…'; fabLabel.style.color = '#888'; }
+  if (fabLabel) { fabLabel.textContent = '保存中…'; fabLabel.className = 'fab-label is-saving'; }
 
   try {
     await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}`, {
@@ -205,7 +228,9 @@ async function saveChar() {
     AdminState.isDirty = false;
     AdminState.isSaving = false;
     if (statusEl) { statusEl.textContent = '✅ 保存成功！'; statusEl.className = 'save-status ok'; }
-    if (fabLabel) { fabLabel.textContent = '✅ 已保存'; fabLabel.style.color = '#4ade80'; setTimeout(()=>{ fabLabel.textContent='保存'; fabLabel.style.color='#c084fc'; }, 2500); }
+    const dirtyEl = document.getElementById('dirty-indicator');
+    if (dirtyEl) dirtyEl.classList.add('d-none');
+    if (fabLabel) { fabLabel.textContent = '✅ 已保存'; fabLabel.className = 'fab-label is-success'; setTimeout(()=>{ fabLabel.textContent='保存'; fabLabel.className='fab-label'; }, 2500); }
     toast('保存成功！修改立即生效（无需重启）');
     loadCharList();
     loadCharacterSummary();
@@ -213,7 +238,7 @@ async function saveChar() {
   } catch (e) {
     AdminState.isSaving = false;
     if (statusEl) { statusEl.textContent = `❌ 保存失败：${e.message}`; statusEl.className = 'save-status err'; }
-    if (fabLabel) { fabLabel.textContent = '❌ 失败'; fabLabel.style.color = '#f87171'; setTimeout(()=>{ fabLabel.textContent='保存'; fabLabel.style.color='#c084fc'; }, 3000); }
+    if (fabLabel) { fabLabel.textContent = '❌ 失败'; fabLabel.className = 'fab-label is-error'; setTimeout(()=>{ fabLabel.textContent='保存'; fabLabel.className='fab-label'; }, 3000); }
     toast('保存失败：' + e.message);
   }
 }
