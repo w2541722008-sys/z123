@@ -158,6 +158,9 @@ def _postprocess_regenerate_or_continue_result(
         yield format_error_event("保存失败，请稍后再试")
         return
 
+    # 触发后台记忆摘要刷新（与主聊天流保持一致）
+    run_memory_summary_background(user_id, character_id)
+
     yield format_done_event(
         _build_stream_done_payload(
             reply=f"{base_reply}{final_text}" if is_append else final_text,

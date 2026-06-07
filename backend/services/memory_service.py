@@ -15,7 +15,7 @@ import re
 import threading
 from typing import Any
 
-from core.config import RECENT_MESSAGE_WINDOW, SUMMARY_MAX_TOKENS, SUMMARY_TRIGGER_COUNT, logger, utc_now
+from core.config import RECENT_MESSAGE_WINDOW, SUMMARY_MAX_THREADS, SUMMARY_MAX_TOKENS, SUMMARY_TRIGGER_COUNT, logger, utc_now
 from repositories import chat_repository as chat_repo
 from core.database import ConnType, get_conn
 from core.model_adapter import get_ai_config, request_chat_completion
@@ -44,7 +44,7 @@ _SUMMARY_SECTION_LIMITS: dict[str, int] = {
 }
 
 _PERSISTENT_KEYS = {"profile", "relationship"}
-_PERSISTENT_PRESERVE_SLOTS = 3
+_PERSISTENT_PRESERVE_SLOTS = 1
 
 _SUMMARY_SECTION_ALIASES: dict[str, str] = {
     "用户画像": "profile",
@@ -59,7 +59,7 @@ _SUMMARY_SECTION_ALIASES: dict[str, str] = {
 # 并发控制
 _SUMMARY_JOB_LOCK = threading.Lock()
 _SUMMARY_RUNNING_KEYS: set[tuple[int, str]] = set()
-_MAX_SUMMARY_THREADS = threading.Semaphore(5)
+_MAX_SUMMARY_THREADS = threading.Semaphore(SUMMARY_MAX_THREADS)
 
 
 # ============================================================
@@ -433,7 +433,8 @@ def build_memory_summary_messages(
 4. 只保留未来会影响互动的长期信息，不写流水账。
 5. "待跟进事项"只记录后续值得主动提起、兑现承诺或继续推进的话题，不要把普通寒暄塞进去。
 6. 你在整理时必须参考当前运行时设定，尤其要区分角色关系、剧情状态、世界规则，不要把不稳定的临时台词误写成长期事实。
-7. 不编造，不解释过程，不输出多余文字。"""
+7. 如果发现旧记忆中的信息已经过时或被新信息取代（例如用户换了工作、改了名字、关系阶段变化），直接输出更新后的版本，不要再保留旧信息。
+8. 不编造，不解释过程，不输出多余文字。"""
 
     user_prompt = f"""当前角色：{_get_field(character, 'name', '未命名角色')}
 当前已有长期记忆：
@@ -498,9 +499,12 @@ def refresh_memory_summary(
 def run_memory_summary_background(
     user_id: int | str,
     character_id: str,
-    character_row_data: dict,
+    character_row_data: dict = None,
 ) -> None:
-    """后台异步刷新摘要（线程池控制并发）。"""
+    """后台异步刷新摘要（线程池控制并发）。
+
+    character_row_data 可选：未提供时在后台线程内自行从 DB 获取。
+    """
     if not _claim_summary_job(user_id, character_id):
         logger.info("跳过重复记忆摘要任务 user_id=%s character_id=%s", user_id, character_id)
         return
@@ -521,7 +525,7 @@ def run_memory_summary_background(
     def target():
         acquired = _MAX_SUMMARY_THREADS.acquire(blocking=False)
         if not acquired:
-            logger.warning("摘要线程已满(%d)，跳过 user_id=%s character_id=%s", 5, user_id, character_id)
+            logger.warning("摘要线程已满(%d)，跳过 user_id=%s character_id=%s", SUMMARY_MAX_THREADS, user_id, character_id)
             _release_summary_job(user_id, character_id)
             return
         conn = None
@@ -529,7 +533,16 @@ def run_memory_summary_background(
             conn = get_conn()
             if not should_refresh_summary(conn, user_id, character_id):
                 return
-            refresh_memory_summary(conn, user_id, character_id, character_row_data)
+            char_data = character_row_data
+            if char_data is None:
+                char_data = conn.execute(
+                    "SELECT * FROM characters WHERE id = %s AND is_visible = 1",
+                    (character_id,),
+                ).fetchone()
+                if not char_data:
+                    logger.warning("后台记忆摘要：角色不存在 character_id=%s", character_id)
+                    return
+            refresh_memory_summary(conn, user_id, character_id, char_data)
         except Exception as e:
             if conn is not None:
                 try:

@@ -137,13 +137,16 @@ logger = logging.getLogger("aifriend")
 # ============================================================
 # 触发摘要生成的消息数量阈值
 # 当未摘要的消息超过这个数量时，会触发后台摘要生成
-SUMMARY_TRIGGER_COUNT = 24
+SUMMARY_TRIGGER_COUNT = _int_env("SUMMARY_TRIGGER_COUNT", 24, minimum=8, maximum=100)
 
 # 摘要生成的最大 token 数（控制摘要长度）
-SUMMARY_MAX_TOKENS = 500
+SUMMARY_MAX_TOKENS = _int_env("SUMMARY_MAX_TOKENS", 500, minimum=100, maximum=2000)
 
 # 最近消息窗口大小（用于 prompt 组装时取最近 N 条消息）
-RECENT_MESSAGE_WINDOW = 12
+RECENT_MESSAGE_WINDOW = _int_env("RECENT_MESSAGE_WINDOW", 12, minimum=4, maximum=50)
+
+# 后台摘要线程池最大并发数
+SUMMARY_MAX_THREADS = _int_env("SUMMARY_MAX_THREADS", 5, minimum=1, maximum=20)
 
 
 # ============================================================
