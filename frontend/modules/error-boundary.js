@@ -5,7 +5,6 @@
  *   - window.onerror：捕获运行时异常
  *   - unhandledrejection：捕获未处理的 Promise 异常
  *   - online/offline：网络状态变化提示
- *   - SSE 断连自动重连（指数退避，最多 3 次）
  *
  * 此模块必须在所有其他业务模块之前加载。
  */

@@ -193,7 +193,7 @@ const Chat = (() => {
   /* ── 游客额度 ────────────────────────────────────────── */
   function renderGuestQuotaBar(quota) {
     let _quota = quota;
-    if (Auth.isLoggedIn()) { const bar = document.getElementById('guest-trial-bar'); if (bar) bar.style.display = 'none'; return; }
+    if (Auth.isLoggedIn()) { const bar = document.getElementById('guest-trial-bar'); if (bar) bar.style.display = 'none'; const input = document.getElementById('chat-input'); if (input) { input.disabled = false; input.placeholder = _resolveInputPlaceholder(); } const sendBtn = document.getElementById('send-btn'); if (sendBtn) sendBtn.disabled = false; return; }
     ChatState.guestQuota = _quota || ChatState.guestQuota;
     let bar = document.getElementById('guest-trial-bar');
     if (!bar) {
@@ -210,6 +210,13 @@ const Chat = (() => {
     const statusClass = statusText.includes('已用完') ? 'exhausted' : (statusText.includes('不多') ? 'warning' : 'ok');
     bar.style.display = '';
     bar.innerHTML = `<div class="trial-copy"><span class="trial-label">游客体验额度</span><span class="trial-status ${statusClass}">${escapeHtml(statusText)}</span></div><div class="trial-meter"><span style="width:${remainingPercent}%"></span></div><button class="trial-login-btn" data-action="open-login">登录保存记录</button>`;
+
+    // 额度耗尽时禁用输入，登录后可恢复
+    const input = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+    const exhausted = statusText.includes('已用完');
+    if (input) { input.disabled = exhausted; input.placeholder = exhausted ? '今日额度已用完，请登录后继续聊天' : _resolveInputPlaceholder(); }
+    if (sendBtn) sendBtn.disabled = exhausted;
   }
 
   async function refreshGuestQuota() {
@@ -236,6 +243,23 @@ const Chat = (() => {
       rawName: ChatState.currentChar.name || '',
       sign: ChatState.currentChar.sign || ChatState.currentChar.custom_signature || ChatState.currentChar.subtitle || '',
     };
+  }
+
+  /** 根据角色人设中的代词确定输入框 placeholder */
+  function _resolveInputPlaceholder() {
+    var char = ChatState.currentChar;
+    if (!char) return '和 TA 说说话……';
+    var desc = (char.description || '') + (char.life_profile_json || '');
+    var sheCount = (desc.match(/她/g) || []).length;
+    var heCount = (desc.match(/他/g) || []).length;
+    if (sheCount > heCount) return '和她说说话……';
+    if (heCount > sheCount) return '和他说说话……';
+    return '和 TA 说说话……';
+  }
+
+  function _setInputPlaceholder(text) {
+    var input = document.getElementById('chat-input');
+    if (input && !input.disabled) input.placeholder = text || _resolveInputPlaceholder();
   }
 
   function syncCharacterInList(updatedChar) {
@@ -344,6 +368,7 @@ const Chat = (() => {
     ChatState.shownEventIds.clear();
     AppState.setLastCharacterId(ChatState.currentChar.id);
     R.updateChatHeader(ChatState.currentChar);
+    _setInputPlaceholder();
     document.getElementById('chat-messages').innerHTML = '';
     initSmartScroll();
     R.appendDateDivider(document.getElementById('chat-messages'));
@@ -421,6 +446,12 @@ const Chat = (() => {
   async function send() {
     if (ChatState.isSending) return;
     if (!ChatState.currentChar) return;
+    // 游客额度已用完，直接引导登录而非尝试发送
+    if (!Auth.isLoggedIn() && ChatState.guestQuota && ChatState.guestQuota.status_text === '额度已用完') {
+      UI.toast('今日游客体验额度已用完，登录后可继续聊天', 'warn', 3200);
+      setTimeout(() => Auth.openLogin(), 800);
+      return;
+    }
     const input = document.getElementById('chat-input');
     const text = input.value.trim();
     if (!text) return;

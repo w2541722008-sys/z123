@@ -21,7 +21,8 @@ const ChatActions = ((ChatState) => {
 
   /* ── Regenerate ─────────────────────────────────────── */
   async function regenerateMessage(messageId, rowEl, bubbleEl) {
-    if (ChatState.isSending || !Auth.isLoggedIn()) return;
+    if (ChatState.isSending) return;
+    if (!Auth.isLoggedIn()) { UI.toast('请登录后使用', 'warn'); return; }
     const buttons = S.beginMessageAction(rowEl, { loading: 'regenerate' });
     let aiText = '';
     try {
@@ -52,7 +53,8 @@ const ChatActions = ((ChatState) => {
 
   /* ── Continue ───────────────────────────────────────── */
   async function continueMessage(messageId, rowEl, bubbleEl) {
-    if (ChatState.isSending || !Auth.isLoggedIn()) return;
+    if (ChatState.isSending) return;
+    if (!Auth.isLoggedIn()) { UI.toast('请登录后使用', 'warn'); return; }
     const buttons = S.beginMessageAction(rowEl, { loading: 'continue', showTypingBubble: true, hideActions: true });
     let appendedText = '';
     let newBubbleEl = null;

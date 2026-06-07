@@ -96,21 +96,23 @@
       return;
     }
 
-    API.getHistory(pendingChar.id).then(function(result) {
-      var messages = (result && result.messages) || [];
+    // 并行查询历史和开场白，减少等待时间
+    Promise.all([
+      API.getHistory(pendingChar.id).catch(function() { return null; }),
+      API.getGreetings(pendingChar.id).catch(function() { return null; })
+    ]).then(function(_ref) {
+      var historyResult = _ref[0];
+      var greetResult = _ref[1];
+      var messages = (historyResult && historyResult.messages) || [];
       if (messages.length > 0) {
         Chat.enterChat(pendingChar);
       } else {
-        API.getGreetings(pendingChar.id).then(function(greetResult) {
-          var greetings = (greetResult && greetResult.greetings) || [];
-          if (greetings.length > 1) {
-            GreetingSelect.open(pendingChar, greetings);
-          } else {
-            Chat.enterChat(pendingChar);
-          }
-        }).catch(function() {
+        var greetings = (greetResult && greetResult.greetings) || [];
+        if (greetings.length > 1) {
+          GreetingSelect.open(pendingChar, greetings);
+        } else {
           Chat.enterChat(pendingChar);
-        });
+        }
       }
     }).catch(function() {
       Chat.enterChat(pendingChar);
