@@ -102,6 +102,7 @@ function validateJsonString(s, label) {
 
 /**
  * 渲染分页器到指定容器
+ * 支持省略号机制：始终显示首页/尾页，当前页前后各 2 页，其余用 ...
  * @param {HTMLElement} container - 分页器容器
  * @param {number} page - 当前页码
  * @param {number} totalPages - 总页数
@@ -110,8 +111,21 @@ function validateJsonString(s, label) {
  */
 function renderPager(container, page, totalPages, total, onPageChange) {
   if (!container) return;
+
+  // 生成带省略号的页码序列
   const pages = [];
-  for (let i = 1; i <= Math.min(totalPages, 7); i++) pages.push(i);
+  const showPages = new Set([1, totalPages]);
+  for (let i = Math.max(1, page - 2); i <= Math.min(totalPages, page + 2); i++) {
+    showPages.add(i);
+  }
+  const sorted = Array.from(showPages).sort((a, b) => a - b);
+  let lastPage = 0;
+  for (const p of sorted) {
+    if (p - lastPage > 1) pages.push('...');
+    pages.push(p);
+    lastPage = p;
+  }
+
   if (!container.dataset.pagerBound) {
     container.addEventListener('click', (event) => {
       const btn = event.target.closest('.pager-btn[data-page]');
@@ -129,12 +143,18 @@ function renderPager(container, page, totalPages, total, onPageChange) {
     return `<button class="pager-btn ${active ? 'active' : ''}" data-page="${safeTarget}" ${disabled ? 'disabled' : ''}>${label}</button>`;
   };
 
+  const pageButtons = pages.map(p =>
+    p === '...'
+      ? '<span class="pager-ellipsis">…</span>'
+      : makeBtn(String(p), p, false, p === page)
+  ).join('');
+
   container.innerHTML = `
     <div class="pager-info">第 ${page} / ${totalPages} 页，共 ${total} 条</div>
     <div class="pager-controls">
       ${makeBtn('«', 1, page === 1)}
       ${makeBtn('‹', page - 1, page === 1)}
-      ${pages.map(p => makeBtn(String(p), p, false, p === page)).join('')}
+      ${pageButtons}
       ${makeBtn('›', page + 1, page >= totalPages)}
       ${makeBtn('»', totalPages, page >= totalPages)}
     </div>`;

@@ -121,6 +121,13 @@ async function saveChar() {
     return;
   }
 
+  // 防止重复提交
+  if (AdminState.isSaving) {
+    toast('正在保存中，请稍等…');
+    return;
+  }
+  AdminState.isSaving = true;
+
   // 必填项校验
   const requiredFields = [
     { id: 'field-name', label: '角色名' },
@@ -139,6 +146,7 @@ async function saveChar() {
     }
   }
   if (missing.length > 0) {
+    AdminState.isSaving = false;
     toast(`❌ 还有 ${missing.length} 个必填项未填写：${missing.join('、')}`);
     return;
   }
@@ -177,6 +185,7 @@ async function saveChar() {
       updates[`rl__${rlKey}`] = el.value;
     }
   } catch (e) {
+    AdminState.isSaving = false;
     toast(e.message || String(e));
     return;
   }
@@ -194,6 +203,7 @@ async function saveChar() {
     const refreshed = await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}`);
     AdminState.currentCharData = normalizeCharacterDetail(refreshed);
     AdminState.isDirty = false;
+    AdminState.isSaving = false;
     if (statusEl) { statusEl.textContent = '✅ 保存成功！'; statusEl.className = 'save-status ok'; }
     if (fabLabel) { fabLabel.textContent = '✅ 已保存'; fabLabel.style.color = '#4ade80'; setTimeout(()=>{ fabLabel.textContent='保存'; fabLabel.style.color='#c084fc'; }, 2500); }
     toast('保存成功！修改立即生效（无需重启）');
@@ -201,6 +211,7 @@ async function saveChar() {
     loadCharacterSummary();
     loadPromptPreview();
   } catch (e) {
+    AdminState.isSaving = false;
     if (statusEl) { statusEl.textContent = `❌ 保存失败：${e.message}`; statusEl.className = 'save-status err'; }
     if (fabLabel) { fabLabel.textContent = '❌ 失败'; fabLabel.style.color = '#f87171'; setTimeout(()=>{ fabLabel.textContent='保存'; fabLabel.style.color='#c084fc'; }, 3000); }
     toast('保存失败：' + e.message);

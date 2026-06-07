@@ -409,6 +409,7 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
 .pager-btn:hover:not(:disabled) { background: var(--border); color: var(--text-primary); }
 .pager-btn:disabled { opacity: .4; cursor: not-allowed; }
 .pager-btn.active { background: var(--accent-bg); border-color: var(--accent-light); color: var(--accent-light); }
+.pager-ellipsis { padding: 6px 8px; font-size: 12px; color: var(--text-dim); user-select: none; }
 .pager-pages { display: flex; gap: 4px; }
 
 /* ---- 用户选择 checkbox ---- */
@@ -435,9 +436,14 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
 .stat-card.yellow .stat-value { color: #fbbf24; }
 .dashboard-section { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-xl); padding: 18px; margin-bottom: 16px; }
 .dashboard-section h3 { font-size: 14px; font-weight: 700; margin-bottom: 14px; color: var(--text-primary); }
-.trend-chart { display: flex; align-items: flex-end; gap: 8px; height: 100px; padding: 8px 0; }
+.trend-chart { display: flex; align-items: flex-end; gap: 8px; height: 80px; padding: 8px 0; }
 .trend-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; }
+.trend-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.trend-metric { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.trend-metric-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; font-weight: 500; }
 .trend-bar { width: 100%; background: linear-gradient(to top, var(--accent), var(--accent-light)); border-radius: 4px 4px 0 0; min-height: 4px; transition: height .3s; }
+.trend-bar-green { background: linear-gradient(to top, #059669, #4ade80); }
+.trend-bar-yellow { background: linear-gradient(to top, #d97706, #fbbf24); }
 .trend-bar.inactive { background: var(--border); }
 .trend-label { font-size: 10px; color: var(--text-faint); white-space: nowrap; }
 .trend-value { font-size: 10px; color: var(--text-secondary); }

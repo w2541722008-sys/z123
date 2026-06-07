@@ -33,6 +33,7 @@ _ADMIN_EDITABLE_FIELDS = {
     "avatar_url",
     "cover_url",
     "phase_behaviors_json",
+    "life_profile_json",
 }
 
 

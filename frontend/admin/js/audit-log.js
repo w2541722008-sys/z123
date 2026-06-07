@@ -26,7 +26,16 @@ async function loadAuditLogs() {
       return;
     }
 
-    const actionTag = { delete_user: ['delete', '删除用户'], edit_user: ['edit', '编辑用户'], update_plan: ['edit', '修改档位'], batch_update: ['batch', '批量操作'], create: ['create', '创建'] };
+    const actionTag = {
+      delete_user: ['delete', '删除用户'],
+      edit_user: ['edit', '编辑用户'],
+      update_user_plan: ['edit', '修改档位'],
+      batch_update: ['batch', '批量操作'],
+      create_character: ['create', '创建角色'],
+      update_character: ['edit', '更新角色'],
+      delete_character: ['delete', '删除角色'],
+      delete_storyline: ['delete', '删除剧情线'],
+    };
 
     box.innerHTML = `
       <table class="audit-table">

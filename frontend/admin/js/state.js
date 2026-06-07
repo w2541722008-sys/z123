@@ -37,6 +37,9 @@ const AdminState = (() => {
   // ---- 编辑面板脏标记（未保存修改） ----
   let _isDirty = false;
 
+  // ---- 保存中锁（防止重复提交） ----
+  let _isSaving = false;
+
   // ---- 待删除用户 ----
   let _pendingDeleteUserId = null;
 
@@ -84,6 +87,9 @@ const AdminState = (() => {
 
     get isDirty() { return _isDirty; },
     set isDirty(v) { _isDirty = v; },
+
+    get isSaving() { return _isSaving; },
+    set isSaving(v) { _isSaving = v; },
 
     get currentSystemTab() { return _currentSystemTab; },
     set currentSystemTab(v) { _currentSystemTab = v; },

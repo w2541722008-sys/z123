@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from core.auth import CurrentUser, get_admin_user, get_current_user
 from core.database import ConnType, get_db_dep
@@ -175,6 +175,7 @@ def admin_get_character(character_id: str, conn: ConnType = Depends(get_db_dep))
         "import_diagnostics": to_json_string(row["import_diagnostics"], default_on_error='[]'),
         "runtime_layers": runtime_layers_str,
         "phase_behaviors_json": to_json_string(row.get("phase_behaviors_json"), default_on_error='{}'),
+        "life_profile_json": to_json_string(row.get("life_profile_json"), default_on_error='{}'),
     }
 
 
@@ -278,6 +279,19 @@ def admin_update_character(
             raise HTTPException(status_code=500, detail="服务器内部错误，请稍后重试")
 
     conn.commit()
+
+    # 审计日志（仅记录固定字段变更，runtime_layers 变更内容较大不记录详情）
+    if safe_direct:
+        audit_repo.insert_audit_log(
+            conn,
+            operator_id=current_user.id,
+            operator_email=current_user.email,
+            action="update_character",
+            target_type="character",
+            target_id=character_id,
+            detail={"updated_fields": list(safe_direct.keys())},
+        )
+        conn.commit()
 
     invalidate_character(character_id)
     invalidate_character_affection_rules(character_id)

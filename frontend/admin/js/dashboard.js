@@ -30,7 +30,10 @@ function renderDashboard(stats, trend, mediaMissing = {}) {
   const box = document.getElementById('dashboard-content');
   if (!box) return;
   const dist = stats.plan_distribution || {};
-  const maxUsers = Math.max(...(trend.trend || []).map(t => t.new_users), 1);
+  const trendData = trend.trend || [];
+  const maxUsers = Math.max(...trendData.map(t => t.new_users), 1);
+  const maxOrders = Math.max(...trendData.map(t => t.new_orders), 1);
+  const maxRevenue = Math.max(...trendData.map(t => t.revenue), 1);
   const missingCount = Number(mediaMissing.missing_count || 0);
   const missingItems = Array.isArray(mediaMissing.items) ? mediaMissing.items : [];
   const mediaHealthy = Boolean(mediaMissing.ok) && missingCount === 0;
@@ -92,14 +95,43 @@ function renderDashboard(stats, trend, mediaMissing = {}) {
 
     <div class="dashboard-section">
       <h3>📈 近 7 天趋势</h3>
-      <div class="trend-chart">
-        ${(trend.trend || []).map(t => `
-          <div class="trend-bar-wrap">
-            <div class="trend-value">${t.new_users}</div>
-            <div class="trend-bar" style="height:${Math.max(4, Math.round((t.new_users / maxUsers) * 80))}px"></div>
-            <div class="trend-label">${(t.date || '').slice(5)}</div>
+      <div class="trend-metrics">
+        <div class="trend-metric">
+          <div class="trend-metric-label">👤 新增用户</div>
+          <div class="trend-chart">
+            ${trendData.map(t => `
+              <div class="trend-bar-wrap">
+                <div class="trend-value">${t.new_users}</div>
+                <div class="trend-bar" style="height:${Math.max(4, Math.round((t.new_users / maxUsers) * 60))}px"></div>
+                <div class="trend-label">${(t.date || '').slice(5)}</div>
+              </div>
+            `).join('')}
           </div>
-        `).join('')}
+        </div>
+        <div class="trend-metric">
+          <div class="trend-metric-label">📦 新增订单</div>
+          <div class="trend-chart">
+            ${trendData.map(t => `
+              <div class="trend-bar-wrap">
+                <div class="trend-value">${t.new_orders}</div>
+                <div class="trend-bar trend-bar-green" style="height:${Math.max(4, Math.round((t.new_orders / maxOrders) * 60))}px"></div>
+                <div class="trend-label">${(t.date || '').slice(5)}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        <div class="trend-metric">
+          <div class="trend-metric-label">💰 收入(元)</div>
+          <div class="trend-chart">
+            ${trendData.map(t => `
+              <div class="trend-bar-wrap">
+                <div class="trend-value">${(t.revenue / 100).toFixed(0)}</div>
+                <div class="trend-bar trend-bar-yellow" style="height:${Math.max(4, Math.round((t.revenue / maxRevenue) * 60))}px"></div>
+                <div class="trend-label">${(t.date || '').slice(5)}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
       </div>
     </div>
 
