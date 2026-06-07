@@ -76,6 +76,7 @@ async function selectChar(charId) {
     const raw = await AdminAPI.apiFetch(`${AdminAPI.API}/character/${charId}`);
     const normalized = normalizeCharacterDetail(raw);
     AdminState.currentCharData = normalized;
+    AdminState.isDirty = false;
     renderEditPanel(normalized);
     loadCharacterSummary();
     loadPromptPreview();

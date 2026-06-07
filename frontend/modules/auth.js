@@ -6,6 +6,8 @@
    function openLogin() {
      // 每次打开弹窗，默认展示"登录"Tab
      switchTab('login');
+     var btn = document.getElementById('auth-submit-btn');
+     if (btn) btn.disabled = false;
      document.getElementById('login-modal').classList.add('open');
    }
 
@@ -84,16 +86,20 @@
    }
 
    async function doLogin() {
+     const btn = document.getElementById('auth-submit-btn');
+     if (btn.disabled) return;
      const email    = document.getElementById('input-email').value.trim();
      const password = document.getElementById('input-password').value.trim();
      if (!email)    { UI.toast('请输入邮箱', 'warn'); return; }
      if (!password || password.length < 8) { UI.toast('密码至少 8 位', 'warn'); return; }
 
+     btn.disabled = true;
      try {
        const result = await API.login({ email, password });
        _onAuthSuccess(result);
        UI.toast('✓ 登录成功，聊天记录将持续保存', 'success');
      } catch (err) {
+       btn.disabled = false;
        // 如果后端提示"账号不存在"，引导用户切到注册 Tab
        if (err.message && err.message.includes('不存在')) {
          UI.toast('该邮箱未注册，请先注册 →', 'warn');
@@ -105,17 +111,21 @@
    }
 
    async function doRegister() {
+     const btn = document.getElementById('auth-submit-btn');
+     if (btn.disabled) return;
      const email    = document.getElementById('input-email').value.trim();
      const nickname = document.getElementById('input-nickname').value.trim();
      const password = document.getElementById('input-password').value.trim();
      if (!email)    { UI.toast('请输入邮箱', 'warn'); return; }
      if (!password || password.length < 8) { UI.toast('密码至少 8 位', 'warn'); return; }
 
+     btn.disabled = true;
      try {
        const result = await API.register({ email, password, nickname });
        _onAuthSuccess(result);
        UI.toast('✓ 注册成功！后续聊天记录会持续保存', 'success');
      } catch (err) {
+       btn.disabled = false;
        // 如果后端提示"已注册"，引导用户切到登录 Tab
        if (err.message && err.message.includes('已注册')) {
          UI.toast('该邮箱已注册，请直接登录 →', 'warn');

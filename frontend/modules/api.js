@@ -188,15 +188,11 @@
     continueMessage: (payload, handlers, signal) => streamMessageToUrl(`${API_BASE}/chat/continue`, payload, handlers, signal),
 
     async uploadAvatar(file) {
-      const token = AppState.getToken();
-      if (!token) throw new Error('请先登录');
       const formData = new FormData();
       formData.append('file', file);
-      const headers = { 'X-Device-ID': AppState.getDeviceId() };
-      if (token) headers.Authorization = `Bearer ${token}`;
       const resp = await fetch(`${API_BASE}/user/avatar`, {
         method: 'POST',
-        headers,
+        headers: { 'X-Device-ID': AppState.getDeviceId() },
         body: formData,
         credentials: 'include',
       });

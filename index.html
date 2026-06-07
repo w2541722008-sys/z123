@@ -287,6 +287,32 @@
   </div>
 
   <!-- ============================================================
+       头像裁剪弹窗
+  ============================================================ -->
+  <div class="modal-overlay" id="crop-modal">
+    <div class="crop-sheet">
+      <div class="crop-title">裁剪头像</div>
+      <div class="crop-body">
+        <div class="crop-wrapper" id="crop-wrapper">
+          <div class="crop-mask" id="crop-mask">
+            <img id="crop-image" src="" draggable="false" />
+          </div>
+        </div>
+      </div>
+      <div class="crop-controls">
+        <div class="crop-zoom-row">
+          <span class="crop-zoom-label">🔍</span>
+          <input type="range" id="crop-zoom" min="50" max="300" value="100" />
+        </div>
+        <div class="crop-buttons">
+          <button class="btn btn-ghost" id="crop-cancel">取消</button>
+          <button class="btn btn-primary" id="crop-confirm">确认裁剪</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
        剧情线选择弹窗（多开场白角色专用）
   ============================================================ -->
   <div class="modal-overlay" id="greeting-select-modal">
@@ -360,6 +386,7 @@
   <script src="frontend/modules/char-detail.js?v=20260607"></script>
   <script src="frontend/modules/greeting-select.js?v=20260607"></script>
   <script src="frontend/modules/csp-bindings.js?v=20260607"></script>
+  <script src="frontend/modules/avatar-crop.js?v=20260607"></script>
   <script src="frontend/modules/init.js?v=20260607"></script>
 </body>
 </html>

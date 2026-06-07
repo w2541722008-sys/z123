@@ -9,7 +9,13 @@
 const CHAR_TABS = ['overview', 'edit', 'worldinfo', 'story', 'preview'];
 const SYSTEM_TABS = ['dashboard', 'membership', 'auditlog'];
 
-function switchCharTab(tab) {
+async function switchCharTab(tab) {
+  // 离开编辑 Tab 时检查是否有未保存修改
+  if (AdminState.currentCharTab === 'edit' && tab !== 'edit' && AdminState.isDirty) {
+    var confirmed = await showConfirm('当前有未保存的修改，切换标签页会丢失这些修改。确定要切换吗？', '未保存修改');
+    if (!confirmed) return;
+  }
+  AdminState.isDirty = false;
   AdminState.currentCharTab = tab;
   AdminState.currentSystemTab = null;
 
@@ -32,7 +38,13 @@ function switchCharTab(tab) {
   if (tab === 'preview' && AdminState.currentCharId) loadPromptPreview();
 }
 
-function switchSystemTab(tab) {
+async function switchSystemTab(tab) {
+  // 离开编辑 Tab 时检查是否有未保存修改
+  if (AdminState.currentCharTab === 'edit' && AdminState.isDirty) {
+    var confirmed = await showConfirm('当前有未保存的修改，切换标签页会丢失这些修改。确定要切换吗？', '未保存修改');
+    if (!confirmed) return;
+  }
+  AdminState.isDirty = false;
   AdminState.currentSystemTab = tab;
 
   document.querySelectorAll('.topbar-link').forEach(btn => {

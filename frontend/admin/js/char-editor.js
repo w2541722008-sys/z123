@@ -424,4 +424,10 @@ function renderEditPanel(c) {
     input.addEventListener('input', syncAffectionRulesEditor);
   });
   validateAffectionRulesEditor();
+
+  // 监听编辑面板所有输入变更，标记为未保存
+  panel.querySelectorAll('input, textarea, select').forEach(function(el) {
+    el.addEventListener('input', function() { AdminState.isDirty = true; });
+    el.addEventListener('change', function() { AdminState.isDirty = true; });
+  });
 }

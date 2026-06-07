@@ -65,7 +65,7 @@
     zoomStyle.textContent = '#chat-input, #send-btn, button, .msg-row, .greeting-card, .character-card { touch-action: manipulation; }';
     document.head.appendChild(zoomStyle);
 
-    // 头像上传
+    // 头像上传（带裁剪）
     const avatarInput = document.getElementById('avatar-file-input');
     if (avatarInput) {
       avatarInput.addEventListener('change', (e) => {
@@ -74,9 +74,14 @@
         if (file.size > 2 * 1024 * 1024) { UI.toast('图片大小不能超过 2MB', 'warn'); return; }
         const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
         if (!allowedTypes.includes(file.type)) { UI.toast('仅支持 JPG、PNG、WebP 格式', 'warn'); return; }
-        Auth.uploadAvatar(file);
+        AvatarCrop.open(file);
         avatarInput.value = '';
       });
+
+      // 裁剪弹窗按钮事件
+      document.getElementById('crop-cancel').addEventListener('click', function() { AvatarCrop.close(); });
+      document.getElementById('crop-confirm').addEventListener('click', function() { AvatarCrop.confirm(); });
+      document.getElementById('crop-zoom').addEventListener('input', function() { AvatarCrop.zoom(parseInt(this.value)); });
     }
   });
 

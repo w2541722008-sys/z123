@@ -181,6 +181,7 @@ async function saveChar() {
     });
     const refreshed = await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}`);
     AdminState.currentCharData = normalizeCharacterDetail(refreshed);
+    AdminState.isDirty = false;
     if (statusEl) { statusEl.textContent = '✅ 保存成功！'; statusEl.className = 'save-status ok'; }
     if (fabLabel) { fabLabel.textContent = '✅ 已保存'; fabLabel.style.color = '#4ade80'; setTimeout(()=>{ fabLabel.textContent='保存'; fabLabel.style.color='#c084fc'; }, 2500); }
     toast('保存成功！修改立即生效（无需重启）');

@@ -34,6 +34,9 @@ const AdminState = (() => {
   // ---- 编辑面板 ----
   let _currentRlFields = [];
 
+  // ---- 编辑面板脏标记（未保存修改） ----
+  let _isDirty = false;
+
   // ---- 待删除用户 ----
   let _pendingDeleteUserId = null;
 
@@ -78,6 +81,9 @@ const AdminState = (() => {
     set currentRlFields(v) { _currentRlFields = v; },
     get pendingDeleteUserId() { return _pendingDeleteUserId; },
     set pendingDeleteUserId(v) { _pendingDeleteUserId = v; },
+
+    get isDirty() { return _isDirty; },
+    set isDirty(v) { _isDirty = v; },
 
     get currentSystemTab() { return _currentSystemTab; },
     set currentSystemTab(v) { _currentSystemTab = v; },
