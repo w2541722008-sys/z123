@@ -56,6 +56,8 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
 }
 .topbar-link:hover { color: var(--text-primary); background: var(--bg-card-hover); }
 .topbar-link.active { background: var(--accent-bg); color: var(--accent-light); border-color: var(--accent); }
+.topbar-link.back-to-chars { color: var(--accent-light); border-color: var(--accent); background: var(--accent-bg); margin-right: 8px; font-weight: 600; }
+.topbar-link.back-to-chars:hover { background: var(--accent); color: #fff; }
 .topbar-right { margin-left: auto; display: flex; gap: 10px; }
 
 /* ---- 汉堡菜单（移动端） ---- */

@@ -26,24 +26,31 @@ const AdminAPI = (() => {
   let _refreshPromise = null;
 
   async function _tryRefresh() {
-    const refreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY);
-    if (!refreshToken) return false;
     if (_isRefreshing) return _refreshPromise;
     _isRefreshing = true;
     _refreshPromise = (async () => {
       try {
+        // 优先使用 sessionStorage 中的 refresh token
+        const refreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY);
+        const headers = { 'Content-Type': 'application/json' };
+        if (refreshToken) {
+          headers['Authorization'] = `Bearer ${refreshToken}`;
+        }
+        // 即使 sessionStorage 没有 token，也尝试发送请求
+        // 后端会回退到 HttpOnly refresh cookie 进行刷新
         const resp = await fetch(`${_baseUrl}/auth/refresh`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${refreshToken}`,
-          },
+          headers,
           credentials: 'include',
         });
         if (!resp.ok) return false;
         const data = await resp.json();
         if (data.access_token) {
           localStorage.setItem(TOKEN_KEY, data.access_token);
+          // 同步到 sessionStorage（供后续刷新使用）
+          if (data.refresh_token) {
+            try { sessionStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token); } catch (_) {}
+          }
           return true;
         }
         return false;
@@ -139,9 +146,23 @@ const AdminAPI = (() => {
       _bootstrapped = true;
       return true;
     } catch (e) {
-      console.error('[Admin Error]', e);
-      renderAccessDenied('请求失败: ' + (e.message || e.toString()) + '。API地址: ' + _baseUrl + '/auth/me');
-      return false;
+      // 首次失败后等一小段时间再试一次（处理网络延迟或 Cookie 时序问题）
+      await new Promise(r => setTimeout(r, 500));
+      try {
+        const me = await apiFetch(`${_baseUrl}/auth/me`);
+        _currentUser = me || null;
+        localStorage.setItem(USER_KEY, JSON.stringify(me || null));
+        if (!me?.is_admin) {
+          renderAccessDenied('当前账号已登录，但 is_admin=false。邮箱: ' + (me?.email || '未知') + ', 请检查 .env 的 ADMIN_EMAILS 是否包含此邮箱。');
+          return false;
+        }
+        _bootstrapped = true;
+        return true;
+      } catch (e2) {
+        console.error('[Admin Error]', e2);
+        renderAccessDenied('请求失败: ' + (e2.message || e2.toString()) + '。API地址: ' + _baseUrl + '/auth/me');
+        return false;
+      }
     }
   }
 

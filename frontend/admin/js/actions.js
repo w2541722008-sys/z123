@@ -120,6 +120,33 @@ const DASHBOARD_ACTION_HANDLERS = {
       }, 100);
     }
   },
+  'back-to-chars': () => {
+    // 返回角色视图：取消系统标签页，展开侧边栏
+    AdminState.currentSystemTab = null;
+    document.querySelectorAll('.topbar-link').forEach(btn => btn.classList.remove('active'));
+    const layout = document.querySelector('.layout');
+    if (layout) layout.classList.remove('sidebar-collapsed');
+    const backBtn = document.getElementById('back-to-chars-btn');
+    if (backBtn) backBtn.classList.add('d-none');
+    // 隐藏所有系统标签面板
+    SYSTEM_TABS.forEach(t => {
+      const el = document.getElementById(`tab-${t}`);
+      if (el) el.style.display = 'none';
+    });
+    // 如果有选中的角色，恢复到角色视图
+    if (AdminState.currentCharId) {
+      document.getElementById('char-tabs').style.display = 'flex';
+      switchCharTab(AdminState.currentCharTab || 'overview');
+    } else {
+      // 没有选中角色，只显示总览空态
+      CHAR_TABS.forEach(t => {
+        const el = document.getElementById(`tab-${t}`);
+        if (el) el.style.display = 'none';
+      });
+      const overviewEl = document.getElementById('tab-overview');
+      if (overviewEl) overviewEl.style.display = '';
+    }
+  },
 };
 
 const ACTION_HANDLERS = {

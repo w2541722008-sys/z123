@@ -61,6 +61,10 @@ async function switchCharTab(tab) {
     if (el) el.style.display = 'none';
   });
 
+  // 隐藏“返回角色”按钮
+  const backBtn = document.getElementById('back-to-chars-btn');
+  if (backBtn) backBtn.classList.add('d-none');
+
   if (tab === 'worldinfo' && AdminState.currentCharId) loadAdvancedData();
   if (tab === 'story' && AdminState.currentCharId) loadAdvancedData();
   if (tab === 'preview' && AdminState.currentCharId) loadPromptPreview();
@@ -94,6 +98,10 @@ async function switchSystemTab(tab) {
     const el = document.getElementById(`tab-${t}`);
     if (el) el.style.display = t === tab ? '' : 'none';
   });
+
+  // 显示“返回角色”按钮
+  const backBtn = document.getElementById('back-to-chars-btn');
+  if (backBtn) backBtn.classList.remove('d-none');
 
   if (tab === 'membership') loadMembershipData();
   if (tab === 'dashboard') loadDashboard();
