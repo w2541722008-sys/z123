@@ -69,6 +69,10 @@ run_local_checks() {
   echo "  → Admin action 检查..."
   node ../tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json || failed=1
 
+  # 6. CSP onclick 合规检查（防止动态 onclick 被严格 CSP 拦截回归）
+  echo "  → CSP onclick 合规检查..."
+  node ../tests/check_csp_onclick.js || failed=1
+
   popd >/dev/null
 
   if [[ "$failed" -eq 0 ]]; then
