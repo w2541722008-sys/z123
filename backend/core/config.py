@@ -95,8 +95,14 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL 环境变量未设置，请在 .env 文件中配置 Supabase 连接字符串")
 
 # 数据库连接池配置（可通过环境变量覆盖）
+# 已针对 Supabase PgBouncer 优化：PgBouncer 在服务端池化，客户端少量常驻连接即可
 DB_POOL_MIN_CONN = _int_env("DB_POOL_MIN_CONN", 2, minimum=1, maximum=20)
 DB_POOL_MAX_CONN = _int_env("DB_POOL_MAX_CONN", 5, minimum=3, maximum=50)
+
+# 线程池大小 — 独立于数据库连接池
+# 线程池处理所有阻塞 I/O（AI 模型调用、DB 查询、邮件发送），AI 流式回复可能持续数十秒
+# 50-100 并发用户建议 30-50 个线程；连接池只需 3-5 个（PgBouncer 在服务端复用）
+THREAD_POOL_SIZE = _int_env("THREAD_POOL_SIZE", 30, minimum=5, maximum=200)
 
 
 # ============================================================

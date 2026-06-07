@@ -126,11 +126,12 @@ def _serve_html_file(path: Path, missing_message: str) -> HTMLResponse:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理：启动时初始化资源，关闭时清理。"""
-    # 配置线程池大小匹配连接池上限，避免高并发时线程排队等连接
+    # 线程池处理所有阻塞 I/O（AI 模型调用、DB 查询等）
+    # 线程数需大于 DB 连接数，因为 AI 流式回复期间线程占用但不持有 DB 连接
     import asyncio
 
     loop = asyncio.get_event_loop()
-    loop.set_default_executor(ThreadPoolExecutor(max_workers=_cfg.DB_POOL_MAX_CONN))
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=_cfg.THREAD_POOL_SIZE))
 
     init_db_pool(_cfg.DATABASE_URL)
     logger.info("✅ 数据库连接池已初始化")
