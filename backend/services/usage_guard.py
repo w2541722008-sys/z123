@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from core.exceptions import BudgetExceededError
 from core.config import COST_ESTIMATE_CHARS_PER_TOKEN
 from core.database import ConnType
 from repositories import usage_repository as usage_repo
-
-# 向后兼容（这些常量已移入 usage_repository，但旧代码仍可能从 usage_guard 导入）
-from repositories.usage_repository import ERROR_DETAIL_MAX_LENGTH, SUCCESS_STATUSES  # noqa: F401
 
 
 def estimate_tokens_from_chars(chars: int) -> int:
@@ -55,9 +51,32 @@ def get_daily_usage(
         raise ValueError("user_id 和 guest_ip 至少需要一个")
 
     start_iso, end_iso = _day_range_utc()
-    return usage_repo.get_daily_usage(
-        conn, user_id=user_id, guest_ip=guest_ip, start_iso=start_iso, end_iso=end_iso,
+    usage = usage_repo.get_daily_usage(
+        conn,
+        user_id=user_id,
+        guest_ip=guest_ip,
+        start_iso=start_iso,
+        end_iso=end_iso,
     )
+    return {
+        "request_count": int(usage.get("request_count") or 0),
+        "total_tokens": int(usage.get("total_tokens") or 0),
+    }
+
+
+def _budget_lock_key(identifier: str) -> int:
+    """生成确定性 bigint 用于 pg_advisory_xact_lock，防止同一用户并发超额。
+
+    使用 djb2 哈希算法确保所有 Python 进程对同一标识符产生相同锁键。
+    PostgreSQL advisory lock 在事务提交/回滚时自动释放，
+    因此 enforce_daily_budget 获取锁后，直到 log_ai_request 提交才释放。
+    """
+    h = 5381
+    for c in identifier:
+        h = ((h << 5) + h + ord(c)) & 0xFFFFFFFFFFFFFFFF
+    if h >= 0x8000000000000000:
+        h -= 0x10000000000000000
+    return h
 
 
 def enforce_daily_budget(
@@ -69,7 +88,15 @@ def enforce_daily_budget(
     token_limit: int,
     token_limit_detail: str,
 ) -> dict[str, int]:
-    """检查今日预算，超限时抛出 429。"""
+    """检查今日预算，超限时抛出 429。
+
+    通过 pg_advisory_xact_lock 对同一用户串行化 check-then-insert，
+    消除 SELECT 和 INSERT 之间的竞态窗口。锁在 log_ai_request 的 commit 时自动释放。
+    """
+    lock_key_str = f"budget:{user_id or guest_ip}"
+    lock_key = _budget_lock_key(lock_key_str)
+    conn.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+
     usage = get_daily_usage(conn, user_id=user_id, guest_ip=guest_ip)
     if token_limit > 0 and usage["total_tokens"] + planned_tokens > token_limit:
         raise BudgetExceededError(detail=token_limit_detail)

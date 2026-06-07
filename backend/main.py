@@ -37,20 +37,36 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 # 第三方库导入
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # 项目内部导入
 import core.config as _cfg
-from core.config import AVATARS_DIR, FRONTEND_DIR, FRONTEND_STATIC_DIR, PROJECT_DIR, validate_production_config
+from core.config import (
+    AVATARS_DIR,
+    FRONTEND_DIR,
+    FRONTEND_STATIC_DIR,
+    validate_production_config,
+)
 from core.database import init_db_pool, close_db_pool
+from core.exceptions import (
+    BadRequestError,
+    BudgetExceededError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    RateLimitError,
+    UnauthorizedError,
+)
 from services.health_service import check_db_health, check_media_health
 from services.billing_order_service import start_order_cleanup_daemon
 
 # 导入路由
 from routers import admin, auth, billing, characters, chat, media
+
+logger = logging.getLogger("aifriend")
 
 # ============================================================
 # 启动和关闭事件（使用现代 lifespan 模式）
@@ -69,7 +85,11 @@ def _default_allowed_origins() -> list[str]:
 def _load_allowed_origins(env: dict[str, str] | os._Environ[str]) -> list[str]:
     allowed_origins_str = env.get("ALLOWED_ORIGINS", "")
     if allowed_origins_str:
-        return [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
+        return [
+            origin.strip()
+            for origin in allowed_origins_str.split(",")
+            if origin.strip()
+        ]
     return _default_allowed_origins()
 
 
@@ -86,7 +106,14 @@ def _tracked_request_paths() -> set[str]:
 
 
 def _register_api_routers(app: FastAPI) -> None:
-    for router in (auth.router, billing.router, characters.router, chat.router, media.router, admin.router):
+    for router in (
+        auth.router,
+        billing.router,
+        characters.router,
+        chat.router,
+        media.router,
+        admin.router,
+    ):
         app.include_router(router, prefix="/api")
 
 
@@ -101,58 +128,65 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理：启动时初始化资源，关闭时清理。"""
     # 配置线程池大小匹配连接池上限，避免高并发时线程排队等连接
     import asyncio
+
     loop = asyncio.get_event_loop()
     loop.set_default_executor(ThreadPoolExecutor(max_workers=_cfg.DB_POOL_MAX_CONN))
 
     init_db_pool(_cfg.DATABASE_URL)
-    logging.info("✅ 数据库连接池已初始化")
+    logger.info("✅ 数据库连接池已初始化")
 
     # 注入缓存回调，解除 core.auth 对 services.cache_service 的直接依赖
     from core.auth import register_cache_callbacks
     from services.cache_service import cache_get, cache_set, cache_delete
+
     register_cache_callbacks(cache_get, cache_set, cache_delete)
 
     # 注入熔断器回调，解除 core.model_adapter 对 services.circuit_breaker 的直接依赖
     from core.model_adapter import register_circuit_breaker
     from services.circuit_breaker import get_circuit_breaker
+
     register_circuit_breaker(get_circuit_breaker)
 
     start_order_cleanup_daemon(interval_seconds=3600)
-    logging.info("✅ 订单清理后台任务已启动")
+    logger.info("✅ 订单清理后台任务已启动")
 
     missing_configs = validate_production_config()
     if missing_configs:
-        logging.warning("⚠️  检测到缺失的生产环境配置：")
+        logger.warning("⚠️  检测到缺失的生产环境配置：")
         for config in missing_configs:
-            logging.warning("  - %s", config)
-        logging.warning("请检查 .env 文件，参考 .env.example")
+            logger.warning("  - %s", config)
+        logger.warning("请检查 .env 文件，参考 .env.example")
 
     media_health: dict[str, Any] = check_media_health(force=True)
     if media_health["ok"]:
-        logging.info("✅ 媒体资源自检通过")
+        logger.info("✅ 媒体资源自检通过")
     else:
-        samples = media_health.get('samples') or []
-        logging.warning(
+        samples = media_health.get("samples") or []
+        logger.warning(
             "⚠️ 媒体资源自检发现缺失: %s，样例: %s",
-            media_health['missing_count'],
-            ', '.join(str(s) for s in samples),
+            media_health["missing_count"],
+            ", ".join(str(s) for s in samples),
         )
 
     yield
 
     close_db_pool()
-    logging.info("✅ 数据库连接池已关闭")
+    logger.info("✅ 数据库连接池已关闭")
+
 
 app = FastAPI(title="aifriend backend", version="0.3.0", lifespan=lifespan)
 
 # ============================================================
 # 请求追踪 ID
 # ============================================================
-request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="-")
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "request_id", default="-"
+)
 
 
 class _RequestIDLogFilter(logging.Filter):
     """将 X-Request-ID 注入到所有日志记录的 extra 字段。"""
+
     def filter(self, record):
         record.request_id = request_id_var.get()
         return True
@@ -202,7 +236,9 @@ async def limit_request_body_size(request: Request, call_next):
         if int(content_length) > MAX_REQUEST_BODY_BYTES:
             return JSONResponse(
                 status_code=413,
-                content={"detail": f"请求体过大，最大允许 {MAX_REQUEST_BODY_BYTES // (1024 * 1024)}MB"},
+                content={
+                    "detail": f"请求体过大，最大允许 {MAX_REQUEST_BODY_BYTES // (1024 * 1024)}MB"
+                },
             )
     return await call_next(request)
 
@@ -233,7 +269,9 @@ async def add_security_headers(request: Request, call_next):
     # HTTPS 环境下启用 HSTS（支持反向代理）
     forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
     if request.url.scheme == "https" or forwarded_proto == "https":
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
     # 引用来源策略
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
@@ -262,19 +300,23 @@ async def log_requests(request: Request, call_next):
 
     # 只记录 API 请求
     if request.url.path.startswith("/api/"):
-        logging.info("请求: %s %s", request.method, request.url.path)
+        logger.info("请求: %s %s", request.method, request.url.path)
 
     response = await call_next(request)
 
     # 记录关键操作（登录、注册、聊天）
     if request.url.path in tracked_paths:
         duration = time.time() - start_time
-        logging.info(
+        logger.info(
             "完成: %s %s 状态=%s 耗时=%.2fs",
-            request.method, request.url.path, response.status_code, duration,
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration,
         )
 
     return response
+
 
 # ============================================================
 # 注册路由
@@ -288,25 +330,38 @@ _register_api_routers(app)
 @app.get("/", response_class=HTMLResponse)
 def serve_index():
     """返回前端首页 index.html。"""
-    return _serve_html_file(FRONTEND_DIR / "index.html", "<h1>前端文件未找到，请检查路径</h1>")
+    return _serve_html_file(
+        FRONTEND_DIR / "index.html", "<h1>前端文件未找到，请检查路径</h1>"
+    )
 
 
 @app.get("/admin.html", response_class=HTMLResponse)
 def serve_admin():
     """返回后台管理页面（模块化版本，包含完整功能）。"""
-    return _serve_html_file(FRONTEND_STATIC_DIR / "admin" / "index.html", "<h1>admin 页面未找到</h1>")
+    return _serve_html_file(
+        FRONTEND_STATIC_DIR / "admin" / "index.html", "<h1>admin 页面未找到</h1>"
+    )
 
 
 @app.get("/forgot-password.html", response_class=HTMLResponse)
 def serve_forgot_password():
     """返回忘记密码页面 forgot-password.html。"""
-    return _serve_html_file(FRONTEND_STATIC_DIR / "forgot-password.html", "<h1>forgot-password.html 未找到</h1>")
+    return _serve_html_file(
+        FRONTEND_STATIC_DIR / "forgot-password.html",
+        "<h1>forgot-password.html 未找到</h1>",
+    )
 
 
 # 挂载 frontend/ 子目录（CSS、JS、图片等资源）
 if FRONTEND_STATIC_DIR.exists():
-    app.mount("/frontend", StaticFiles(directory=str(FRONTEND_STATIC_DIR)), name="frontend")
-    app.mount("/api/frontend", StaticFiles(directory=str(FRONTEND_STATIC_DIR)), name="frontend_api")
+    app.mount(
+        "/frontend", StaticFiles(directory=str(FRONTEND_STATIC_DIR)), name="frontend"
+    )
+    app.mount(
+        "/api/frontend",
+        StaticFiles(directory=str(FRONTEND_STATIC_DIR)),
+        name="frontend_api",
+    )
 
 
 # ============================================================
@@ -349,10 +404,23 @@ def health() -> dict[str, str | bool | int]:
     }
 
 
-# ============================================================
-# 领域异常 → HTTP 映射
-# ============================================================
-from core.exceptions import AifriendError, BadRequestError, BudgetExceededError, ForbiddenError, NotFoundError, RateLimitError
+@app.head("/api/health")
+def health_head() -> Response:
+    """兼容只发送 HEAD 请求的外部健康检查，实际执行健康检查逻辑。"""
+    from core.config import validate_production_config
+
+    db_ok = check_db_health()
+
+    global _config_check_cache
+    if _config_check_cache is None:
+        _config_check_cache = validate_production_config()
+    config_ok = len(_config_check_cache) == 0
+
+    media_health = check_media_health()
+    media_ok = bool(media_health["ok"])
+
+    all_ok = db_ok and config_ok and media_ok
+    return Response(status_code=200 if all_ok else 503)
 
 
 @app.exception_handler(NotFoundError)
@@ -365,19 +433,33 @@ async def bad_request_handler(request: Request, exc: BadRequestError) -> JSONRes
     return JSONResponse(status_code=400, content={"detail": exc.detail})
 
 
+@app.exception_handler(UnauthorizedError)
+async def unauthorized_handler(request: Request, exc: UnauthorizedError) -> JSONResponse:
+    return JSONResponse(status_code=401, content={"detail": exc.detail})
+
+
 @app.exception_handler(ForbiddenError)
 async def forbidden_handler(request: Request, exc: ForbiddenError) -> JSONResponse:
     return JSONResponse(status_code=403, content={"detail": exc.detail})
 
 
+@app.exception_handler(ConflictError)
+async def conflict_handler(request: Request, exc: ConflictError) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": exc.detail})
+
+
 @app.exception_handler(RateLimitError)
 async def rate_limit_handler(request: Request, exc: RateLimitError) -> JSONResponse:
     headers: dict[str, str] | None = getattr(exc, "headers", None)
-    return JSONResponse(status_code=429, content={"detail": exc.detail}, headers=headers)
+    return JSONResponse(
+        status_code=429, content={"detail": exc.detail}, headers=headers
+    )
 
 
 @app.exception_handler(BudgetExceededError)
-async def budget_exceeded_handler(request: Request, exc: BudgetExceededError) -> JSONResponse:
+async def budget_exceeded_handler(
+    request: Request, exc: BudgetExceededError
+) -> JSONResponse:
     return JSONResponse(status_code=429, content={"detail": exc.detail})
 
 
@@ -400,7 +482,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
         )
 
     # 其他异常记录日志并返回通用错误
-    logging.error("未处理的异常: %s: %s", type(exc).__name__, exc, exc_info=True)
+    logger.error("未处理的异常: %s: %s", type(exc).__name__, exc, exc_info=True)
     return JSONResponse(
         status_code=500,
         content={"detail": "服务器内部错误，请稍后重试"},
@@ -416,5 +498,6 @@ app.mount("/avatars", StaticFiles(directory=str(AVATARS_DIR)), name="avatars")
 # ============================================================
 if __name__ == "__main__":
     import uvicorn
+
     # 开发模式启动（带热重载）
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

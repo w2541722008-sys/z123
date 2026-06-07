@@ -33,6 +33,7 @@ SSE_STREAM_TIMEOUT = 120
 
 def _stream_ai_completion(stream_messages: list, ai_config: dict):
     """流式调用 AI 并生成 SSE chunk 事件。"""
+    chunks: list[str] = []
     full_reply = ""
     stream_state = {"buffer": "", "in_think": False, "in_state_update": False, "_state_update_parts": []}
     stream_start = time.monotonic()
@@ -45,13 +46,14 @@ def _stream_ai_completion(stream_messages: list, ai_config: dict):
             visible_chunk = sanitize_stream_chunk(chunk, stream_state)
             if not visible_chunk:
                 continue
-            full_reply += visible_chunk
+            chunks.append(visible_chunk)
             yield format_sse("chunk", {"text": visible_chunk})
         if stream_state.get("buffer") and not stream_state.get("in_think"):
             tail = str(stream_state["buffer"])
             if tail:
-                full_reply += tail
+                chunks.append(tail)
                 yield format_sse("chunk", {"text": tail})
+        full_reply = "".join(chunks)
         final_reply_raw = normalize_reply_text(full_reply)
         if not final_reply_raw:
             raise RuntimeError("模型返回了空内容")

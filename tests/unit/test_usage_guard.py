@@ -20,9 +20,8 @@ from services.usage_guard import (
     get_daily_usage,
     enforce_daily_budget,
     log_ai_request,
-    ERROR_DETAIL_MAX_LENGTH,
-    SUCCESS_STATUSES,
 )
+from repositories.usage_repository import ERROR_DETAIL_MAX_LENGTH, SUCCESS_STATUSES
 from conftest import FakeSequenceConn, FakeQueryResult, FakeRow
 
 
@@ -160,11 +159,16 @@ class TestGetDailyUsage:
 
 class TestEnforceDailyBudget:
 
+    @staticmethod
+    def _lock_result():
+        """pg_advisory_xact_lock 调用的占位结果。"""
+        return FakeQueryResult(one=FakeRow({"pg_advisory_xact_lock": ""}))
+
     def test_under_budget_passes(self):
         result = FakeQueryResult(
             one=FakeRow({"request_count": 3, "total_tokens": 5000})
         )
-        conn = FakeSequenceConn([result])
+        conn = FakeSequenceConn([self._lock_result(), result])
         usage = enforce_daily_budget(
             conn,
             user_id=1,
@@ -180,7 +184,7 @@ class TestEnforceDailyBudget:
         result = FakeQueryResult(
             one=FakeRow({"request_count": 10, "total_tokens": 9000})
         )
-        conn = FakeSequenceConn([result])
+        conn = FakeSequenceConn([self._lock_result(), result])
         with pytest.raises(BudgetExceededError) as exc_info:
             enforce_daily_budget(
                 conn,
@@ -195,7 +199,7 @@ class TestEnforceDailyBudget:
         result = FakeQueryResult(
             one=FakeRow({"request_count": 5, "total_tokens": 8000})
         )
-        conn = FakeSequenceConn([result])
+        conn = FakeSequenceConn([self._lock_result(), result])
         # 8000 + 2000 == 10000, 刚好等于限额，不抛出
         usage = enforce_daily_budget(
             conn,
@@ -211,7 +215,7 @@ class TestEnforceDailyBudget:
         result = FakeQueryResult(
             one=FakeRow({"request_count": 0, "total_tokens": 0})
         )
-        conn = FakeSequenceConn([result])
+        conn = FakeSequenceConn([self._lock_result(), result])
         # token_limit=0 → 不检查预算，即使 planned_tokens 很大也不超限
         usage = enforce_daily_budget(
             conn,
@@ -227,7 +231,7 @@ class TestEnforceDailyBudget:
         result = FakeQueryResult(
             one=FakeRow({"request_count": 100, "total_tokens": 999999})
         )
-        conn = FakeSequenceConn([result])
+        conn = FakeSequenceConn([self._lock_result(), result])
         usage = enforce_daily_budget(
             conn,
             user_id=1,

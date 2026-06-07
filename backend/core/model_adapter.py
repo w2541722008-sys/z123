@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import atexit
 import json
 import logging
+import threading
 import time
 from typing import Any, Callable, Iterable, Mapping
 
@@ -30,35 +30,25 @@ _RETRY_BACKOFF_BASE = 0.5  # 指数退避基数（秒）
 _MAX_STREAM_ATTEMPTS = 2  # 流式连接最多 2 次尝试
 _STREAM_RETRY_DELAY = 0.5  # 流式重试前固定延迟（秒）
 
-# 全局 httpx.Client 复用（避免每次请求新建实例）
-_http_client: httpx.Client | None = None
-_stream_client: httpx.Client | None = None
+# 每线程独立 httpx.Client — httpx.Client 非线程安全，ThreadPoolExecutor 多线程并发访问
+# 同一全局实例会导致数据错乱。threading.local() 确保每个线程独享自己的连接池。
+_local = threading.local()
 
 
 def _get_http_client() -> httpx.Client:
-    global _http_client
-    if _http_client is None or _http_client.is_closed:
-        _http_client = httpx.Client(timeout=DEFAULT_TIMEOUT)
-    return _http_client
+    client = getattr(_local, 'http_client', None)
+    if client is None or client.is_closed:
+        client = httpx.Client(timeout=DEFAULT_TIMEOUT)
+        _local.http_client = client
+    return client
 
 
 def _get_stream_client() -> httpx.Client:
-    global _stream_client
-    if _stream_client is None or _stream_client.is_closed:
-        _stream_client = httpx.Client(timeout=STREAM_TIMEOUT)
-    return _stream_client
-
-
-def _cleanup_httpx_clients() -> None:
-    for client in (_http_client, _stream_client):
-        if client is not None and not client.is_closed:
-            try:
-                client.close()
-            except Exception:
-                pass
-
-
-atexit.register(_cleanup_httpx_clients)
+    client = getattr(_local, 'stream_client', None)
+    if client is None or client.is_closed:
+        client = httpx.Client(timeout=STREAM_TIMEOUT)
+        _local.stream_client = client
+    return client
 
 # ============================================================
 # 模型配置与调用适配层
