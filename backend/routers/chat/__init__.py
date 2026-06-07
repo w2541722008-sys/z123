@@ -27,7 +27,6 @@ from core.schemas import (
     ChatSendPayload,
     ContinuePayload,
     GuestChatPayload,
-    MergeGuestHistoryPayload,
     RegeneratePayload,
 )
 from services.chat_send import (
@@ -41,7 +40,7 @@ from services.chat_send import (
     save_assistant_message,
     store_user_message,
 )
-from services.chat_query import count_chat_messages, merge_guest_history
+from services.chat_query import count_chat_messages
 from services.rate_limit import enforce_rate_limit, get_request_client_ip
 
 from ._route_builders import (
@@ -241,23 +240,6 @@ def chat_continue(
     )
 
 
-@router.post("/chat/merge-guest-history")
-def chat_merge_guest_history(
-    payload: MergeGuestHistoryPayload,
-    user: CurrentUser = Depends(get_current_user),
-    conn: ConnType = Depends(get_db_dep),
-):
-    """游客登录后将内存中的聊天历史合并到用户账号。
-
-    仅合并最近 50 条，跳过已存在的内容（按 (user_id, character_id, role, content) 去重）。
-    """
-    merged = merge_guest_history(
-        conn,
-        user_id=user.id,
-        character_id=payload.character_id,
-        messages=payload.messages,
-    )
-    return {"ok": True, "merged": merged}
 
 
 # ============================================================

@@ -59,67 +59,6 @@ class TestCountChatMessages:
 
 
 # ============================================================
-# merge_guest_history
-# ============================================================
-class TestMergeGuestHistory:
-    def test_skips_invalid_and_duplicate_messages(self):
-        from services.chat_query import merge_guest_history
-
-        conn = FakeSequenceConn(
-            [
-                FakeQueryResult(one=None),  # user hi: not exists
-                FakeQueryResult(one=None),  # user hi: insert
-                FakeQueryResult(one=FakeRow({"id": 1})),  # duplicate user hi
-                FakeQueryResult(one=None),  # assistant ok: not exists
-                FakeQueryResult(one=None),  # assistant ok: insert
-            ]
-        )
-        messages = [
-            {"role": "system", "content": "ignored"},
-            {"role": "user", "content": " hi "},
-            {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": " ok "},
-            {"role": "assistant", "content": "   "},
-        ]
-
-        result = merge_guest_history(
-            conn,
-            user_id=1,
-            character_id="c1",
-            messages=messages,
-        )
-
-        assert result == 2
-        assert conn.committed is True
-        assert len(conn.executed) == 5
-        insert_sqls = [
-            sql for sql, _ in conn.executed if "INSERT INTO chat_messages" in sql
-        ]
-        assert len(insert_sqls) == 2
-
-    def test_commit_can_be_deferred(self):
-        from services.chat_query import merge_guest_history
-
-        conn = FakeSequenceConn(
-            [
-                FakeQueryResult(one=None),
-                FakeQueryResult(one=None),
-            ]
-        )
-
-        result = merge_guest_history(
-            conn,
-            user_id=1,
-            character_id="c1",
-            messages=[{"role": "user", "content": "hi"}],
-            commit=False,
-        )
-
-        assert result == 1
-        assert conn.committed is False
-
-
-# ============================================================
 # get_last_chat_time
 # ============================================================
 class TestGetLastChatTime:

@@ -54,26 +54,6 @@ def insert_message(
     )
 
 
-def message_with_content_exists(
-    conn: ConnType,
-    *,
-    user_id: int | str,
-    character_id: str,
-    role: str,
-    content: str,
-) -> bool:
-    """按用户、角色、角色类型和内容检查消息是否已存在。"""
-    row = conn.execute(
-        """
-        SELECT id FROM chat_messages
-        WHERE user_id = %s AND character_id = %s AND role = %s AND content = %s
-        LIMIT 1
-        """,
-        (user_id, character_id, role, content),
-    ).fetchone()
-    return row is not None
-
-
 def delete_user_messages(conn: ConnType, user_id: int | str, character_id: str) -> None:
     """删除用户与角色的所有聊天消息。"""
     conn.execute(

@@ -71,15 +71,6 @@
     renderProfile();
      // 登录后隐藏游客体验额度提示
      if (typeof Chat !== 'undefined') Chat.renderGuestQuotaBar();
-     // 保存游客聊天历史（登录后合并到用户账号）
-     if (typeof Chat !== 'undefined' && Chat.currentChar && Chat.history) {
-       var guestMsgs = Chat.history;
-       var guestCid = Chat.currentChar.id;
-       if (guestMsgs && guestMsgs.length && guestCid) {
-         window.__guestChatHistory = guestMsgs.slice(-50);
-         window.__guestChatCharId = guestCid;
-       }
-     }
      // 登录/注册成功后：有上次聊天角色则跳过去，否则跳角色广场
      setTimeout(() => {
        const lastId = AppState.getLastCharacterId();

@@ -375,16 +375,6 @@ const Chat = (() => {
     ChatStatusPanel.reset();
     App.nav('chat');
 
-    // 游客登录后恢复内存中的聊天历史
-    var guestHistory = window.__guestChatHistory;
-    var guestCharId = window.__guestChatCharId;
-    if (guestHistory && guestHistory.length && guestCharId === ChatState.currentChar.id) {
-      window.__guestChatHistory = null;
-      window.__guestChatCharId = null;
-    } else {
-      guestHistory = null;
-    }
-
     if (!Auth.isLoggedIn()) {
       const openingText = ChatState.currentChar.opening_message || ChatState.currentChar.first_message || '';
       if (openingText) { R.appendMsg('assistant', openingText); ChatState.history.push({ role: 'assistant', content: openingText }); }
@@ -401,12 +391,6 @@ const Chat = (() => {
       ChatState.currentChar = { ...ChatState.currentChar, ...mergedChar };
       ChatState.history = result.messages || [];
       ChatState.historyHasMore = result.has_more || false;
-      // 合并游客历史到从数据库加载的历史前面
-      if (guestHistory && guestHistory.length) {
-        ChatState.history = [...guestHistory, ...ChatState.history];
-        // 后台异步持久化游客历史
-        _persistGuestHistory(ChatState.currentChar.id, guestHistory);
-      }
       R.updateChatHeader(ChatState.currentChar);
       renderHistory(ChatState.history);
       if (ChatState.historyHasMore) renderLoadEarlierButton();
@@ -493,18 +477,6 @@ const Chat = (() => {
   }
 
   function toggleStatusPanel() { ChatStatusPanel.toggle(); }
-
-  /** 后台异步将游客聊天历史持久化到用户账号 */
-  async function _persistGuestHistory(charId, historyMessages) {
-    try {
-      const payload = {
-        character_id: charId,
-        messages: historyMessages.filter(function(m) { return m.role === 'user' || m.role === 'assistant'; }),
-      };
-      if (!payload.messages.length) return;
-      await API.mergeGuestHistory(payload);
-    } catch (_) { /* 静默失败，不影响主流程 */ }
-  }
 
   /* ── 公开 API ────────────────────────────────────────── */
   return {

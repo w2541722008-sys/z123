@@ -26,7 +26,6 @@ from core.schemas._chat import (
     ContinuePayload,
     GuestChatPayload,
     GuestMessageItem,
-    MergeGuestHistoryPayload,
     RegeneratePayload,
 )
 

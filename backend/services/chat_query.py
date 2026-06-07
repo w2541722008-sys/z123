@@ -195,43 +195,6 @@ def count_chat_messages(conn: ConnType, user_id: int | str, character_id: str) -
     return chat_repo.count_chat_history(conn, user_id, character_id)
 
 
-def merge_guest_history(
-    conn: ConnType,
-    *,
-    user_id: int | str,
-    character_id: str,
-    messages: list[dict[str, Any]],
-    commit: bool = True,
-) -> int:
-    """将游客本地历史合并到账号，按 role/content 去重。"""
-    merged = 0
-    for item in messages[:50]:
-        role = (item.get("role") or "").strip()
-        content = (item.get("content") or "").strip()
-        if role not in ("user", "assistant") or not content:
-            continue
-        if chat_repo.message_with_content_exists(
-            conn,
-            user_id=user_id,
-            character_id=character_id,
-            role=role,
-            content=content,
-        ):
-            continue
-        chat_repo.insert_message(
-            conn,
-            user_id=user_id,
-            character_id=character_id,
-            role=role,
-            content=content,
-        )
-        merged += 1
-
-    if commit:
-        conn.commit()
-    return merged
-
-
 def get_last_chat_time(
     conn: ConnType, user_id: int | str, character_id: str
 ) -> str | None:
