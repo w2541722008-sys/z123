@@ -287,6 +287,7 @@ class TestAdminDashboard:
             FakeQueryResult(one={"total": 1990}), # today_revenue
             FakeQueryResult(one={"cnt": 0}),     # expiring_soon
             FakeQueryResult(many=[{"plan_type": "free", "cnt": 7}, {"plan_type": "vip", "cnt": 3}]),
+            FakeQueryResult(one={"size_bytes": 31457280}),  # pg_database_size (~30MB)
         ])
         with override_db(app, conn):
             response = client.get("/api/admin/dashboard/stats")
@@ -294,6 +295,8 @@ class TestAdminDashboard:
         data = response.json()
         assert "total_users" in data
         assert "paid_rate" in data
+        assert "storage" in data
+        assert data["storage"]["size_mb"] == 30.0
 
     def test_audit_logs_returns_paginated_result(self, admin_client):
         app, client = admin_client

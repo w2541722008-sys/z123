@@ -60,7 +60,7 @@ from core.exceptions import (
     RateLimitError,
     UnauthorizedError,
 )
-from services.health_service import check_db_health, check_media_health
+from services.health_service import check_db_health, check_media_health, start_keepalive_daemon
 from services.billing_order_service import start_order_cleanup_daemon
 
 # 导入路由
@@ -150,6 +150,10 @@ async def lifespan(app: FastAPI):
 
     start_order_cleanup_daemon(interval_seconds=3600)
     logger.info("✅ 订单清理后台任务已启动")
+
+    start_keepalive_daemon()
+    logger.info("✅ 数据库 keep-alive 守护线程已启动（间隔 %s 秒）",
+                os.environ.get("DB_KEEPALIVE_INTERVAL_SECONDS", "300"))
 
     missing_configs = validate_production_config()
     if missing_configs:

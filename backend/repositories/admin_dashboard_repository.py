@@ -15,6 +15,22 @@ from core.database import ConnType
 # 仪表盘统计
 # ============================================================
 
+def get_database_size(conn: ConnType) -> dict[str, Any]:
+    """查询数据库存储用量和上限，用于管理后台容量预警。"""
+    row = conn.execute(
+        "SELECT pg_database_size(current_database()) AS size_bytes"
+    ).fetchone()
+    size_bytes = int(row["size_bytes"]) if row else 0
+    limit_mb = 500  # Supabase 免费版上限
+    size_mb = round(size_bytes / (1024 * 1024), 1)
+    return {
+        "size_bytes": size_bytes,
+        "size_mb": size_mb,
+        "limit_mb": limit_mb,
+        "used_percent": round(size_bytes / (limit_mb * 1024 * 1024) * 100, 1),
+    }
+
+
 def get_dashboard_stats(conn: ConnType) -> dict[str, Any]:
     """返回仪表盘核心统计数据，内部逐项查询。"""
     return {

@@ -67,6 +67,7 @@ def admin_dashboard_stats(conn: ConnType = Depends(get_db_dep)) -> dict[str, Any
         **stats,
         "paid_rate": round(stats["paid_users"] / total_users * 100, 1) if total_users > 0 else 0,
         "avg_order_value": round(today_revenue / today_orders) if today_orders > 0 else 0,
+        "storage": dashboard_repo.get_database_size(conn),
     }
 
 

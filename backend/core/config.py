@@ -224,6 +224,10 @@ SVIP_PLAN_DURATION_DAYS = _int_env("SVIP_PLAN_DURATION_DAYS", 30, minimum=1)
 # 待支付订单有效期（分钟），超时后自动关闭，避免长期堆积无效 pending 订单
 BILLING_PENDING_EXPIRE_MINUTES = _int_env("BILLING_PENDING_EXPIRE_MINUTES", 30, minimum=5, maximum=1440)
 
+# 数据库存储告警阈值（百分比），管理后台仪表盘进度条变色预警
+STORAGE_WARN_PERCENT = _int_env("STORAGE_WARN_PERCENT", 60, minimum=10, maximum=95)
+STORAGE_DANGER_PERCENT = _int_env("STORAGE_DANGER_PERCENT", 80, minimum=20, maximum=99)
+
 # 请求日志保留天数，避免日志表无限增长
 AI_REQUEST_LOG_RETENTION_DAYS = _int_env("AI_REQUEST_LOG_RETENTION_DAYS", 30, minimum=1, maximum=365)
 

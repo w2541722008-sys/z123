@@ -2,11 +2,14 @@
 健康检查服务
 
 提供数据库和媒体资源的健康检查功能，带缓存机制避免高频查询压垮数据库。
+同时提供 keep-alive 守护线程，防止 Supabase 免费版因不活跃被暂停。
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -117,3 +120,32 @@ def check_media_health(*, force: bool = False) -> dict[str, object]:
         "missing_count": int(_media_health_cache["missing_count"]),
         "samples": list(_media_health_cache["samples"]),
     }
+
+
+# ============================================================
+# Keep-Alive 守护线程（防止 Supabase 免费版 7 天无活动暂停）
+# ============================================================
+
+_KEEPALIVE_INTERVAL_SECONDS = int(os.environ.get("DB_KEEPALIVE_INTERVAL_SECONDS", "300"))
+
+
+def start_keepalive_daemon() -> threading.Thread:
+    """每 N 秒执行一次 SELECT 1，防止 Supabase 免费版因不活跃被暂停。
+
+    绕过 check_db_health() 的 TTL 缓存 — 直接 get_conn() + SELECT 1。
+    异常不崩溃线程，下次循环重试。
+    间隔可通过 DB_KEEPALIVE_INTERVAL_SECONDS 环境变量覆盖，默认 300 秒（5 分钟）。
+    """
+    def _ping() -> None:
+        while True:
+            try:
+                conn = get_conn()
+                conn.execute("SELECT 1")
+                conn.close()
+            except Exception:
+                logger.warning("keep-alive ping 失败，下次重试", exc_info=True)
+            time.sleep(_KEEPALIVE_INTERVAL_SECONDS)
+
+    t = threading.Thread(target=_ping, daemon=True, name="db-keepalive")
+    t.start()
+    return t

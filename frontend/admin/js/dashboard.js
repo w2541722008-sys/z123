@@ -43,6 +43,14 @@ function renderDashboard(stats, trend, mediaMissing = {}) {
     ? '<div class="media-missing-hint">仅展示样例，请点击“刷新缺失清单”获取最新结果。</div>'
     : '';
 
+  const storage = stats.storage || {};
+  const usedPercent = Number(storage.used_percent || 0);
+  let storageClass = 'safe';
+  if (usedPercent >= 90) storageClass = 'critical';
+  else if (usedPercent >= 80) storageClass = 'danger';
+  else if (usedPercent >= 60) storageClass = 'warn';
+  const storageBarWidth = Math.min(usedPercent, 100);
+
   box.innerHTML = `
     <div class="dashboard-grid">
       <div class="stat-card purple">
@@ -69,6 +77,17 @@ function renderDashboard(stats, trend, mediaMissing = {}) {
         <div class="stat-label">即将到期</div>
         <div class="stat-sub">3 天内</div>
       </div>
+    </div>
+
+    <div class="storage-usage-card">
+      <div class="storage-header">
+        <span>🗄️ 数据库存储</span>
+        <span class="storage-value">${storage.size_mb ?? '--'} MB / ${storage.limit_mb ?? 500} MB</span>
+      </div>
+      <div class="storage-bar-bg">
+        <div class="storage-bar-fill ${storageClass}" style="width:${storageBarWidth}%"></div>
+      </div>
+      <div class="storage-footer">已使用 ${usedPercent}%${usedPercent >= 80 ? ' ⚠️ 请关注扩容' : ''}</div>
     </div>
 
     <div class="dashboard-section">

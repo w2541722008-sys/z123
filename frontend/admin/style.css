@@ -473,3 +473,47 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
   .diagnostic-grid { grid-template-columns: 1fr; }
   .dashboard-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---- 数据库存储用量进度条 ---- */
+.storage-usage-card {
+  background: var(--bg-card);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.storage-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.storage-value {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.storage-bar-bg {
+  height: 10px;
+  background: var(--bg-deepest);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.storage-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  transition: width 0.5s ease;
+  min-width: 2px;
+}
+.storage-bar-fill.safe { background: #4ade80; }
+.storage-bar-fill.warn { background: #f59e0b; }
+.storage-bar-fill.danger { background: #ef4444; }
+.storage-bar-fill.critical { background: #ef4444; animation: storage-pulse 1s ease-in-out infinite; }
+.storage-footer {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+@keyframes storage-pulse {
+  50% { opacity: 0.5; }
+}
