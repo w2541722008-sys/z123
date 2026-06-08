@@ -149,3 +149,22 @@ class TestDeleteCharacterCascade:
         assert result is None
         # 不应执行任何 DELETE
         assert len(conn.executed) == 1
+
+
+class TestUpdateCharacterFields:
+    def test_allows_life_profile_json(self):
+        from repositories.character_repository import update_character_fields
+        conn = FakeSequenceConn([FakeRow()])
+
+        update_character_fields(conn, "luna", {"life_profile_json": '{"basic_info":"林深"}'})
+
+        sql, params = conn.executed[0]
+        assert "life_profile_json = %s" in sql
+        assert params == ['{"basic_info":"林深"}', "luna"]
+
+    def test_rejects_unknown_field(self):
+        from repositories.character_repository import update_character_fields
+        conn = FakeSequenceConn([])
+
+        with pytest.raises(ValueError):
+            update_character_fields(conn, "luna", {"drop table users": "x"})

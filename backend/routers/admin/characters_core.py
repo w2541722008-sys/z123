@@ -6,10 +6,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from core.auth import CurrentUser, get_admin_user, get_current_user
+from core.auth import CurrentUser, get_admin_user
 from core.database import ConnType, get_db_dep
 from core.exceptions import BadRequestError, ConflictError, NotFoundError
-from core.plan_constants import DEFAULT_CARD_TYPE, VALID_CARD_TYPES
+from core.plan_constants import CHARACTER_PLAN_VALUES, DEFAULT_CARD_TYPE, VALID_CARD_TYPES
 from core.schemas import AdminUpdatePayload
 from repositories import character_repository as char_repo
 from repositories import admin_audit_repository as audit_repo
@@ -22,6 +22,54 @@ logger = logging.getLogger(__name__)
 
 # 认证依赖由父路由 _router.py 统一提供
 router = APIRouter(tags=["admin"])
+
+
+_ADMIN_INT_FIELD_RANGES = {
+    "sort_order": (0, 9999),
+    "home_priority": (0, 9999),
+    "is_visible": (0, 1),
+    "affection_enabled": (0, 1),
+    "import_locked": (0, 1),
+}
+
+
+def _parse_json_field(raw_value: Any, field_name: str, expected_type: type) -> Any:
+    if isinstance(raw_value, str):
+        if not raw_value.strip():
+            return {} if expected_type is dict else []
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            raise BadRequestError(detail=f"{field_name} 不是合法的 JSON")
+    else:
+        parsed = raw_value
+    if not isinstance(parsed, expected_type):
+        expected_label = "对象" if expected_type is dict else "数组"
+        raise BadRequestError(detail=f"{field_name} 必须是 JSON {expected_label}")
+    return parsed
+
+
+def _validate_admin_character_updates(updates: dict[str, Any]) -> None:
+    if "card_type" in updates and updates["card_type"] not in VALID_CARD_TYPES:
+        raise BadRequestError(detail=f"card_type必须是以下之一: {', '.join(VALID_CARD_TYPES)}")
+    if "required_plan" in updates and updates["required_plan"] not in CHARACTER_PLAN_VALUES:
+        raise BadRequestError(detail=f"required_plan必须是以下之一: {', '.join(CHARACTER_PLAN_VALUES)}")
+
+    for field, (minimum, maximum) in _ADMIN_INT_FIELD_RANGES.items():
+        if field not in updates:
+            continue
+        try:
+            value = int(updates[field])
+        except (TypeError, ValueError):
+            raise BadRequestError(detail=f"{field}必须是整数")
+        if value < minimum or value > maximum:
+            raise BadRequestError(detail=f"{field}必须在{minimum}-{maximum}之间")
+
+    for field in ("life_profile_json", "phase_behaviors_json"):
+        if field in updates:
+            _parse_json_field(updates[field], field, dict)
+    if "tags" in updates:
+        _parse_json_field(updates["tags"], "tags", list)
 
 
 @router.get("/admin/characters")
@@ -231,6 +279,7 @@ def admin_update_character(
         invalid_fields = set(safe_direct.keys()) - _ADMIN_EDITABLE_FIELDS
         if invalid_fields:
             raise BadRequestError(detail=f"非法更新字段: {invalid_fields}")
+        _validate_admin_character_updates(safe_direct)
 
         # 校验 affection_rules_json 格式（必须是扁平键值对，禁止嵌套格式）
         if "affection_rules_json" in safe_direct:
@@ -252,7 +301,6 @@ def admin_update_character(
                 except json.JSONDecodeError:
                     raise BadRequestError(detail="affection_rules_json 不是合法的 JSON")
 
-        set_clause = ", ".join(f"{k} = %s" for k in safe_direct)
         char_repo.update_character_fields(conn, character_id, safe_direct)
 
     if rl_updates:
@@ -274,7 +322,7 @@ def admin_update_character(
             new_runtime_json = json.dumps(rl, ensure_ascii=False)
 
             char_repo.update_character_json_fields(conn, character_id, new_structured_json, new_runtime_json)
-        except Exception as e:
+        except Exception:
             logger.exception("更新 runtime_layers 失败 character_id=%s", character_id)
             raise HTTPException(status_code=500, detail="服务器内部错误，请稍后重试")
 

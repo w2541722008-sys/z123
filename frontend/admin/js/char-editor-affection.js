@@ -79,7 +79,7 @@ function renderAffectionRuleEditor(value) {
           <div class="affection-editor-desc">${editorDesc}</div>
         </div>
         <label class="checkbox-group" style="margin-left:auto;">
-          <input type="checkbox" id="affection-enabled-override" ${parsed.enabled === false ? '' : 'checked'} onchange="syncAffectionRulesEditor()" />
+          <input type="checkbox" id="affection-enabled-override" data-affection-sync="true" ${parsed.enabled === false ? '' : 'checked'} />
           <span>启用该角色的${typeConfig.metricName}规则</span>
         </label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -116,7 +116,7 @@ function renderAffectionRuleEditor(value) {
         ${cardType === 'scenario' ? `
         <div class="affection-rule-row">
           <div class="affection-rule-name">剧情类型（scenario_type）<span style="color:#666">（决定使用哪套剧情 System Prompt 和沉浸度事件）</span></div>
-          <select data-affection-meta="scenario_type" onchange="syncAffectionRulesEditor(); refreshAffectionEditor();">
+          <select data-affection-meta="scenario_type" data-affection-refresh="true">
             <option value="" ${!parsed.scenario_type ? 'selected' : ''}>默认（冒险剧情）</option>
             <option value="adventure" ${parsed.scenario_type === 'adventure' ? 'selected' : ''}>🗡️ 冒险剧情</option>
             <option value="romance" ${parsed.scenario_type === 'romance' ? 'selected' : ''}>💕 恋爱剧情</option>
@@ -125,11 +125,11 @@ function renderAffectionRuleEditor(value) {
         ` : ''}
         <div class="affection-rule-row">
           <div class="affection-rule-name">每日${typeConfig.metricName}涨幅上限（daily_cap）<span style="color:#666">（默认 15，设为 0 = 不限制，适合剧情沙盒）</span></div>
-          <input type="number" data-affection-meta="daily_cap" value="${parsed.daily_cap != null ? parsed.daily_cap : ''}" placeholder="15" min="0" max="100" oninput="syncAffectionRulesEditor()" />
+          <input type="number" data-affection-meta="daily_cap" value="${parsed.daily_cap != null ? parsed.daily_cap : ''}" placeholder="15" min="0" max="100" />
         </div>
         <div class="affection-rule-row">
           <div class="affection-rule-name">允许阶段回退（allow_regression）<span style="color:#666">（默认关闭，开启后好感度下降会回退剧情阶段）</span></div>
-          <select data-affection-meta="allow_regression" onchange="syncAffectionRulesEditor()">
+          <select data-affection-meta="allow_regression">
             <option value="" ${parsed.allow_regression == null ? 'selected' : ''}>默认（关闭）</option>
             <option value="true" ${parsed.allow_regression === true ? 'selected' : ''}>✅ 开启</option>
             <option value="false" ${parsed.allow_regression === false ? 'selected' : ''}>🚫 关闭</option>
@@ -137,7 +137,7 @@ function renderAffectionRuleEditor(value) {
         </div>
         <div class="affection-rule-row">
           <div class="affection-rule-name">隐藏聊天状态栏（show_bar）<span style="color:#666">（隐藏后用户看不到进度条、阶段、心情标签，增加探索未知感）</span></div>
-          <select data-affection-meta="show_bar" onchange="syncAffectionRulesEditor()">
+          <select data-affection-meta="show_bar">
             <option value="" ${parsed.show_bar == null ? 'selected' : ''}>默认（显示）</option>
             <option value="true" ${parsed.show_bar === true ? 'selected' : ''}>👁 显示</option>
             <option value="false" ${parsed.show_bar === false ? 'selected' : ''}>🙈 隐藏</option>
@@ -163,8 +163,8 @@ function addAffectionCustomRow(key = '', score = '') {
   const row = document.createElement('div');
   row.className = 'affection-custom-row';
   row.innerHTML = `
-    <input type="text" data-affection-custom-key value="${escHtml(key)}" placeholder="事件名，例如：study_together" oninput="syncAffectionRulesEditor()" />
-    <input type="number" data-affection-custom-score value="${score}" placeholder="分值" oninput="syncAffectionRulesEditor()" />
+    <input type="text" data-affection-custom-key value="${escHtml(key)}" placeholder="事件名，例如：study_together" />
+    <input type="number" data-affection-custom-score value="${score}" placeholder="分值" />
     <button type="button" class="btn btn-ghost" data-action="remove-affection-custom-row">删除</button>
   `;
   list.appendChild(row);
@@ -307,9 +307,5 @@ function refreshAffectionEditor() {
   // 重新渲染编辑器
   affectionContainer.outerHTML = renderAffectionRuleEditor(currentValue);
 
-  // 重新绑定事件监听器
-  document.querySelectorAll('[data-affection-key]').forEach(input => {
-    input.addEventListener('input', syncAffectionRulesEditor);
-  });
   validateAffectionRulesEditor();
 }

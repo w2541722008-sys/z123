@@ -242,6 +242,72 @@ class TestAdminCharacters:
             response = client.post("/api/admin/character/test", json={"updates": {}})
         assert response.status_code == 422 or response.status_code == 400
 
+    def test_update_character_saves_life_profile_json(self, admin_client):
+        app, client = admin_client
+        conn = FakeSequenceConn([
+            FakeQueryResult(one={"id": "luna", "structured_asset_json": "{}"}),
+            FakeQueryResult(rowcount=1),  # UPDATE characters
+            FakeQueryResult(rowcount=1),  # audit log INSERT
+        ])
+        payload = {
+            "updates": {
+                "life_profile_json": '{"basic_info":"林深","family":"茶馆"}',
+            },
+        }
+        with override_db(app, conn), \
+             patch("routers.admin.characters_core.invalidate_character"), \
+             patch("routers.admin.characters_core.invalidate_character_affection_rules"), \
+             patch("routers.admin.characters_core.invalidate_character_list_all"):
+            response = client.post("/api/admin/character/luna", json=payload)
+
+        assert response.status_code == 200
+        assert "life_profile_json" in response.json()["updated"]
+        update_sql, update_params = conn.executed[1]
+        assert "life_profile_json = %s" in update_sql
+        assert update_params[0] == '{"basic_info":"林深","family":"茶馆"}'
+
+    def test_update_character_rejects_invalid_card_type(self, admin_client):
+        app, client = admin_client
+        conn = FakeSequenceConn([
+            FakeQueryResult(one={"id": "luna", "structured_asset_json": "{}"}),
+        ])
+        with override_db(app, conn):
+            response = client.post(
+                "/api/admin/character/luna",
+                json={"updates": {"card_type": "world"}},
+            )
+
+        assert response.status_code == 400
+        assert "card_type" in response.json()["detail"]
+
+    def test_update_character_rejects_invalid_required_plan(self, admin_client):
+        app, client = admin_client
+        conn = FakeSequenceConn([
+            FakeQueryResult(one={"id": "luna", "structured_asset_json": "{}"}),
+        ])
+        with override_db(app, conn):
+            response = client.post(
+                "/api/admin/character/luna",
+                json={"updates": {"required_plan": "premium"}},
+            )
+
+        assert response.status_code == 400
+        assert "required_plan" in response.json()["detail"]
+
+    def test_update_character_rejects_invalid_life_profile_json(self, admin_client):
+        app, client = admin_client
+        conn = FakeSequenceConn([
+            FakeQueryResult(one={"id": "luna", "structured_asset_json": "{}"}),
+        ])
+        with override_db(app, conn):
+            response = client.post(
+                "/api/admin/character/luna",
+                json={"updates": {"life_profile_json": "[]"}},
+            )
+
+        assert response.status_code == 400
+        assert "life_profile_json" in response.json()["detail"]
+
 
 # ── Orders 端点 ──────────────────────────────────────────────────
 

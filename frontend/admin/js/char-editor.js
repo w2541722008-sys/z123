@@ -22,7 +22,7 @@ function safeParseJSON(str, fallback = {}) {
 // ============================================================
 const FIXED_FIELD_META = {
   name:               { label: '角色名', desc: '显示在广场和聊天页的名字', type: 'text' },
-  abbr:               { label: '简称 abbr', desc: '聊天内称呼等', type: 'text' },
+  abbr:               { label: '简称 abbr', desc: '聊天内称呼，不填自动使用角色名', type: 'text' },
   subtitle:           { label: '简介（副标题）', desc: '广场卡片下方显示，60字以内吸引用户', type: 'textarea', rows: 3 },
   tags:               { label: '标签', desc: '逗号分隔，或 JSON 数组如 ["标签A","标签B"]', type: 'textarea', rows: 2 },
   avatar_url:         { label: '头像图片 avatar_url', desc: '聊天头像；支持本地绝对路径、/frontend/... 静态路径或 http(s) URL。推荐 1:1 正方形。', type: 'text' },
@@ -149,7 +149,7 @@ function makeFieldHtml(fieldId, label, desc, type, val, extraOpts) {
 
   if (type === 'textarea') {
     const rows = extraOpts?.rows || 4;
-    inputHtml = `<textarea id="field-${fieldId}" rows="${rows}" oninput="updateLen(this)">${escHtml(String(val ?? ''))}</textarea>`;
+    inputHtml = `<textarea id="field-${fieldId}" rows="${rows}" data-update-len="true">${escHtml(String(val ?? ''))}</textarea>`;
   } else if (type === 'select') {
     const normalizedVal = typeof val === 'boolean' ? (val ? '1' : '0') : String(val ?? '');
     inputHtml = `<select id="field-${fieldId}">`;
@@ -198,7 +198,7 @@ function renderPhaseBehaviorsEditor(jsonStr) {
   const rows = Object.entries(labels).map(([key, label]) => `
     <div class="life-profile-field">
       <label>${escHtml(label)}（${escHtml(key)}）</label>
-      <textarea id="phase-behavior-${escHtml(key)}" rows="3" placeholder="${escHtml(placeholders[key] || '描述该阶段的行为倾向')}" oninput="syncPhaseBehaviorsEditor()">${escHtml(parsed[key] || '')}</textarea>
+      <textarea id="phase-behavior-${escHtml(key)}" rows="3" placeholder="${escHtml(placeholders[key] || '描述该阶段的行为倾向')}" data-phase-behavior-input="true">${escHtml(parsed[key] || '')}</textarea>
     </div>
   `).join('');
   return `
@@ -240,31 +240,31 @@ function renderLifeProfileEditor(jsonStr) {
       <div class="life-profile-editor">
         <div class="life-profile-field">
           <label>基本信息（姓名、年龄、职业）</label>
-          <textarea id="life-profile-basic" rows="3" placeholder="例如：林深，28岁，互联网公司产品经理" oninput="syncLifeProfileEditor()">${escHtml(parsed.basic_info || '')}</textarea>
+          <textarea id="life-profile-basic" rows="3" placeholder="例如：林深，28岁，互联网公司产品经理" data-life-profile-input="true">${escHtml(parsed.basic_info || '')}</textarea>
         </div>
         <div class="life-profile-field">
           <label>童年经历</label>
-          <textarea id="life-profile-childhood" rows="4" placeholder="例如：出生在江南小镇，父母经营茶馆。小学时因为内向被同学孤立..." oninput="syncLifeProfileEditor()">${escHtml(parsed.childhood || '')}</textarea>
+          <textarea id="life-profile-childhood" rows="4" placeholder="例如：出生在江南小镇，父母经营茶馆。小学时因为内向被同学孤立..." data-life-profile-input="true">${escHtml(parsed.childhood || '')}</textarea>
         </div>
         <div class="life-profile-field">
           <label>家庭背景</label>
-          <textarea id="life-profile-family" rows="3" placeholder="例如：父亲林国华，60岁，退休茶艺师。母亲陈婉清，58岁..." oninput="syncLifeProfileEditor()">${escHtml(parsed.family || '')}</textarea>
+          <textarea id="life-profile-family" rows="3" placeholder="例如：父亲林国华，60岁，退休茶艺师。母亲陈婉清，58岁..." data-life-profile-input="true">${escHtml(parsed.family || '')}</textarea>
         </div>
         <div class="life-profile-field">
           <label>工作经历</label>
-          <textarea id="life-profile-work" rows="4" placeholder="例如：2018年毕业于浙江大学计算机系，2018-2020字节跳动..." oninput="syncLifeProfileEditor()">${escHtml(parsed.work || '')}</textarea>
+          <textarea id="life-profile-work" rows="4" placeholder="例如：2018年毕业于浙江大学计算机系，2018-2020字节跳动..." data-life-profile-input="true">${escHtml(parsed.work || '')}</textarea>
         </div>
         <div class="life-profile-field">
           <label>性格特点</label>
-          <textarea id="life-profile-personality" rows="3" placeholder="例如：表面温和，内心有主见。喜欢倾听，不喜欢争论..." oninput="syncLifeProfileEditor()">${escHtml(parsed.personality || '')}</textarea>
+          <textarea id="life-profile-personality" rows="3" placeholder="例如：表面温和，内心有主见。喜欢倾听，不喜欢争论..." data-life-profile-input="true">${escHtml(parsed.personality || '')}</textarea>
         </div>
         <div class="life-profile-field">
           <label>生活习惯</label>
-          <textarea id="life-profile-habits" rows="3" placeholder="例如：早上7点起床，喜欢晨跑。周末喜欢去咖啡馆看书..." oninput="syncLifeProfileEditor()">${escHtml(parsed.habits || '')}</textarea>
+          <textarea id="life-profile-habits" rows="3" placeholder="例如：早上7点起床，喜欢晨跑。周末喜欢去咖啡馆看书..." data-life-profile-input="true">${escHtml(parsed.habits || '')}</textarea>
         </div>
         <div class="life-profile-field">
           <label>重要经历</label>
-          <textarea id="life-profile-events" rows="4" placeholder="例如：大学时暗恋过学姐但没表白。工作第二年因项目失败陷入低谷..." oninput="syncLifeProfileEditor()">${escHtml(parsed.important_events || '')}</textarea>
+          <textarea id="life-profile-events" rows="4" placeholder="例如：大学时暗恋过学姐但没表白。工作第二年因项目失败陷入低谷..." data-life-profile-input="true">${escHtml(parsed.important_events || '')}</textarea>
         </div>
         <div class="life-profile-note">
           💡 提示：<br />
@@ -411,7 +411,9 @@ function renderEditPanel(c) {
       const rows = meta?.rows || 6;
       if (!val && !meta) continue;
       AdminState.currentRlFields.push(rlKey);
-      html += makeFieldHtml(fullKey, label, desc, 'textarea', val, { rows });
+      const rlType = meta?.type || 'textarea';
+      const rlExtra = rlType === 'select' ? { options: meta?.options } : { rows: meta?.rows || 6 };
+      html += makeFieldHtml(fullKey, label, desc, rlType, val, rlExtra);
     }
     html += `</div>`;
   }
@@ -426,9 +428,6 @@ function renderEditPanel(c) {
 
   panel.innerHTML = html;
 
-  document.querySelectorAll('[data-affection-key]').forEach(input => {
-    input.addEventListener('input', syncAffectionRulesEditor);
-  });
   validateAffectionRulesEditor();
 
   // 监听编辑面板所有输入变更，标记为未保存

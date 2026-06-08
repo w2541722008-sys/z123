@@ -18,9 +18,6 @@
 
 from __future__ import annotations
 
-# 标准库导入
-import hmac
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 # 第三方库导入
@@ -34,7 +31,6 @@ from core.auth import (
     _extract_token_from_request,
     clear_auth_cookie,
     clear_refresh_cookie,
-    create_token,
     create_token_pair,
     delete_token,
     generate_device_fingerprint,
@@ -62,7 +58,6 @@ from core.config import (
     logger,
 )
 from core.database import ConnType, get_db_dep
-from core.database import ConnWrapper
 from core.schemas import (
     ForgotPasswordPayload,
     LoginPayload,
@@ -71,9 +66,8 @@ from core.schemas import (
     VerifyCodePayload,
     _normalize_email,
 )
-from repositories import auth_repository as auth_repo
 from repositories import user_repository as user_repo
-from services.email import send_reset_code_email
+from services.email import _mask_email, send_reset_code_email
 from core.plan_constants import serialize_plan_info
 from services.password_reset_service import (
     execute_password_reset,
@@ -165,12 +159,8 @@ def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = D
         tokens = create_token_pair(user_id, conn=conn, commit=False, device_fingerprint=device_fp)
         conn.commit()
 
-        # 设置 HttpOnly Cookie + 返回双 token
-        # 注：access_token/refresh_token 在响应体中仅为向前兼容，未来版本将移除
-        # 前端新代码应直接依赖 HttpOnly Cookie 进行认证
+        # Token 仅通过 HttpOnly Cookie 下发，避免 XSS 读取响应体后窃取。
         body = {
-            "access_token": tokens["access_token"],
-            "refresh_token": tokens["refresh_token"],
             "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             "user": _build_user_payload(
                 user_id=user_id,
@@ -186,7 +176,7 @@ def auth_register(payload: RegisterPayload, request: Request, conn: ConnType = D
         set_refresh_cookie(response, tokens["refresh_token"])
         return response
     except Exception:
-        logger.exception("用户注册事务失败 email=%s", normalized_email)
+        logger.exception("用户注册事务失败 email=%s", _mask_email(normalized_email))
         conn.rollback()
         raise
 
@@ -255,11 +245,8 @@ def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends
         conn.commit()
         nickname = row["nickname"] or normalized_email.split("@")[0]
 
-        # 设置 HttpOnly Cookie + 返回双 token
-        # 注：access_token/refresh_token 在响应体中仅为向前兼容，未来版本将移除
+        # Token 仅通过 HttpOnly Cookie 下发，避免 XSS 读取响应体后窃取。
         body = {
-            "access_token": tokens["access_token"],
-            "refresh_token": tokens["refresh_token"],
             "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             "user": _build_user_payload(
                 user_id=row["id"],
@@ -276,7 +263,7 @@ def auth_login(payload: LoginPayload, request: Request, conn: ConnType = Depends
         set_refresh_cookie(response, tokens["refresh_token"])
         return response
     except Exception:
-        logger.exception("用户登录事务失败 email=%s", normalized_email)
+        logger.exception("用户登录事务失败 email=%s", _mask_email(normalized_email))
         conn.rollback()
         raise
 
@@ -349,18 +336,13 @@ def auth_refresh(request: Request, conn: ConnType = Depends(get_db_dep)) -> JSON
     """
     用 refresh token 换取新的 access token。
 
-    Refresh token 从 Cookie 或 Authorization 头读取。
-    验证通过后旧 access token 失效，返回新 access token。
+    Refresh token 仅从 HttpOnly Cookie 读取。
+    验证通过后旧 access token 失效，并通过 Cookie 设置新 access token。
 
     安全：验证设备指纹匹配，防止 refresh token 被窃取后跨设备使用。
     """
-    # 从请求中提取 refresh token
-    auth_header = request.headers.get("Authorization", "")
-    refresh_token = None
-    if auth_header.startswith("Bearer "):
-        refresh_token = auth_header.split(" ", 1)[1].strip()
-    if not refresh_token:
-        refresh_token = request.cookies.get(_REFRESH_TOKEN_COOKIE)
+    # 仅接受 HttpOnly Cookie（由浏览器自动管理，不可被 JS 篡改）。
+    refresh_token = request.cookies.get(_REFRESH_TOKEN_COOKIE)
     if not refresh_token:
         # 兼容：也尝试从 aifriend_session cookie 读取
         refresh_token = request.cookies.get(_COOKIE_NAME)
@@ -374,12 +356,7 @@ def auth_refresh(request: Request, conn: ConnType = Depends(get_db_dep)) -> JSON
     if not new_access:
         raise UnauthorizedError(detail="refresh token 无效或已过期")
 
-    response = JSONResponse({
-        "access_token": new_access,
-        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        # access_token 在响应体中仅为向前兼容，未来版本将移除
-        # 前端新代码应直接依赖 HttpOnly Cookie（已通过 set_auth_cookie 设置）
-    })
+    response = JSONResponse({"ok": True, "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60})
     set_auth_cookie(response, new_access)
     return response
 
@@ -387,7 +364,6 @@ def auth_refresh(request: Request, conn: ConnType = Depends(get_db_dep)) -> JSON
 @router.post("/auth/logout-others")
 def auth_logout_others(
     request: Request,
-    authorization: str | None = Header(default=None),
     user: CurrentUser = Depends(get_current_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
@@ -400,9 +376,6 @@ def auth_logout_others(
     refresh_token = request.cookies.get(_REFRESH_TOKEN_COOKIE)
     if not refresh_token:
         refresh_token = request.cookies.get(_COOKIE_NAME)
-    # 兼容：也尝试从 Authorization 头获取
-    if not refresh_token and authorization and authorization.startswith("Bearer "):
-        refresh_token = authorization.split(" ", 1)[1].strip()
 
     deleted = revoke_user_device_tokens(user.id, refresh_token or "", conn=conn)
     logger.info("用户 %s 踢出其他设备，删除 %s 个 token", user.id, deleted)
@@ -432,7 +405,7 @@ def forgot_password(payload: ForgotPasswordPayload, request: Request, background
             background_tasks.add_task(send_reset_code_email, user_email, code)
         return {"ok": True, "message": "如果该邮箱已注册，验证码会发送至您的邮箱，10 分钟内有效"}
     except Exception:
-        logger.exception("密码重置请求事务失败 email=%s", normalized_email)
+        logger.exception("密码重置请求事务失败 email=%s", _mask_email(normalized_email))
         conn.rollback()
         raise
 
@@ -476,9 +449,9 @@ def reset_password(payload: ResetPasswordPayload, request: Request, conn: ConnTy
         from services.cache_service import invalidate_user
         invalidate_user(str(user_id))
 
-        logger.info("密码重置成功: %s", user_email)
+        logger.info("密码重置成功: %s", _mask_email(user_email))
         return {"ok": True, "message": "密码重置成功，请使用新密码登录"}
     except Exception:
-        logger.exception("密码重置执行事务失败 email=%s", normalized_email)
+        logger.exception("密码重置执行事务失败 email=%s", _mask_email(normalized_email))
         conn.rollback()
         raise

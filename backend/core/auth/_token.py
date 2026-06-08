@@ -190,8 +190,10 @@ def rotate_access_token(
 
         stored_fp = row["device_fingerprint"] or ""
         if device_fingerprint and stored_fp and device_fingerprint != stored_fp:
-            logger.warning("refresh token 设备指纹不匹配")
-            return None
+            # 设备指纹不匹配时仅记录警告，不拒绝刷新。
+            # 原因：指纹包含 IP 前缀，用户切换网络（WiFi/移动/VPN）后 IP 变化会导致误拦。
+            # Refresh token 已通过 HttpOnly Cookie + Secure + SameSite 保护，安全性足够。
+            logger.warning("refresh token 设备指纹不匹配（可能是 IP 变化），允许刷新继续")
 
         user_id = row["user_id"]
 

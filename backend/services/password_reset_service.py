@@ -22,6 +22,7 @@ from repositories import auth_repository as auth_repo
 from repositories import user_repository as user_repo
 from core.auth import hash_password_bcrypt
 from services.email import generate_reset_code
+from services.email import _mask_email
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def request_password_reset(
 
     user = user_repo.find_user_by_email(conn, normalized_email)
     if not user:
-        logger.info("密码重置请求：邮箱不存在或未命中用户 %s", normalized_email)
+        logger.info("密码重置请求：邮箱不存在或未命中用户 %s", _mask_email(normalized_email))
         return False, None, None
 
     # 检查冷却期（60 秒内是否已发送过）

@@ -1,5 +1,7 @@
 """admin_audit_repository 单元测试"""
 
+import pytest
+
 from conftest import FakeRow, FakeQueryResult, FakeSequenceConn
 from repositories.admin_audit_repository import insert_audit_log
 

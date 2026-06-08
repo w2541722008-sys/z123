@@ -1,0 +1,23 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = [
+  ".git",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".venv",
+  "venv",
+  "backend/.venv",
+  "backend/venv",
+  "backend/alembic/versions",
+  "output",
+]
+
+[tool.ruff.lint]
+# 默认门禁先拦截语法错误和未定义名；unused import 等历史清理后续逐步开启。
+select = ["E9", "F821"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]

@@ -171,6 +171,49 @@ function bindAdminInputEvents() {
   bind('audit-date-from', 'change', () => { AdminState.auditPage = 1; loadAuditLogs(); });
   bind('audit-date-to', 'change', () => { AdminState.auditPage = 1; loadAuditLogs(); });
 
+  document.addEventListener('input', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.matches('[data-update-len="true"]')) {
+      updateLen(target);
+    }
+    if (
+      target.matches('[data-affection-key], [data-affection-custom-key], [data-affection-custom-score], [data-affection-meta]')
+      || target.matches('[data-affection-sync="true"]')
+    ) {
+      syncAffectionRulesEditor();
+    }
+    if (target.matches('[data-phase-behavior-input="true"]')) {
+      syncPhaseBehaviorsEditor();
+    }
+    if (target.matches('[data-life-profile-input="true"]')) {
+      syncLifeProfileEditor();
+    }
+  });
+
+  document.addEventListener('change', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.matches('[data-affection-refresh="true"]')) {
+      syncAffectionRulesEditor();
+      refreshAffectionEditor();
+      return;
+    }
+    if (
+      target.matches('[data-affection-key], [data-affection-custom-key], [data-affection-custom-score], [data-affection-meta]')
+      || target.matches('[data-affection-sync="true"]')
+    ) {
+      syncAffectionRulesEditor();
+    }
+    if (target.matches('[data-user-check-all="true"]')) {
+      toggleAllUsers(target);
+      return;
+    }
+    if (target.matches('[data-user-select="true"]')) {
+      toggleUserSelection(target.value, target);
+    }
+  });
+
   // 记忆筛选
   bind('memory-search', 'input', debounce(() => {
     AdminState.memorySearchQuery = document.getElementById('memory-search')?.value?.trim().toLowerCase() || '';

@@ -82,8 +82,8 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
   padding: 12px 14px 10px; font-size: 12px; color: var(--text-dim);
   text-transform: uppercase; letter-spacing: 1px; display: flex; justify-content: space-between; align-items: center;
 }
-.sidebar-filters { padding: 0 12px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
-.sidebar-filter-row { display: flex; gap: 8px; }
+.sidebar-filters { padding: 8px 12px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.sidebar-filter-row { display: flex; flex-direction: column; gap: 6px; }
 
 /* ---- 通用输入控件 ---- */
 .input-search {
@@ -95,6 +95,7 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
   flex: 1; min-width: 100px; padding: 6px 8px; border-radius: var(--radius); border: 1px solid var(--border);
   background: var(--bg-input); color: var(--text-primary); font-size: 12px; outline: none;
 }
+.sidebar-filter-row .input-select { flex: none; width: 100%; min-width: 0; }
 .input-number {
   padding: 6px 10px; border-radius: var(--radius); border: 1px solid var(--border);
   background: var(--bg-input); color: var(--text-primary); font-size: 13px; outline: none;

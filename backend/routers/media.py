@@ -27,6 +27,7 @@ AVATARS_DIR.mkdir(exist_ok=True)
 
 _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 _MAX_AVATAR_SIZE = 2 * 1024 * 1024  # 2MB
+_UPLOAD_READ_CHUNK_SIZE = 256 * 1024
 _ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 # 图片文件头魔术字节（用于验证文件内容是否真正是图片）
@@ -49,6 +50,21 @@ def _validate_image_content(content: bytes, declared_ext: str) -> bool:
             # JPEG/PNG 签名匹配即可
             return True
     return False
+
+
+async def _read_limited_upload(file, *, max_bytes: int = _MAX_AVATAR_SIZE) -> bytes:
+    """分块读取上传内容，超过上限立即拒绝，避免一次性读入超大请求体。"""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(_UPLOAD_READ_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise BadRequestError(detail="图片大小不能超过 2MB")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 # FileResponse 允许的图片根目录白名单。不要把项目根目录加入这里。
@@ -235,9 +251,7 @@ async def upload_user_avatar(
     if file.content_type not in _ALLOWED_IMAGE_TYPES:
         raise BadRequestError(detail="仅支持 JPG、PNG、WebP 格式")
 
-    content = await file.read()
-    if len(content) > _MAX_AVATAR_SIZE:
-        raise BadRequestError(detail="图片大小不能超过 2MB")
+    content = await _read_limited_upload(file)
 
     ext = Path(file.filename or "").suffix.lower()
     if ext not in _ALLOWED_EXTENSIONS:

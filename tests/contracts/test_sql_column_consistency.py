@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-BACKEND_DIR = Path(__file__).resolve().parent.parent / "backend"
+BACKEND_DIR = Path(__file__).resolve().parents[2] / "backend"
 ALEMBIC_DIR = BACKEND_DIR / "alembic" / "versions"
 
 # 确保路径存在
@@ -225,3 +225,26 @@ class TestSQLColumnConsistency:
                 f"  → 代码 INSERT/UPDATE 引用的列: {sorted(self.code_refs.get(table_name, []))}\n"
                 f"  → 迁移定义的列: {sorted(self.alembic_columns.get(table_name, []))}"
             )
+
+
+def test_latest_constraint_migration_preflights_enum_values():
+    """上线前的 CHECK 约束迁移必须先预检脏数据，不能静默改生产数据。"""
+    migration = (
+        ALEMBIC_DIR / "017_add_enum_check_constraints.py"
+    ).read_text(encoding="utf-8")
+
+    for check_name in (
+        "ck_characters_card_type",
+        "ck_characters_required_plan",
+        "ck_users_plan_type",
+        "ck_membership_orders_plan_type",
+        "ck_membership_orders_status",
+        "ck_auth_tokens_token_type",
+        "ck_ai_request_logs_status",
+    ):
+        assert check_name in migration
+
+    assert "_raise_if_invalid" in migration
+    assert "SELECT" in migration
+    assert "RAISE EXCEPTION" in migration
+    assert "UPDATE characters SET card_type" not in migration

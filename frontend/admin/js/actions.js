@@ -110,6 +110,14 @@ const DASHBOARD_ACTION_HANDLERS = {
     loadAuditLogs();
   },
   'admin-reload': () => location.reload(),
+  'admin-clear-relogin': () => {
+    // 清除所有登录状态（localStorage + sessionStorage）
+    const keys = ['aifriend_token', 'aifriend_token_refresh', 'aifriend_user'];
+    keys.forEach(k => { try { localStorage.removeItem(k); } catch (_) {} });
+    keys.forEach(k => { try { sessionStorage.removeItem(k); } catch (_) {} });
+    // 跳转前台首页重新登录
+    location.href = '/';
+  },
   'switch-system-tab': (trigger) => {
     switchSystemTab(trigger.dataset.tab || 'dashboard');
     // 支持跳转到页面内的特定区域（如订单区）

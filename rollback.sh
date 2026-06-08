@@ -28,7 +28,7 @@ print_header() {
 find_latest_backup() {
   ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
 set -Eeuo pipefail
-latest=$(ls -d /opt/aifriend_backup_* 2>/dev/null | sort | tail -1)
+latest=$(ls -dt /opt/aifriend_backup_* /opt/aifriend_20* "$HOME"/aifriend_20* "$HOME"/aifriend_backup_* 2>/dev/null | head -1)
 if [[ -z "$latest" ]]; then
   echo "ERROR:没有找到任何备份" >&2
   exit 1
@@ -42,10 +42,12 @@ validate_backup() {
   ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << ENDSSH
 set -Eeuo pipefail
 if [[ ! -d "/opt/$backup_name" ]]; then
-  echo "ERROR:备份目录 /opt/$backup_name 不存在" >&2
-  exit 1
+  if [[ ! -d "\$HOME/$backup_name" ]]; then
+    echo "ERROR:备份目录 /opt/$backup_name 或 \$HOME/$backup_name 不存在" >&2
+    exit 1
+  fi
 fi
-echo "✅ 备份目录验证通过: /opt/$backup_name"
+echo "✅ 备份目录验证通过: $backup_name"
 ENDSSH
 }
 
@@ -56,7 +58,11 @@ do_rollback() {
 
   ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << ENDSSH
 set -Eeuo pipefail
-BACKUP_DIR="/opt/$backup_name"
+if [[ -d "/opt/$backup_name" ]]; then
+  BACKUP_DIR="/opt/$backup_name"
+else
+  BACKUP_DIR="\$HOME/$backup_name"
+fi
 CURRENT_DIR="/opt/aifriend"
 
 if [[ ! -d "\$BACKUP_DIR" ]]; then
@@ -124,7 +130,7 @@ else
     source .env
     set +a
   fi
-  nohup /opt/aifriend/backend/venv/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /var/log/aifriend.log 2>&1 &
+  nohup /opt/aifriend/backend/venv/bin/python3 -m uvicorn main:app --host 127.0.0.1 --port 8000 > /var/log/aifriend.log 2>&1 &
   sleep 3
 fi
 

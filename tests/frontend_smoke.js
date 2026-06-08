@@ -92,6 +92,28 @@ if (fs.existsSync(adminApiPath)) {
   if (/if\s*\(\s*!token\s*\)/.test(adminApiJs)) {
     errors.push('❌ admin bootstrap 仍在请求 /auth/me 前直接拦截空 token');
   }
+  if (/Authorization\s*=|headers\.Authorization|Bearer\s+\$\{token\}|localStorage\.setItem\(\s*TOKEN_KEY/.test(adminApiJs)) {
+    errors.push('❌ AdminAPI 仍在读写 JS token 或发送 Authorization fallback');
+  }
+}
+
+// 5. 检查前台认证不暴露/存储 token
+console.log('🔍 检查前台 token 存储治理...');
+const frontendApiPath = path.join(FRONTEND_DIR, 'modules', 'api.js');
+const frontendAuthPath = path.join(FRONTEND_DIR, 'modules', 'auth.js');
+const frontendConfigPath = path.join(FRONTEND_DIR, 'modules', 'config.js');
+for (const filePath of [frontendApiPath, frontendAuthPath, frontendConfigPath]) {
+  if (!fs.existsSync(filePath)) continue;
+  const content = fs.readFileSync(filePath, 'utf8');
+  if (/sessionStorage\.setItem\(\s*['"]aifriend_token_refresh/.test(content)) {
+    errors.push(`❌ refresh token 仍写入 sessionStorage: ${path.basename(filePath)}`);
+  }
+  if (/localStorage\.setItem\(\s*TOKEN_KEY|headers\.Authorization|Authorization\s*=|Bearer\s+\$\{token\}/.test(content)) {
+    errors.push(`❌ access token 仍写入 localStorage 或作为 Authorization 发送: ${path.basename(filePath)}`);
+  }
+  if (/data\.access_token|result\.access_token|result\.refresh_token/.test(content)) {
+    errors.push(`❌ 前端仍依赖响应体 token 字段: ${path.basename(filePath)}`);
+  }
 }
 
 // 输出结果

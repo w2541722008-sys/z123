@@ -242,11 +242,17 @@ def _send_via_resend(to_email: str, code: str, max_retries: int = 3) -> bool:
                 logger.info("验证码邮件已通过 Resend 发送: %s, id: %s", masked, result.get("id"))
                 return True
 
-            error_msg = response.text
-            logger.warning("Resend API 返回错误 (尝试 %d/%d): %s - %s", attempt + 1, max_retries, response.status_code, error_msg)
+            error_size = len(response.content or b"")
+            logger.warning(
+                "Resend API 返回错误 (尝试 %d/%d): status=%s response_bytes=%s",
+                attempt + 1,
+                max_retries,
+                response.status_code,
+                error_size,
+            )
 
             if 400 <= response.status_code < 500:
-                logger.error("Resend API 客户端错误，停止重试: %s", error_msg)
+                logger.error("Resend API 客户端错误，停止重试: status=%s", response.status_code)
                 return False
 
             if attempt < max_retries - 1:

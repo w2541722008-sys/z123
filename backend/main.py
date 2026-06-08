@@ -117,6 +117,22 @@ def _register_api_routers(app: FastAPI) -> None:
         app.include_router(router, prefix="/api")
 
 
+def _warn_if_multi_worker_configured(env: dict[str, str] | os._Environ[str]) -> None:
+    raw = (env.get("WEB_CONCURRENCY") or env.get("UVICORN_WORKERS") or "").strip()
+    if not raw:
+        return
+    try:
+        workers = int(raw)
+    except ValueError:
+        logger.warning("无法解析 worker 配置值：%s", raw)
+        return
+    if workers > 1:
+        logger.warning(
+            "检测到多 worker 配置=%s；当前限流、缓存和部分运行态仍按单实例设计，请保持 systemd --workers 1 或引入分布式状态层后再扩容。",
+            workers,
+        )
+
+
 def _serve_html_file(path: Path, missing_message: str) -> HTMLResponse:
     if not path.exists():
         return HTMLResponse(missing_message, status_code=404)
@@ -161,6 +177,8 @@ async def lifespan(app: FastAPI):
         for config in missing_configs:
             logger.warning("  - %s", config)
         logger.warning("请检查 .env 文件，参考 .env.example")
+
+    _warn_if_multi_worker_configured(os.environ)
 
     media_health: dict[str, Any] = check_media_health(force=True)
     if media_health["ok"]:
@@ -300,12 +318,12 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     # XSS 保护（旧浏览器兼容）
     response.headers["X-XSS-Protection"] = "1; mode=block"
-    # 内容安全策略 — 管理后台保留 unsafe-inline（动态 onclick），主应用严格模式
+    # 内容安全策略 — 管理后台和主应用均禁止内联脚本。
     admin_csp = request.url.path.startswith("/admin") or request.url.path == "/admin.html"
     if admin_csp:
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; "
             "connect-src 'self'; "

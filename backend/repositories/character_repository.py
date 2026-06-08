@@ -244,7 +244,7 @@ def update_character_fields(
         "is_visible", "home_priority", "card_type",
         "required_plan", "affection_enabled", "affection_rules_json",
         "import_locked", "avatar_url", "cover_url",
-        "phase_behaviors_json",
+        "phase_behaviors_json", "life_profile_json",
     }
     for k in updates:
         if k not in _ALLOWED:

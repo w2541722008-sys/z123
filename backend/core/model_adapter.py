@@ -160,8 +160,11 @@ def _get_optional_params() -> dict[str, float]:
 def _handle_model_error(exc: httpx.HTTPError) -> None:
     """统一处理模型接口异常，转换为 RuntimeError 并记录日志。"""
     if isinstance(exc, httpx.HTTPStatusError):
-        detail = exc.response.text[:300]
-        logger.error("模型接口错误 %s: %s", exc.response.status_code, detail)
+        logger.error(
+            "模型接口错误 status=%s response_bytes=%s",
+            exc.response.status_code,
+            len(exc.response.content or b""),
+        )
         raise RuntimeError("模型接口调用失败") from exc
     if isinstance(exc, httpx.ConnectError):
         logger.error("模型接口连接失败: %s", exc)

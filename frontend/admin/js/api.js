@@ -6,6 +6,7 @@
  */
 const AdminAPI = (() => {
   const shared = window.AIFriendShared;
+  const REQUEST_TIMEOUT_MS = 20000;
   // API 地址动态适配（本地开发 vs ngrok/生产）
   const _apiBase = (() => {
     if (shared && typeof shared.resolveApiBase === 'function') {
@@ -20,51 +21,32 @@ const AdminAPI = (() => {
   // 不带 /admin 后缀的基础地址（用于 /auth/me 等非 admin 接口）
   const _baseUrl = _apiBase.replace(/\/admin$/, '');
 
-  // Token 刷新（与前台 api.js 保持一致的 dedup promise 模式）
-  const REFRESH_TOKEN_KEY = 'aifriend_token_refresh';
-  let _isRefreshing = false;
+  // Cookie 刷新（与前台 api.js 保持一致的 dedup promise 模式）
   let _refreshPromise = null;
 
   async function _tryRefresh() {
-    if (_isRefreshing) return _refreshPromise;
-    _isRefreshing = true;
+    if (_refreshPromise) return _refreshPromise;
     _refreshPromise = (async () => {
       try {
-        // 优先使用 sessionStorage 中的 refresh token
-        const refreshToken = sessionStorage.getItem(REFRESH_TOKEN_KEY);
-        const headers = { 'Content-Type': 'application/json' };
-        if (refreshToken) {
-          headers['Authorization'] = `Bearer ${refreshToken}`;
-        }
-        // 即使 sessionStorage 没有 token，也尝试发送请求
-        // 后端会回退到 HttpOnly refresh cookie 进行刷新
+        // 不发送 Authorization header，完全依赖 HttpOnly Refresh Cookie（aifriend_refresh）。
+        // 原因：Authorization header 中若携带旧 token，后端会优先读取并验证设备指纹，
+        // IP 变化后指纹不匹配导致刷新失败。HttpOnly Cookie 由浏览器自动管理，更可靠。
         const resp = await fetch(`${_baseUrl}/auth/refresh`, {
           method: 'POST',
-          headers,
+          headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
         });
-        if (!resp.ok) return false;
-        const data = await resp.json();
-        if (data.access_token) {
-          localStorage.setItem(TOKEN_KEY, data.access_token);
-          // 同步到 sessionStorage（供后续刷新使用）
-          if (data.refresh_token) {
-            try { sessionStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token); } catch (_) {}
-          }
-          return true;
-        }
-        return false;
+        return resp.ok;
       } catch (_) {
         return false;
       } finally {
-        _isRefreshing = false;
         _refreshPromise = null;
       }
     })();
     return _refreshPromise;
   }
 
-  // localStorage key
+  // localStorage key（TOKEN_KEY 仅用于清理旧版本残留 token）
   const TOKEN_KEY = shared?.STORAGE_KEYS?.TOKEN_KEY || 'aifriend_token';
   const USER_KEY = shared?.STORAGE_KEYS?.USER_KEY || 'aifriend_user';
 
@@ -75,21 +57,30 @@ const AdminAPI = (() => {
 
   /**
    * 统一的 API 请求方法
-   * 自动携带 Authorization token，统一处理错误
+   * 统一处理错误，认证完全依赖 HttpOnly Cookie。
    * @param {string} url - 请求地址（可以是完整URL或相对路径）
    * @param {object} opts - fetch 选项，可选
    * @returns {Promise<any>} JSON 响应数据
    */
   async function apiFetch(url, opts = {}) {
-    const token = localStorage.getItem(TOKEN_KEY) || '';
+    const controller = new AbortController();
+    const timeoutMs = opts.timeout || REQUEST_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const headers = {
       'Content-Type': 'application/json',
       ...(opts.headers || {}),
     };
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
+    let res;
+    try {
+      res = await fetch(url, { credentials: 'include', ...opts, headers, signal: opts.signal || controller.signal });
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw new Error('请求超时，请检查网络后重试');
+      }
+      throw new Error('网络请求失败，请稍后重试');
+    } finally {
+      clearTimeout(timer);
     }
-    const res = await fetch(url, { credentials: 'include', ...opts, headers });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       if (res.status === 401 && !opts._retried) {
@@ -121,6 +112,7 @@ const AdminAPI = (() => {
           <div style="display:flex;gap:10px;flex-wrap:wrap;">
             <a href="/" style="display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:10px;background:#7c3aed;color:#fff;text-decoration:none;font-size:14px;font-weight:600;">返回前台首页</a>
             <button data-action="admin-reload" style="padding:10px 16px;border-radius:10px;border:1px solid #3a3a4a;background:#2a2a3a;color:#e8e8f0;font-size:14px;cursor:pointer;">重新检查权限</button>
+            <button data-action="admin-clear-relogin" style="padding:10px 16px;border-radius:10px;border:1px solid #dc2626;background:transparent;color:#fca5a5;font-size:14px;cursor:pointer;">清除登录状态并重新登录</button>
           </div>
           <div style="margin-top:16px;font-size:12px;line-height:1.7;color:#888;">如果你本来就是管理员，请先在前台登录已授权邮箱，然后再回来打开这个页面。</div>
         </div>
@@ -135,19 +127,13 @@ const AdminAPI = (() => {
    */
   async function bootstrapAdminPage() {
     if (_bootstrapped) return true;
-    try {
-      const me = await apiFetch(`${_baseUrl}/auth/me`);
-      _currentUser = me || null;
-      localStorage.setItem(USER_KEY, JSON.stringify(me || null));
-      if (!me?.is_admin) {
-        renderAccessDenied('当前账号已登录，但 is_admin=false。邮箱: ' + (me?.email || '未知') + ', 请检查 .env 的 ADMIN_EMAILS 是否包含此邮箱。');
-        return false;
-      }
-      _bootstrapped = true;
-      return true;
-    } catch (e) {
-      // 首次失败后等一小段时间再试一次（处理网络延迟或 Cookie 时序问题）
-      await new Promise(r => setTimeout(r, 500));
+
+    // 多次重试 + 指数退避（处理网络延迟、Cookie 时序、token 刷新竞态等）
+    const retryDelays = [0, 500, 1500];
+    let lastError = null;
+
+    for (let i = 0; i < retryDelays.length; i++) {
+      if (i > 0) await new Promise(r => setTimeout(r, retryDelays[i]));
       try {
         const me = await apiFetch(`${_baseUrl}/auth/me`);
         _currentUser = me || null;
@@ -158,12 +144,15 @@ const AdminAPI = (() => {
         }
         _bootstrapped = true;
         return true;
-      } catch (e2) {
-        console.error('[Admin Error]', e2);
-        renderAccessDenied('请求失败: ' + (e2.message || e2.toString()) + '。API地址: ' + _baseUrl + '/auth/me');
-        return false;
+      } catch (e) {
+        lastError = e;
+        console.warn(`[Admin] 第 ${i + 1} 次鉴权失败:`, e.message);
       }
     }
+
+    console.error('[Admin] 所有鉴权重试失败');
+    renderAccessDenied('请求失败: ' + (lastError?.message || '鉴权超时') + '。API地址: ' + _baseUrl + '/auth/me');
+    return false;
   }
 
   // 导出公开接口

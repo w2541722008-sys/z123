@@ -242,8 +242,8 @@ def test_forgot_password_rate_limit_returns_429(app_client):
 # /auth/register 正向流程
 # ============================================================
 
-def test_register_happy_path_creates_user_and_returns_tokens(app_client):
-    """正向流程：注册新用户，验证双 token 返回和 HttpOnly Cookie 设置。"""
+def test_register_happy_path_creates_user_and_sets_auth_cookies(app_client):
+    """正向流程：注册新用户，仅通过 HttpOnly Cookie 下发 token。"""
     _, client = app_client
     app = client.app
     conn = FakeSequenceConn([
@@ -266,8 +266,8 @@ def test_register_happy_path_creates_user_and_returns_tokens(app_client):
 
     assert response.status_code == 200
     body = response.json()
-    assert "access_token" in body
-    assert "refresh_token" in body
+    assert "access_token" not in body
+    assert "refresh_token" not in body
     assert body["expires_in"] > 0
     assert body["user"]["id"] == 42
     assert body["user"]["email"] == "newuser@example.com"
@@ -275,9 +275,10 @@ def test_register_happy_path_creates_user_and_returns_tokens(app_client):
     assert body["user"]["plan_type"] == "free"
     assert conn.committed is True
 
-    # 验证 HttpOnly Cookie
+    # 验证 HttpOnly Cookie（响应体不能暴露 token）
     set_cookie = response.headers.get("set-cookie", "")
     assert "aifriend_session" in set_cookie
+    assert "aifriend_refresh" in set_cookie
     assert "HttpOnly" in set_cookie
     assert "Path=/api" in set_cookie
 
@@ -306,8 +307,8 @@ def test_register_email_taken_returns_400(app_client):
 # /auth/login 正向流程
 # ============================================================
 
-def test_login_happy_path_bcrypt_user_returns_tokens(app_client):
-    """正向流程：bcrypt 密码用户登录，验证双 token 返回和 Cookie 设置。"""
+def test_login_happy_path_bcrypt_user_sets_auth_cookies(app_client):
+    """正向流程：bcrypt 密码用户登录，仅通过 HttpOnly Cookie 下发 token。"""
     _, client = app_client
     app = client.app
     conn = FakeSequenceConn([
@@ -337,8 +338,8 @@ def test_login_happy_path_bcrypt_user_returns_tokens(app_client):
 
     assert response.status_code == 200
     body = response.json()
-    assert "access_token" in body
-    assert "refresh_token" in body
+    assert "access_token" not in body
+    assert "refresh_token" not in body
     assert body["expires_in"] > 0
     assert body["user"]["id"] == 7
     assert body["user"]["email"] == "bcryptuser@example.com"
@@ -348,7 +349,68 @@ def test_login_happy_path_bcrypt_user_returns_tokens(app_client):
     # 验证 HttpOnly Cookie
     set_cookie = response.headers.get("set-cookie", "")
     assert "aifriend_session" in set_cookie
+    assert "aifriend_refresh" in set_cookie
     assert "HttpOnly" in set_cookie
+
+
+def test_refresh_uses_refresh_cookie_and_does_not_return_access_token(app_client):
+    """refresh 成功时设置新 access cookie，但响应体不暴露 access token。"""
+    _, client = app_client
+    app = client.app
+    conn = FakeSequenceConn([])
+
+    with override_db(app, conn), patch("routers.auth.rotate_access_token", return_value="new_access_token"):
+        response = client.post(
+            "/api/auth/refresh",
+            cookies={"aifriend_refresh": "refresh_token_cookie"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert "access_token" not in body
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "aifriend_session" in set_cookie
+    assert "HttpOnly" in set_cookie
+
+
+def test_refresh_ignores_authorization_header_without_refresh_cookie(app_client):
+    """refresh 不接受 JS 可读 Authorization token 作为 refresh token 来源。"""
+    _, client = app_client
+    app = client.app
+    conn = FakeSequenceConn([])
+
+    with override_db(app, conn), patch("routers.auth.rotate_access_token") as mock_rotate:
+        response = client.post(
+            "/api/auth/refresh",
+            headers={"Authorization": "Bearer header_refresh_token"},
+        )
+
+    assert response.status_code == 401
+    mock_rotate.assert_not_called()
+
+
+def test_logout_others_ignores_authorization_refresh_fallback(app_client):
+    """踢出其他设备只用 HttpOnly refresh cookie 保留当前设备，不接受 JS 可读 header fallback。"""
+    _, client = app_client
+    app = client.app
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        id=7, email="u@example.com", nickname="u", effective_plan="free",
+    )
+    conn = FakeSequenceConn([])
+
+    try:
+        with override_db(app, conn), patch("routers.auth.revoke_user_device_tokens", return_value=3) as mock_revoke:
+            response = client.post(
+                "/api/auth/logout-others",
+                headers={"Authorization": "Bearer header_refresh_token"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["deleted_devices"] == 3
+    mock_revoke.assert_called_once_with(7, "", conn=conn)
 
 
 def test_login_wrong_password_returns_401(app_client):

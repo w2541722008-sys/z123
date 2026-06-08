@@ -37,53 +37,6 @@ class TestFormatSse:
         assert "\\u" not in result.split("data: ")[1]
 
 
-# ── build_mock_reply ─────────────────────────────────
-
-class TestBuildMockReply:
-    def test_no_styles_returns_default(self):
-        from services.chat_send import build_mock_reply
-        char = {"mock_reply_style": []}
-        result = build_mock_reply(char, "你好")
-        assert result == "我在，你继续说。"
-
-    def test_no_styles_none(self):
-        from services.chat_send import build_mock_reply
-        char = {}
-        result = build_mock_reply(char, "你好")
-        assert result == "我在，你继续说。"
-
-    def test_style_rotation(self):
-        from services.chat_send import build_mock_reply
-        char = {"mock_reply_style": ["风格A", "风格B", "风格C"]}
-        r1 = build_mock_reply(char, "a")  # ord('a')=97, 97%3=1 → 风格B
-        r2 = build_mock_reply(char, "b")  # ord('b')=98, 98%3=2 → 风格C
-        assert "风格B" in r1
-        assert "风格C" in r2
-
-    def test_emotional_keyword_累(self):
-        from services.chat_send import build_mock_reply
-        char = {"mock_reply_style": ["嗯，"]}
-        result = build_mock_reply(char, "我好累")
-        assert "先别想别的" in result
-
-    def test_emotional_keyword_想你(self):
-        from services.chat_send import build_mock_reply
-        char = {"mock_reply_style": ["嗯，"]}
-        result = build_mock_reply(char, "我想你了")
-        assert "我听到了" in result
-
-    def test_text_style_json_parsing(self):
-        """jsonb 列值（已解析为 list）和 text 格式（需 json.loads）都应兼容。"""
-        from services.chat_send import build_mock_reply
-        # jsonb 场景：psycopg2 已解析为 list
-        char_jsonb = {"mock_reply_style": ["风格A"]}
-        assert "风格A" in build_mock_reply(char_jsonb, "x")
-
-        # text 场景：需要 json.loads
-        char_text = {"mock_reply_style": '["风格A"]'}
-        assert "风格A" in build_mock_reply(char_text, "x")
-
-
 # ── save_assistant_message ───────────────────────────
 
 class TestSaveAssistantMessage:
@@ -128,15 +81,6 @@ class TestStoreUserMessage:
 
 
 # ── 以下测试从 test_chat_send_extra.py 合并而来 ──
-
-class TestBuildMockReplyExtra:
-    def test_fingerprint_deterministic(self):
-        from services.chat_send import build_mock_reply
-        char = {"mock_reply_style": '["A", "B", "C"]'}
-        r1 = build_mock_reply(char, "test message")
-        r2 = build_mock_reply(char, "test message")
-        assert r1 == r2
-
 
 class TestFormatSseExtra:
     def test_json_encoding_unicode(self):

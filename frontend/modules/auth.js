@@ -52,15 +52,8 @@
 
   /** 登录成功后的统一处理 */
   function _onAuthSuccess(result) {
-    // Cookie 由浏览器自动管理，此处仅保留 token 作为过渡兼容
-    // 后端已同时设置 HttpOnly Cookie，前端不再必须手动存储 token
-    if (result.access_token) {
-      AppState.setToken(result.access_token);
-    }
-    if (result.refresh_token) {
-      AppState.setRefreshToken(result.refresh_token);
-      try { sessionStorage.setItem('aifriend_token_refresh', result.refresh_token); } catch (_) {}
-    }
+    AppState.setToken('');
+    AppState.setRefreshToken('');
     user = {
       id: result.user.id,
       name: result.user.nickname,
@@ -144,8 +137,7 @@
        renderProfile();
      }
 
-     // 尝试用 Cookie 认证（优先）或 Authorization 头（兼容）
-     // 不再依赖 localStorage token 存在性判断登录状态
+     // 尝试用 Cookie 认证，不再依赖 JS 可读 token。
      try {
       const me = await API.me();
       user = { name: me.nickname, email: me.email, id: me.id, avatar_url: me.avatar_url || '' };
@@ -169,7 +161,6 @@
      } catch (_) { /* logout 请求失败，前端仍清除本地状态 */ }
      AppState.setToken('');
      AppState.setRefreshToken('');
-    try { sessionStorage.removeItem('aifriend_token_refresh'); } catch (_) {}
      AppState.setUser(null);
      loggedIn = false;
      user = null;

@@ -195,6 +195,11 @@ async function saveChar() {
           updates[field] = validateJsonString(el.value, '人生档案');
           continue;
         }
+        if (field === 'phase_behaviors_json') {
+          syncPhaseBehaviorsEditor();
+          updates[field] = validateJsonString(el.value, '阶段行为');
+          continue;
+        }
         let val = el.value;
         if (FIXED_FIELD_META[field]?.type === 'number') val = parseInt(val, 10) || 0;
         if (['is_visible', 'import_locked', 'affection_enabled'].includes(field)) val = parseInt(val, 10);

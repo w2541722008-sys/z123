@@ -3,30 +3,23 @@
    let _isRefreshing = false;
    let _refreshPromise = null;
 
-   /** 尝试用 refresh token 续期 access token（并发请求共享同一个 promise） */
+   /** 尝试用 HttpOnly Refresh Cookie 续期 access token（并发请求共享同一个 promise） */
    async function _tryRefresh() {
-     const refreshToken = AppState.getRefreshToken();
-     if (!refreshToken) return false;
      if (_isRefreshing) return _refreshPromise;
      _isRefreshing = true;
      _refreshPromise = (async () => {
        try {
+         // 不发送 Authorization header，完全依赖 HttpOnly Refresh Cookie。
+         // 避免旧 token 被后端误读，以及 IP 变化导致设备指纹不匹配的问题。
          const resp = await fetch(`${API_BASE}/auth/refresh`, {
            method: 'POST',
            headers: {
              'Content-Type': 'application/json',
-             'Authorization': `Bearer ${refreshToken}`,
-             'X-Device-ID': AppState.getDeviceId(),
            },
            credentials: 'include',
          });
          if (!resp.ok) return false;
-         const data = await resp.json();
-         if (data.access_token) {
-           AppState.setToken(data.access_token);
-           return true;
-         }
-         return false;
+         return true;
        } catch (_) {
          return false;
        } finally {
@@ -43,11 +36,6 @@
       'X-Device-ID': AppState.getDeviceId(),
       ...(options.headers || {}),
     };
-
-    const token = AppState.getToken();
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
 
     const timeoutMs = options.timeout || REQUEST_TIMEOUT_MS;
     const controller = new AbortController();
@@ -94,11 +82,9 @@
 
    async function streamMessageToUrl(url, payload, handlers = {}, signal) {
     const STREAM_CHUNK_TIMEOUT_MS = 30000;
-    const token = AppState.getToken();
     const headers = {
       'Content-Type': 'application/json',
       'X-Device-ID': AppState.getDeviceId(),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
     const resp = await fetch(url, {
       method: 'POST',
@@ -171,7 +157,7 @@
     register: (payload) => request('/auth/register', { method: 'POST', body: payload }),
     me: () => request('/auth/me'),
     logout: () => request('/auth/logout', { method: 'POST' }),
-    refreshToken: (refreshToken) => request('/auth/refresh', { method: 'POST', headers: { 'Authorization': `Bearer ${refreshToken}` } }),
+    refreshToken: () => request('/auth/refresh', { method: 'POST' }),
     logoutOthers: () => request('/auth/logout-others', { method: 'POST' }),
     getCharacters: async () => (await request('/characters')).map(normalizeCharacterCardPayload),
     getHistory: (characterId, page = 1, pageSize = 50) => request(`/chat/history?character_id=${encodeURIComponent(characterId)}&page=${page}&page_size=${pageSize}`),

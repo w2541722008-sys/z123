@@ -46,6 +46,20 @@ stop_processes() {
 restart_backend() {
   echo "▶ 重启后端"
   require_cmd python3
+
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-enabled aifriend >/dev/null 2>&1; then
+    echo "🔄 使用 systemd 重启 aifriend"
+    sudo systemctl restart aifriend
+    sleep 5
+    if systemctl is-active aifriend >/dev/null 2>&1; then
+      echo "✅ systemd 后端启动成功"
+      return
+    fi
+    echo "❌ systemd 后端启动失败"
+    journalctl -u aifriend --no-pager -n 30 || true
+    exit 1
+  fi
+
   stop_processes "uvicorn main:app" "后端"
 
   if [[ ! -d "$BACKEND_DIR/venv" ]]; then
@@ -76,7 +90,7 @@ restart_backend() {
   elif [[ ! -w "$LOG_FILE" ]]; then
     LOG_FILE="$BACKEND_DIR/aifriend.log"
   fi
-  nohup "$BACKEND_DIR/venv/bin/python3" -m uvicorn main:app --host 0.0.0.0 --port 8000 >> "$LOG_FILE" 2>&1 &
+  nohup "$BACKEND_DIR/venv/bin/python3" -m uvicorn main:app --host 127.0.0.1 --port 8000 >> "$LOG_FILE" 2>&1 &
   sleep 3
 
   if pgrep -f "uvicorn main:app" >/dev/null 2>&1; then
@@ -124,4 +138,3 @@ main() {
 }
 
 main "$@"
-

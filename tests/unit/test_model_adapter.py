@@ -253,11 +253,13 @@ class TestBuildRequestUrl:
 class TestHandleModelError:
     """验证 _handle_model_error 对不同 httpx 异常的映射。"""
 
-    def test_http_status_error_raises_runtime_error(self):
-        response = httpx.Response(429, text="rate limited")
+    def test_http_status_error_logs_status_without_response_body(self, caplog):
+        response = httpx.Response(429, text="secret provider body")
         exc = httpx.HTTPStatusError("err", request=httpx.Request("POST", "http://x"), response=response)
         with pytest.raises(RuntimeError, match="模型接口调用失败"):
             _handle_model_error(exc)
+        assert "status=429" in caplog.text
+        assert "secret provider body" not in caplog.text
 
     def test_connect_error_raises_runtime_error(self):
         exc = httpx.ConnectError("connection refused")

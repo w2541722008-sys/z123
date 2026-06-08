@@ -123,6 +123,11 @@ sync_files() {
     --exclude='*.log' \
     --exclude='tests' \
     --exclude='.scratch' \
+    --exclude='.agents' \
+    --exclude='.claude' \
+    --exclude='.codex' \
+    --exclude='.idea' \
+    --exclude='output' \
     --exclude='.DS_Store' \
     --exclude='.trae' \
     --exclude='.codebuddy' \
@@ -140,7 +145,8 @@ sync_files() {
 
 restart_remote() {
   step "步骤 5/7: 重启服务"
-  ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" << 'ENDSSH'
+  ssh "${SSH_OPTS[@]}" "$SERVER_USER@$SERVER_IP" \
+    "SKIP_DB_MIGRATION=${SKIP_DB_MIGRATION:-0} bash -se" << 'ENDSSH'
 set -Eeuo pipefail
 
 cd /opt/aifriend
@@ -148,7 +154,11 @@ find backend -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 
 cd backend
 if [[ -f requirements.txt ]]; then
-  if ! pip3 install -r requirements.txt --quiet --break-system-packages 2>/dev/null && \
+  if [[ ! -x /opt/aifriend/backend/venv/bin/pip ]]; then
+    python3 -m venv /opt/aifriend/backend/venv
+  fi
+  if ! /opt/aifriend/backend/venv/bin/pip install -r requirements.txt --quiet 2>/dev/null && \
+     ! pip3 install -r requirements.txt --quiet --break-system-packages 2>/dev/null && \
      ! pip3 install -r requirements.txt --quiet 2>/dev/null; then
     echo "❌ 依赖安装失败，部署已中止"
     exit 1
@@ -157,28 +167,36 @@ fi
 
 # 执行数据库迁移（Alembic）
 if [[ -f alembic.ini ]]; then
-  echo "🔄 执行数据库迁移..."
-  if ! /opt/aifriend/backend/venv/bin/python3 -m alembic upgrade head && \
-     ! python3 -m alembic upgrade head; then
-    echo "❌ 数据库迁移失败，尝试自动恢复..."
-    LATEST_BACKUP=$(ls -dt /opt/aifriend_backup_* /opt/aifriend_20* "$HOME"/aifriend_20* "$HOME"/aifriend_backup_* 2>/dev/null | head -1)
-    if [[ -n "$LATEST_BACKUP" && -d "$LATEST_BACKUP" ]]; then
-      echo "📦 从备份恢复: $LATEST_BACKUP"
-      if [[ "/opt/aifriend" != /opt/* ]] || [[ "/opt/aifriend" == "/" ]]; then
-        echo "❌ 路径校验失败，拒绝执行 rm -rf"
-        exit 1
-      fi
-      rm -rf /opt/aifriend
-      cp -r "$LATEST_BACKUP" /opt/aifriend
-      if bash /opt/aifriend/restart.sh 2>/dev/null; then
-        echo "✅ 已自动恢复到迁移前版本"
-      else
-        echo "⚠️ 自动恢复后重启失败，请手动检查"
-      fi
-    else
-      echo "❌ 未找到备份目录，请手动执行: bash rollback.sh"
+  if [[ "${SKIP_DB_MIGRATION:-0}" == "1" ]]; then
+    echo "⚠️ 已通过 SKIP_DB_MIGRATION=1 跳过数据库迁移"
+  else
+    echo "🔄 执行数据库迁移..."
+    ALEMBIC_BIN="/opt/aifriend/backend/venv/bin/alembic"
+    if [[ ! -x "$ALEMBIC_BIN" ]]; then
+      echo "❌ Alembic 命令不存在，请确认 requirements.txt 已成功安装到 backend/venv"
+      exit 1
     fi
-    exit 1
+    if ! "$ALEMBIC_BIN" -c alembic.ini upgrade head; then
+      echo "❌ 数据库迁移失败，尝试自动恢复..."
+      LATEST_BACKUP=$(ls -dt /opt/aifriend_backup_* /opt/aifriend_20* "$HOME"/aifriend_20* "$HOME"/aifriend_backup_* 2>/dev/null | head -1)
+      if [[ -n "$LATEST_BACKUP" && -d "$LATEST_BACKUP" ]]; then
+        echo "📦 从备份恢复: $LATEST_BACKUP"
+        if [[ "/opt/aifriend" != /opt/* ]] || [[ "/opt/aifriend" == "/" ]]; then
+          echo "❌ 路径校验失败，拒绝执行 rm -rf"
+          exit 1
+        fi
+        rm -rf /opt/aifriend
+        cp -r "$LATEST_BACKUP" /opt/aifriend
+        if bash /opt/aifriend/restart.sh 2>/dev/null; then
+          echo "✅ 已自动恢复到迁移前版本"
+        else
+          echo "⚠️ 自动恢复后重启失败，请手动检查"
+        fi
+      else
+        echo "❌ 未找到备份目录，请手动执行: bash rollback.sh"
+      fi
+      exit 1
+    fi
   fi
 fi
 
@@ -188,7 +206,7 @@ if ! bash restart.sh; then
   pkill -f "uvicorn main:app.*--port 8000" || true
   sleep 2
   cd /opt/aifriend/backend
-  nohup /opt/aifriend/backend/venv/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /var/log/aifriend.log 2>&1 &
+  nohup /opt/aifriend/backend/venv/bin/python3 -m uvicorn main:app --host 127.0.0.1 --port 8000 > /var/log/aifriend.log 2>&1 &
 fi
 
 sleep 3
@@ -205,27 +223,41 @@ import json
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-http_code = 0
-body = ""
+def fetch(path):
+    try:
+        with urlopen(f"http://localhost:8000{path}", timeout=5) as resp:
+            return resp.status, resp.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", errors="replace")
+    except (OSError, URLError) as exc:
+        print(f"{path}=000 error:{exc}")
+        raise SystemExit(1)
+
+health_code, health_body = fetch("/api/health")
 try:
-    with urlopen("http://localhost:8000/api/health", timeout=5) as resp:
-        http_code = resp.status
-        body = resp.read().decode("utf-8", errors="replace")
-except HTTPError as exc:
-    http_code = exc.code
-    body = exc.read().decode("utf-8", errors="replace")
-except (OSError, URLError) as exc:
-    print(f"000 error:{exc}")
+    health_data = json.loads(health_body)
+except json.JSONDecodeError:
+    health_data = {}
+health_status = health_data.get("status")
+if health_code != 200 or health_status != "ok":
+    print(f"/api/health={health_code} {health_status or 'unknown'}")
     raise SystemExit(1)
 
-try:
-    data = json.loads(body)
-except json.JSONDecodeError:
-    data = {}
+home_code, home_body = fetch("/")
+if home_code != 200 or "<html" not in home_body.lower():
+    print(f"/={home_code} html_missing")
+    raise SystemExit(1)
 
-health_status = data.get("status")
-print(f"{http_code} {health_status or 'unknown'}")
-raise SystemExit(0 if http_code == 200 and data.get("status") == "ok" else 1)
+characters_code, characters_body = fetch("/api/characters")
+try:
+    characters_data = json.loads(characters_body)
+except json.JSONDecodeError:
+    characters_data = None
+if characters_code != 200 or not isinstance(characters_data, list):
+    print(f"/api/characters={characters_code} invalid_json")
+    raise SystemExit(1)
+
+print(f"/api/health={health_code} ok /={home_code} html /api/characters={characters_code} list:{len(characters_data)}")
 PY
 ENDSSH
 }

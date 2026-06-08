@@ -16,10 +16,11 @@ _NOW = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
 # ── request_password_reset ──────────────────────────────
 
 class TestRequestPasswordReset:
-    def test_user_not_found_returns_false(self):
+    def test_user_not_found_returns_false_and_masks_email_log(self, caplog):
         """不存在的用户返回 (False, None, None)，防枚举。"""
         from services.password_reset_service import request_password_reset
 
+        caplog.set_level("INFO", logger="services.password_reset_service")
         with patch(
             "services.password_reset_service.user_repo.find_user_by_email",
             return_value=None,
@@ -30,6 +31,8 @@ class TestRequestPasswordReset:
         assert found is False
         assert email is None
         assert code is None
+        assert "n***@test.com" in caplog.text
+        assert "no@test.com" not in caplog.text
 
     def test_user_found_generates_6_digit_code(self):
         """存在的用户生成 6 位数字验证码。"""

@@ -20,19 +20,17 @@ from services.prompt_assembler import (
     _build_single_system_prompt,
     _clip,
     _get_field,
-    _merge_alternate_greetings,
-    _merge_text,
     _mode_sections,
     _related_assets_text,
     _select_mode_builder,
     _split_last_user_message,
     _world_info_layer_pairs,
     PromptBuildContext,
-    build_layered_chat_messages,
     build_layered_chat_messages_from_context,
     parse_json_object,
     resolve_world_info,
 )
+from services.runtime_bundle import _merge_alternate_greetings, _merge_text
 
 
 class TestParseJsonObject:
@@ -275,38 +273,6 @@ class TestResolveWorldInfo:
 
 
 class TestFinalMessagesContract:
-    def test_prompt_build_context_matches_legacy_api(self):
-        character = {
-            "id": "luna",
-            "name": "露娜",
-            "card_type": "intimate",
-            "asset_type": "character",
-            "system_prompt": "你是露娜，要保持温柔。",
-            "description": "角色背景：在海边长大。",
-            "opening_message": "你好",
-        }
-        recent_messages = [
-            {"role": "assistant", "content": "上一轮回复"},
-            {"role": "user", "content": "请继续说说你的故事"},
-        ]
-
-        legacy = build_layered_chat_messages(
-            character,
-            recent_messages,
-            memory_summary="长期记忆：用户喜欢温柔风格。",
-            user_name="小明",
-        )
-        via_context = build_layered_chat_messages_from_context(
-            PromptBuildContext(
-                character=character,
-                recent_messages=recent_messages,
-                memory_summary="长期记忆：用户喜欢温柔风格。",
-                user_name="小明",
-            )
-        )
-
-        assert via_context == legacy
-
     def test_character_mode_final_messages_include_profile_world_rules_post_rules_and_current_user(
         self,
     ):

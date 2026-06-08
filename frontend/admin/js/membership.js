@@ -97,7 +97,7 @@ function renderMembershipUsers() {
     <table class="user-table">
       <thead>
         <tr>
-          <th style="width:32px"><input type="checkbox" class="user-checkbox" id="user-check-all" onchange="toggleAllUsers(this)" /></th>
+          <th style="width:32px"><input type="checkbox" class="user-checkbox" id="user-check-all" data-user-check-all="true" /></th>
           <th>ID</th>
           <th>昵称</th>
           <th>邮箱</th>
@@ -110,7 +110,7 @@ function renderMembershipUsers() {
       <tbody>
         ${users.map(u => `
           <tr>
-            <td><input type="checkbox" class="user-checkbox" value="${u.id}" onchange="toggleUserSelection('${u.id}', this)" ${md.selectedUserIds.has(u.id) ? 'checked' : ''} /></td>
+            <td><input type="checkbox" class="user-checkbox" value="${escHtml(String(u.id))}" data-user-select="true" ${md.selectedUserIds.has(u.id) ? 'checked' : ''} /></td>
             <td class="col-id">#${u.id}</td>
             <td><strong>${escHtml(u.nickname || '—')}</strong></td>
             <td class="col-email">${escHtml(u.email || '—')}</td>

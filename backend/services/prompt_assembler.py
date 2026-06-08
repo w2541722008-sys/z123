@@ -4,7 +4,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, cast
 
-from utils.card_text import expand_macros
 from utils.json_utils import parse_json_object
 from constants.prompt_templates import (
     STATE_UPDATE_INSTRUCTION,
@@ -20,18 +19,13 @@ from services.token_budget import (
     TokenBudget,
     DEFAULT_BUDGET as _DEFAULT_BUDGET,
     LAYER_MAX_CHARS as _LAYER_MAX_CHARS,
-    PRIMARY_SYSTEM_MAX_CHARS as _PRIMARY_SYSTEM_MAX_CHARS,
-    TOTAL_SYSTEM_MAX_CHARS as _TOTAL_SYSTEM_MAX_CHARS,
     wi_max_triggered as _wi_max_triggered,
     wi_max_chars_per_entry as _wi_max_chars_per_entry,
 )
 from services.runtime_bundle import (
     build_runtime_bundle,
     expand_bundle_macros as _expand_bundle_macros,
-    get_runtime_layers,
     _get_field,
-    _merge_text,
-    _merge_alternate_greetings,
 )
 from services.state_snapshot import inject_state_snapshot
 from services.prompt_builder import (
@@ -96,52 +90,6 @@ _ROMANCE_SCENARIO_SYSTEM_PROMPT: str = ROMANCE_SCENARIO_SYSTEM_PROMPT
 # ============================================================
 
 
-# ── 向后兼容重导出 ──
-# 以下名称已迁移到独立模块，此处保留重导出以避免外部调用方中断
-__all__ = [
-    "TokenBudget",
-    "_DEFAULT_BUDGET",
-    "DEFAULT_BUDGET",
-    "_LAYER_MAX_CHARS",
-    "LAYER_MAX_CHARS",
-    "_PRIMARY_SYSTEM_MAX_CHARS",
-    "PRIMARY_SYSTEM_MAX_CHARS",
-    "_TOTAL_SYSTEM_MAX_CHARS",
-    "TOTAL_SYSTEM_MAX_CHARS",
-    "build_runtime_bundle",
-    "get_runtime_layers",
-    "_get_field",
-    "_merge_text",
-    "_merge_alternate_greetings",
-    "parse_json_object",
-    "expand_macros",
-    "expand_bundle_macros",
-    "wi_max_triggered",
-    "wi_max_chars_per_entry",
-    "_clip",
-    "_build_single_system_prompt",
-    "_related_assets_text",
-    "_alternate_samples_text",
-    "_split_last_user_message",
-    "_world_info_layer_pairs",
-    "_append_runtime_text_layers",
-    "_append_world_info_after",
-    "_mode_sections",
-    "_append_memory_and_history",
-    "_append_post_history_then_user",
-    "_append_runtime_tail",
-    "PromptBuildContext",
-    "build_layered_chat_messages_from_context",
-]
-
-# 重导出已迁移的公共名称
-DEFAULT_BUDGET = _DEFAULT_BUDGET
-LAYER_MAX_CHARS = _LAYER_MAX_CHARS
-PRIMARY_SYSTEM_MAX_CHARS = _PRIMARY_SYSTEM_MAX_CHARS
-TOTAL_SYSTEM_MAX_CHARS = _TOTAL_SYSTEM_MAX_CHARS
-expand_bundle_macros = _expand_bundle_macros
-wi_max_triggered = _wi_max_triggered
-wi_max_chars_per_entry = _wi_max_chars_per_entry
 
 
 # 模式构建器（通过 prompt_builder 创建）
@@ -561,37 +509,6 @@ def build_layered_chat_messages_from_context(
         context.memory_summary,
         context.recent_message_window,
         budget=_budget,
-    )
-
-
-def build_layered_chat_messages(
-    character: Any,
-    recent_messages: list[dict[str, Any]],
-    memory_summary: str = "",
-    recent_message_window: int = RECENT_MESSAGE_WINDOW,
-    related_assets: list[Any] | None = None,
-    user_name: str = "",
-    character_state: dict[str, Any] | None = None,
-    budget: "TokenBudget | None" = None,
-    conn: ConnType | None = None,
-    last_chat_time: str | None = None,
-    user_id: int | str | None = None,
-) -> list[dict[str, str]]:
-    """兼容旧调用方：把长参数列表转换为 PromptBuildContext。"""
-    return build_layered_chat_messages_from_context(
-        PromptBuildContext(
-            character=character,
-            recent_messages=recent_messages,
-            memory_summary=memory_summary,
-            recent_message_window=recent_message_window,
-            related_assets=related_assets,
-            user_name=user_name,
-            character_state=character_state,
-            budget=budget,
-            conn=conn,
-            last_chat_time=last_chat_time,
-            user_id=user_id,
-        )
     )
 
 

@@ -37,31 +37,22 @@ const SERVER_ORIGIN = API_BASE.replace(/\/api$/, '');
    const LAST_CHAR_KEY = 'aifriend_last_char';
    const DEVICE_ID_KEY = 'aifriend_device_id';
 
-   // refresh token 仅存内存，不落盘（安全增强）
-   let _refreshToken = '';
-
    function setToken(token) {
      // 不再写入 localStorage：access token 由 HttpOnly Cookie 管理，
      // 避免 XSS 窃取。仅清除旧数据。
-     if (!token) {
-       localStorage.removeItem(TOKEN_KEY);
-     }
+     localStorage.removeItem(TOKEN_KEY);
    }
 
    function getToken() {
-     return localStorage.getItem(TOKEN_KEY) || '';
+     return '';
    }
 
    function setRefreshToken(token) {
-     _refreshToken = token || '';
+     try { sessionStorage.removeItem('aifriend_token_refresh'); } catch (_) {}
    }
 
    function getRefreshToken() {
-      // 页面刷新后从 sessionStorage 恢复 refresh token
-      if (_refreshToken) return _refreshToken;
-      try { _refreshToken = sessionStorage.getItem('aifriend_token_refresh') || ''; } catch (_) {}
-
-     return _refreshToken;
+     return '';
    }
 
    function getUser() {

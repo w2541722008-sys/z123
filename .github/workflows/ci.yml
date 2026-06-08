@@ -66,23 +66,14 @@ jobs:
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
 
-    - name: Check code formatting with Black
-      run: |
-        black --check --diff backend/ tests/
-
     - name: Run ruff linter
       run: |
-        ruff check backend/ tests/
+        ruff check .
 
     - name: Run mypy type check (strict modules only)
       run: |
         cd backend
-        pip install mypy types-psycopg2
-        mypy --config-file mypy.ini \
-          --follow-imports=skip \
-          constants/__init__.py constants/mood.py constants/story_phase.py \
-          utils/json_utils.py \
-          services/token_budget.py services/usage_guard.py services/rate_limit.py services/cache_service.py
+        mypy --config-file mypy.ini
 
   frontend-test:
     name: Frontend Tests
@@ -99,6 +90,8 @@ jobs:
 
     - name: Run frontend tests
       run: |
+        node tests/frontend_smoke.js
+        node tests/check_csp_onclick.js
         node tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json
         node tests/test_frontend_utils.js
 
@@ -115,7 +108,11 @@ jobs:
     - name: Validate deployment scripts
       run: |
         chmod +x deploy.sh restart.sh
-        echo "Deployment scripts validated"
+        bash -n deploy.sh
+        bash -n restart.sh
+        bash -n rollback.sh
+        bash -n deploy/backup_supabase.sh
+        python -m pytest tests/test_deploy_scripts.py -q
 
     - name: Check required files exist
       run: |

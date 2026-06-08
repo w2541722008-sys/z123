@@ -206,35 +206,6 @@ def build_reply_with_fallback(
     return cleaned_reply, new_state
 
 
-def build_mock_reply(character: Any, user_message: str) -> str:
-    """
-    生成 fallback mock 回复。
-
-    当真实 AI 调用失败时使用，根据 mock_reply_style 轮换回复风格。
-    """
-    # jsonb 列：psycopg2 自动解析为 Python list，兼容旧 text 格式
-    raw_styles = character.get("mock_reply_style", "[]")
-    styles: list[str] = (
-        raw_styles if isinstance(raw_styles, list) else json.loads(raw_styles or "[]")
-    )
-    if not styles:
-        return "我在，你继续说。"
-    fingerprint = sum(ord(ch) for ch in user_message) % len(styles)
-    base: str = styles[fingerprint]
-
-    # 通用情感关键词额外拼接
-    if any(
-        keyword in user_message
-        for keyword in ["累", "困", "难受", "烦", "崩溃", "委屈", "哭"]
-    ):
-        return "%s先别想别的，先说说你现在的感受。" % base
-
-    if any(keyword in user_message for keyword in ["想你", "喜欢你", "爱你", "爱上了"]):
-        return "%s……我听到了，继续说。" % base
-
-    return base
-
-
 # ============================================================
 # SSE 格式化
 # ============================================================

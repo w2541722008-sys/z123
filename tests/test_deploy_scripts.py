@@ -22,6 +22,11 @@ def test_deploy_rsync_excludes_local_only_artifacts():
     assert "--exclude='.mypy_cache'" in deploy
     assert "--exclude='tests'" in deploy
     assert "--exclude='.scratch'" in deploy
+    assert "--exclude='.agents'" in deploy
+    assert "--exclude='.claude'" in deploy
+    assert "--exclude='.codex'" in deploy
+    assert "--exclude='.idea'" in deploy
+    assert "--exclude='output'" in deploy
 
 
 def test_deploy_migration_failure_blocks_restart():
@@ -33,6 +38,33 @@ def test_deploy_migration_failure_blocks_restart():
 
     assert "数据库迁移失败" in migration_block
     assert "exit 1" in migration_block
+
+
+def test_deploy_runs_alembic_from_backend_venv():
+    deploy = _read_script("deploy.sh")
+
+    assert "SKIP_DB_MIGRATION" in deploy
+    assert "SKIP_DB_MIGRATION=${SKIP_DB_MIGRATION:-0}" in deploy
+    assert 'ALEMBIC_BIN="/opt/aifriend/backend/venv/bin/alembic"' in deploy
+    assert '"$ALEMBIC_BIN" -c alembic.ini upgrade head' in deploy
+    assert "python3 -m alembic" not in deploy
+
+
+def test_deploy_and_rollback_use_same_backup_patterns():
+    deploy = _read_script("deploy.sh")
+    rollback = _read_script("rollback.sh")
+
+    for pattern in ("/opt/aifriend_backup_*", "/opt/aifriend_20*", '"$HOME"/aifriend_20*', '"$HOME"/aifriend_backup_*'):
+        assert pattern in deploy
+        assert pattern in rollback
+
+
+def test_restart_fallback_binds_loopback_and_prefers_systemd():
+    restart = _read_script("restart.sh")
+
+    assert "systemctl is-enabled aifriend" in restart
+    assert "--host 127.0.0.1" in restart
+    assert "--host 0.0.0.0" not in restart
 
 
 def test_deploy_dependency_install_failure_blocks_restart():
@@ -50,7 +82,10 @@ def test_deploy_health_check_requires_json_status_ok():
     deploy = _read_script("deploy.sh")
 
     assert "health_status" in deploy
-    assert 'status") == "ok"' in deploy
+    assert 'health_status != "ok"' in deploy
+    assert 'fetch("/")' in deploy
+    assert 'fetch("/api/characters")' in deploy
+    assert 'isinstance(characters_data, list)' in deploy
 
 
 def test_rollback_preserves_uploaded_avatars():
