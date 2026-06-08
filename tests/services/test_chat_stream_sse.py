@@ -17,6 +17,10 @@ from services.chat_stream._sse import (
     _build_stream_done_payload,
     _build_stream_done_payload_from_persisted_result,
 )
+from services.chat_stream._postprocess import (
+    _persist_stream_result,
+    _postprocess_regenerate_or_continue_result,
+)
 
 
 class TestDefaultStreamHeaders:
@@ -190,3 +194,169 @@ class TestBuildStreamDonePayloadFromPersistedResult:
             "message_id": "msg_42",
             "summary_enabled": True,
         }
+
+
+class TestRetryPostprocessStateUpdates:
+    def test_regenerate_does_not_apply_state_delta_again(self):
+        events = []
+        state_deltas = []
+
+        class FakeConn:
+            def commit(self):
+                events.append("commit")
+
+            def rollback(self):
+                events.append("rollback")
+
+            def close(self):
+                events.append("close")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("services.chat_stream._postprocess.get_conn", lambda: FakeConn())
+            mp.setattr(
+                "services.chat_stream._postprocess.save_regenerated_version",
+                lambda conn, message_id, final_text, is_append, commit: events.append(
+                    ("save", message_id, final_text, is_append, commit)
+                ),
+            )
+            mp.setattr(
+                "services.chat_stream._postprocess._log_successful_chat_request",
+                lambda *args, **kwargs: events.append(("log", kwargs["endpoint"])),
+            )
+
+            def capture_state_delta(*args, **kwargs):
+                state_deltas.append(kwargs.get("delta"))
+                return {"affection": 12}
+
+            mp.setattr(
+                "services.chat_stream._postprocess._resolve_public_character_state",
+                capture_state_delta,
+            )
+            mp.setattr(
+                "services.chat_stream._postprocess.run_memory_summary_background",
+                lambda *args, **kwargs: events.append("summary"),
+            )
+
+            output = list(
+                _postprocess_regenerate_or_continue_result(
+                    user_id=1,
+                    guest_ip="127.0.0.1",
+                    character_id="c1",
+                    message_id="m1",
+                    endpoint="/api/chat/regenerate",
+                    estimate={"chars": 10, "tokens": 5},
+                    is_append=False,
+                    base_reply="",
+                    operation="regenerate",
+                    final_text="new reply",
+                    delta={"event": "compliment", "mood": "shy"},
+                )
+            )
+
+        assert any("event: done" in item for item in output)
+        assert ("save", "m1", "new reply", False, False) in events
+        assert state_deltas == [None]
+        assert "commit" in events
+
+
+class TestMainStreamPostprocessWorldInfoState:
+    def test_persists_wi_state_before_commit_in_save_transaction(self):
+        events = []
+
+        class FakeConn:
+            def commit(self):
+                events.append("commit")
+
+            def rollback(self):
+                events.append("rollback")
+
+            def close(self):
+                events.append("close")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("services.chat_stream._postprocess.get_conn", lambda: FakeConn())
+            mp.setattr(
+                "services.chat_stream._postprocess.store_user_message",
+                lambda *args, **kwargs: events.append("user"),
+            )
+            mp.setattr(
+                "services.chat_stream._postprocess.save_assistant_message",
+                lambda *args, **kwargs: events.append("assistant") or "m1",
+            )
+            mp.setattr(
+                "services.chat_stream._postprocess._log_successful_chat_request",
+                lambda *args, **kwargs: events.append("log"),
+            )
+            mp.setattr(
+                "services.chat_stream._postprocess._resolve_public_character_state",
+                lambda *args, **kwargs: events.append("state") or {"affection": 30},
+            )
+
+            def capture_wi_state(conn, user_id, character_id, character_state):
+                events.append(("wi", user_id, character_id, character_state))
+
+            mp.setattr(
+                "services.chat_stream._postprocess._persist_wi_state",
+                capture_wi_state,
+            )
+
+            result = _persist_stream_result(
+                user_id=1,
+                guest_ip="127.0.0.1",
+                character_id="c1",
+                final_reply="hi",
+                estimate={"tokens": 5, "chars": 10},
+                delta=None,
+                user_message="hello",
+                wi_state={"custom_vars": {"_wi_sticky": {"scene": 2}}},
+            )
+
+        wi_event = ("wi", 1, "c1", {"custom_vars": {"_wi_sticky": {"scene": 2}}})
+
+        assert result["message_id"] == "m1"
+        assert events.index("state") < events.index(wi_event)
+        assert events.index(wi_event) < events.index("commit")
+
+    def test_skips_wi_persistence_when_no_wi_state(self):
+        events = []
+
+        class FakeConn:
+            def commit(self):
+                events.append("commit")
+
+            def rollback(self):
+                events.append("rollback")
+
+            def close(self):
+                events.append("close")
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("services.chat_stream._postprocess.get_conn", lambda: FakeConn())
+            mp.setattr(
+                "services.chat_stream._postprocess.save_assistant_message",
+                lambda *args, **kwargs: "m1",
+            )
+            mp.setattr(
+                "services.chat_stream._postprocess._log_successful_chat_request",
+                lambda *args, **kwargs: None,
+            )
+            mp.setattr(
+                "services.chat_stream._postprocess._resolve_public_character_state",
+                lambda *args, **kwargs: {"affection": 30},
+            )
+            mp.setattr(
+                "services.chat_stream._postprocess._persist_wi_state",
+                lambda *args, **kwargs: events.append("wi"),
+            )
+
+            _persist_stream_result(
+                user_id=1,
+                guest_ip="127.0.0.1",
+                character_id="c1",
+                final_reply="hi",
+                estimate={"tokens": 5, "chars": 10},
+                delta=None,
+            )
+
+        assert "wi" not in events
+        assert "commit" in events

@@ -25,6 +25,7 @@ class TestCursorLifecycle:
         conn = FakeSequenceConn([
             FakeQueryResult(one={"id": "luna"}),
             FakeQueryResult(one={"id": 42}),
+            FakeQueryResult(rowcount=1),
         ])
         with override_db(app, conn):
             response = client.post("/api/admin/character/luna/memories", json={
@@ -34,8 +35,8 @@ class TestCursorLifecycle:
             })
         assert response.status_code == 200
         assert response.json()["id"] == 42
-        # 验证 execute 次数正确（character check + INSERT）
-        assert len(conn.executed) == 2
+        # 验证 execute 次数正确（character check + INSERT + audit log）
+        assert len(conn.executed) == 3
 
     def test_create_memory_category_fetchone_before_commit(self, admin_client):
         """create_memory_category 端点。"""

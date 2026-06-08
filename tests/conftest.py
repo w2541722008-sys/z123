@@ -26,6 +26,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+os.environ.setdefault("AIFRIEND_DISABLE_BACKGROUND_DB_TASKS", "1")
+
 
 # ── 路径设置（模块级别，确保在测试收集前生效）────────────────────────
 BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend"))
@@ -529,6 +531,7 @@ def admin_client(app_client):
     """预配置管理员用户的 TestClient（app, client 二元组）。"""
     app, client = app_client
     from core.auth import CurrentUser, get_admin_user, get_current_user, get_optional_user
+    from routers.admin._helpers import _admin_rate_limit
     _admin = CurrentUser(
         id=1, email="admin@example.com", nickname="admin",
         plan_type="vip", effective_plan="vip", is_admin=True,
@@ -537,6 +540,7 @@ def admin_client(app_client):
     app.dependency_overrides[get_current_user] = lambda: _admin
     app.dependency_overrides[get_optional_user] = lambda: _admin
     app.dependency_overrides[get_admin_user] = lambda: _admin
+    app.dependency_overrides[_admin_rate_limit] = lambda: None
     yield app, client
     app.dependency_overrides = saved_overrides
 

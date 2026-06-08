@@ -10,14 +10,25 @@ class TestGetChatHistory:
     def test_returns_formatted_list(self):
         from repositories.chat_repository import get_chat_history
         rows = [
-            FakeRow({"role": "user", "content": "hi", "created_at": "2026-05-03"}),
-            FakeRow({"role": "assistant", "content": "hello", "created_at": "2026-05-03"}),
+            FakeRow({"id": 1, "role": "user", "content": "hi", "created_at": "2026-05-03"}),
+            FakeRow({"id": 2, "role": "assistant", "content": "hello", "created_at": "2026-05-03"}),
         ]
         conn = FakeSequenceConn([rows])
         result = get_chat_history(conn, user_id=1, character_id="c1")
         assert len(result) == 2
         assert result[0]["role"] == "user"
         assert result[1]["content"] == "hello"
+
+    def test_returns_message_id_for_assistant_messages_only(self):
+        from repositories.chat_repository import get_chat_history
+        rows = [
+            FakeRow({"id": 10, "role": "user", "content": "hi", "created_at": "2026-05-03"}),
+            FakeRow({"id": 11, "role": "assistant", "content": "hello", "created_at": "2026-05-03"}),
+        ]
+        conn = FakeSequenceConn([rows])
+        result = get_chat_history(conn, user_id=1, character_id="c1")
+        assert "message_id" not in result[0]
+        assert result[1]["message_id"] == "11"
 
     def test_empty_history(self):
         from repositories.chat_repository import get_chat_history
@@ -47,15 +58,22 @@ class TestGetChatHistory:
         sql, params = conn.executed[0]
         assert params[3] == 10
 
-    def test_message_order_descending_by_id(self):
+    def test_latest_page_query_uses_descending_inner_order(self):
+        from repositories.chat_repository import get_chat_history
+        conn = FakeSequenceConn([[]])
+        get_chat_history(conn, user_id=1, character_id="c1")
+        sql, _ = conn.executed[0]
+        assert "ORDER BY id DESC" in sql
+
+    def test_returns_latest_page_in_chronological_order(self):
         from repositories.chat_repository import get_chat_history
         rows = [
-            FakeRow({"role": "user", "content": "first", "created_at": "2026-05-01"}),
-            FakeRow({"role": "user", "content": "second", "created_at": "2026-05-02"}),
+            FakeRow({"id": 1, "role": "user", "content": "older", "created_at": "2026-05-02"}),
+            FakeRow({"id": 2, "role": "assistant", "content": "newest", "created_at": "2026-05-03"}),
         ]
         conn = FakeSequenceConn([rows])
         result = get_chat_history(conn, user_id=1, character_id="c1")
-        assert result[0]["content"] == "first"
+        assert [item["content"] for item in result] == ["older", "newest"]
 
     def test_different_character_isolation(self):
         from repositories.chat_repository import get_chat_history
@@ -77,5 +95,3 @@ class TestCountChatHistory:
         conn = FakeSequenceConn([FakeRow({"total": 0})])
         result = count_chat_history(conn, user_id=1, character_id="c1")
         assert result == 0
-
-

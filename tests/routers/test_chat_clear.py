@@ -70,3 +70,30 @@ class TestChatClearRouteRegistration:
             for m in getattr(route, "methods", set())
         }
         assert (method, path) in routes
+
+
+class TestCharacterClientSerialization:
+    def test_serialized_character_exposes_affection_visibility_config(self):
+        from routers.characters import _serialize_character_for_client
+
+        row = FakeDummyConn().fetchone() or {
+            "id": "luna",
+            "name": "露娜",
+            "abbr": "露",
+            "subtitle": "陪你聊天",
+            "avatar_url": "",
+            "cover_url": "",
+            "description": "",
+            "opening_message": "你好",
+            "tags": "[]",
+            "card_type": "intimate",
+            "required_plan": "guest",
+            "home_priority": 0,
+            "affection_enabled": 0,
+            "affection_rules_json": {"show_bar": False},
+        }
+
+        result = _serialize_character_for_client(FakeDummyConn(), row, user_id=None, overrides_map={})
+
+        assert result["affection_enabled"] == 0
+        assert result["affection_rules_json"] == '{"show_bar": false}'

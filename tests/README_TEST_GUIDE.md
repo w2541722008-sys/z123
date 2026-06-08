@@ -31,8 +31,8 @@ node tests/frontend_smoke.js
 # CI / 部署前 — 全量（排除集成）
 cd backend && python3 -m pytest ../tests/ --ignore=../tests/integration -q
 
-# 集成测试（需真实 PostgreSQL）
-DATABASE_URL=postgresql://... python3 -m pytest ../tests/integration/ -v
+# 集成测试（需真实 PostgreSQL 测试库）
+TEST_DATABASE_URL=postgresql://... python3 -m pytest ../tests/integration/ -v
 
 # 并行加速（需先 pip install pytest-xdist，见 requirements-dev.txt）
 cd backend && python3 -m pytest ../tests/ -n auto --dist loadscope -q

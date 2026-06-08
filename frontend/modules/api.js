@@ -112,7 +112,7 @@
           readResult = await Promise.race([
             reader.read(),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('SSE 读取超时')), STREAM_CHUNK_TIMEOUT_MS)
+              setTimeout(() => reject(new Error('响应超时，请检查网络后重试')), STREAM_CHUNK_TIMEOUT_MS)
             ),
           ]);
         } catch (readErr) {
@@ -142,7 +142,12 @@
           try { payloadData = JSON.parse(dataLine); } catch (_) { continue; }
           if (event === 'chunk' && handlers.onChunk) handlers.onChunk(payloadData.text || '');
           if (event === 'done' && handlers.onDone) handlers.onDone(payloadData);
-          if (event === 'error' && handlers.onError) handlers.onError(payloadData);
+          if (event === 'error') {
+            if (handlers.onError) handlers.onError(payloadData);
+            const err = new Error(payloadData?.message || '流式请求失败');
+            err.status = 'sse_error';
+            throw err;
+          }
         }
       }
     }

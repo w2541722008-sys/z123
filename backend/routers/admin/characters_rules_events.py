@@ -5,7 +5,7 @@ import uuid
 
 from fastapi import APIRouter, Depends
 
-from core.auth import get_admin_user
+from core.auth import CurrentUser, get_admin_user
 from core.database import ConnType, get_db_dep
 from core.exceptions import BadRequestError, NotFoundError
 from core.schemas import PostRulePayload, StoryEventPayload
@@ -15,6 +15,7 @@ from repositories import character_repository as char_repo
 from ._helpers import (
     _assert_story_event_unlock_refs_owned,
     _assert_storyline_owned,
+    _insert_admin_audit,
 )
 
 # 认证依赖由父路由 _router.py 统一提供
@@ -50,6 +51,7 @@ def list_post_rules(character_id: str, conn: ConnType = Depends(get_db_dep)) -> 
 def create_post_rule(
     character_id: str,
     body: PostRulePayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     _require_character(conn, character_id)
@@ -65,6 +67,14 @@ def create_post_rule(
         priority=body.priority,
         is_active=body.is_active,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="create_post_rule",
+        target_type="post_rule",
+        target_id=str(new_id),
+        detail={"character_id": character_id, "name": body.name},
+    )
     conn.commit()
     return {"ok": True, "id": new_id}
 
@@ -74,6 +84,7 @@ def update_post_rule(
     character_id: str,
     rule_id: str,
     body: PostRulePayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_post_rule(conn, rule_id, character_id):
@@ -90,6 +101,14 @@ def update_post_rule(
         priority=body.priority,
         is_active=body.is_active,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="update_post_rule",
+        target_type="post_rule",
+        target_id=str(rule_id),
+        detail={"character_id": character_id, "name": body.name},
+    )
     conn.commit()
     return {"ok": True}
 
@@ -98,12 +117,21 @@ def update_post_rule(
 def delete_post_rule(
     character_id: str,
     rule_id: str,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_post_rule(conn, rule_id, character_id):
         raise NotFoundError(detail="后置规则不存在")
 
     admin_repo.admin_delete_post_rule(conn, rule_id)
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="delete_post_rule",
+        target_type="post_rule",
+        target_id=str(rule_id),
+        detail={"character_id": character_id},
+    )
     conn.commit()
     return {"ok": True}
 
@@ -136,6 +164,7 @@ def list_story_events(character_id: str, conn: ConnType = Depends(get_db_dep)) -
 def create_story_event(
     character_id: str,
     body: StoryEventPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     _require_character(conn, character_id)
@@ -159,6 +188,14 @@ def create_story_event(
         sort_order=body.sort_order,
         is_active=body.is_active,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="create_story_event",
+        target_type="story_event",
+        target_id=str(new_id),
+        detail={"character_id": character_id, "title": body.title},
+    )
     conn.commit()
     return {"ok": True, "id": new_id}
 
@@ -168,6 +205,7 @@ def update_story_event(
     character_id: str,
     event_id: str,
     body: StoryEventPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_story_event(conn, event_id, character_id):
@@ -191,6 +229,14 @@ def update_story_event(
         sort_order=body.sort_order,
         is_active=body.is_active,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="update_story_event",
+        target_type="story_event",
+        target_id=str(event_id),
+        detail={"character_id": character_id, "title": body.title},
+    )
     conn.commit()
     return {"ok": True}
 
@@ -199,11 +245,20 @@ def update_story_event(
 def delete_story_event(
     character_id: str,
     event_id: str,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_story_event(conn, event_id, character_id):
         raise NotFoundError(detail="剧情事件不存在")
 
     admin_repo.admin_delete_story_event(conn, event_id)
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="delete_story_event",
+        target_type="story_event",
+        target_id=str(event_id),
+        detail={"character_id": character_id},
+    )
     conn.commit()
     return {"ok": True}

@@ -1,6 +1,6 @@
 """user_repository 集成测试 — 真实 SQL 执行验证。
 
-运行条件：需要 DATABASE_URL 环境变量指向测试数据库。
+运行条件：需要 TEST_DATABASE_URL 环境变量指向测试数据库。
 默认不执行（@pytest.mark.integration），需 pytest -m integration 启用。
 
 验证内容：

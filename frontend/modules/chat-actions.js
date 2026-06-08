@@ -40,7 +40,7 @@ const ChatActions = ((ChatState) => {
             R.renderMessageBubble(bubbleEl, aiText, true);
             S.finalizeAssistantMessageUpdate(messageId, aiText, payload);
           },
-          onError(payload) { UI.toast(payload?.message || '重新生成失败', 'warn', 3000); },
+          onError() {},
         },
         ChatState.streamController.signal
       );
@@ -87,7 +87,9 @@ const ChatActions = ((ChatState) => {
             S.setActionButtonsVisible(buttons.actions, false);
           },
           onError(payload) {
-            S.cleanupContinuationFailure(newRowEl, buttons, payload?.message || '继续生成失败');
+            R.removeTyping();
+            R.removeRowIfPresent(newRowEl);
+            S.setActionButtonsVisible(buttons.actions, true);
           },
         },
         ChatState.streamController.signal

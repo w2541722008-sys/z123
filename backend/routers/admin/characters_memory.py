@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from core.auth import get_admin_user
+from core.auth import CurrentUser, get_admin_user
 from core.database import ConnType, get_db_dep
 from core.exceptions import BadRequestError, NotFoundError
 from core.schemas import MemoryCategoryPayload, MemoryEntryPayload
 from repositories import character_admin_memory_repository as admin_repo
 from repositories import character_repository as char_repo
 
-from ._helpers import _assert_memory_category_owned
+from ._helpers import _assert_memory_category_owned, _insert_admin_audit
 
 # 认证依赖由父路由 _router.py 统一提供
 router = APIRouter(tags=["admin"])
@@ -50,6 +50,7 @@ def list_memories(character_id: str, conn: ConnType = Depends(get_db_dep)) -> li
 def create_memory(
     character_id: str,
     body: MemoryEntryPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     _require_character(conn, character_id)
@@ -71,6 +72,14 @@ def create_memory(
         sticky=body.sticky,
         cooldown=body.cooldown,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="create_memory",
+        target_type="memory",
+        target_id=str(new_id),
+        detail={"character_id": character_id, "keywords": body.keywords},
+    )
     conn.commit()
     return {"id": new_id, "ok": True}
 
@@ -80,6 +89,7 @@ def update_memory(
     character_id: str,
     memory_id: str,
     body: MemoryEntryPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     if not admin_repo.admin_get_memory(conn, memory_id, character_id):
@@ -102,6 +112,14 @@ def update_memory(
         sticky=body.sticky,
         cooldown=body.cooldown,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="update_memory",
+        target_type="memory",
+        target_id=str(memory_id),
+        detail={"character_id": character_id, "keywords": body.keywords},
+    )
     conn.commit()
     return {"ok": True}
 
@@ -110,12 +128,21 @@ def update_memory(
 def delete_memory(
     character_id: str,
     memory_id: str,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     if not admin_repo.admin_get_memory(conn, memory_id, character_id):
         raise NotFoundError(detail="记忆条目不存在")
 
     admin_repo.admin_delete_memory(conn, memory_id)
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="delete_memory",
+        target_type="memory",
+        target_id=str(memory_id),
+        detail={"character_id": character_id},
+    )
     conn.commit()
     return {"ok": True}
 
@@ -142,6 +169,7 @@ def list_memory_categories(character_id: str, conn: ConnType = Depends(get_db_de
 def create_memory_category(
     character_id: str,
     body: MemoryCategoryPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     _require_character(conn, character_id)
@@ -154,6 +182,14 @@ def create_memory_category(
         color=body.color,
         sort_order=body.sort_order,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="create_memory_category",
+        target_type="memory_category",
+        target_id=str(new_id),
+        detail={"character_id": character_id, "name": body.name},
+    )
     conn.commit()
     return {"ok": True, "id": new_id}
 
@@ -163,6 +199,7 @@ def update_memory_category(
     character_id: str,
     category_id: str,
     body: MemoryCategoryPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     if not admin_repo.admin_get_memory_category(conn, category_id, character_id):
@@ -176,6 +213,14 @@ def update_memory_category(
         color=body.color,
         sort_order=body.sort_order,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="update_memory_category",
+        target_type="memory_category",
+        target_id=str(category_id),
+        detail={"character_id": character_id, "name": body.name},
+    )
     conn.commit()
     return {"ok": True}
 
@@ -184,6 +229,7 @@ def update_memory_category(
 def delete_memory_category(
     character_id: str,
     category_id: str,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, object]:
     if not admin_repo.admin_get_memory_category(conn, category_id, character_id):
@@ -196,6 +242,14 @@ def delete_memory_category(
         )
 
     admin_repo.admin_delete_memory_category(conn, category_id)
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="delete_memory_category",
+        target_type="memory_category",
+        target_id=str(category_id),
+        detail={"character_id": character_id},
+    )
     conn.commit()
     return {"ok": True}
 

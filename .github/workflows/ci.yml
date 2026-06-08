@@ -37,14 +37,15 @@ jobs:
           --cov-report=term-missing \
           --cov-fail-under=50
       env:
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        DATABASE_URL: postgresql://test:test@localhost:5432/aifriend_test
 
     - name: Run integration tests (if DB available)
       run: |
         cd backend
         python -m pytest ../tests/integration/ -v -m integration --timeout=60 || echo "Integration tests skipped (no DB)"
       env:
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+        DATABASE_URL: postgresql://test:test@localhost:5432/aifriend_test
       continue-on-error: true
 
   lint:
@@ -92,6 +93,7 @@ jobs:
       run: |
         node tests/frontend_smoke.js
         node tests/check_csp_onclick.js
+        node tests/test_frontend_security.js
         node tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json
         node tests/test_frontend_utils.js
 

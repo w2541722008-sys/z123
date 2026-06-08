@@ -17,6 +17,7 @@ from services.character_session_service import (
 from services.character_state import get_public_character_state
 from services.chat_query import ensure_opening_message, get_character_or_404
 from utils.json_utils import parse_json_list, parse_json_object
+from utils.json_utils import to_json_string
 from services.cache_service import cache_get, cache_set
 from core.plan_constants import (
     GUEST_PLAN,
@@ -76,6 +77,11 @@ def _serialize_character_for_client(
         "required_plan": required_plan,
         "required_plan_label": plan_display_name(required_plan),
         "home_priority": row["home_priority"],
+        "affection_enabled": int(row["affection_enabled"] or 0) if "affection_enabled" in row.keys() else 1,
+        "affection_rules_json": to_json_string(
+            row["affection_rules_json"] if "affection_rules_json" in row.keys() else {},
+            default_on_error="{}",
+        ),
         "remark": remark,
         "custom_signature": custom_signature,
         "display_name": remark or row["name"],

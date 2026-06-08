@@ -46,8 +46,8 @@ def resolve_triggered_memories(
     if not rows:
         return [], [], {}, {}
 
-    sticky_state = dict(sticky_state or {})
-    cooldown_state = dict(cooldown_state or {})
+    sticky_state = _normalize_turn_state(sticky_state)
+    cooldown_state = _normalize_turn_state(cooldown_state)
     ctx_lower = context_text.lower()
     triggered: list[dict[str, Any]] = []
 
@@ -170,6 +170,23 @@ def resolve_post_rules(
 
 
 # ── 内部辅助 ──────────────────────────────────────────────
+
+
+def _normalize_turn_state(state: dict[Any, Any] | None) -> dict[int, int]:
+    """把 JSON 读回的回合状态归一成 int -> positive int，忽略脏值。"""
+    normalized: dict[int, int] = {}
+    for raw_key, raw_value in (state or {}).items():
+        if isinstance(raw_key, bool) or isinstance(raw_value, bool):
+            continue
+        try:
+            memory_id = int(raw_key)
+            remaining_turns = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if memory_id <= 0 or remaining_turns <= 0:
+            continue
+        normalized[memory_id] = remaining_turns
+    return normalized
 
 
 def _make_entry(row: dict[str, Any]) -> dict[str, Any]:

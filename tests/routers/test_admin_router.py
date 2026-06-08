@@ -55,6 +55,50 @@ class TestAdminAuthGuards:
             app.dependency_overrides = saved
         assert response.status_code == 403
 
+    @pytest.mark.parametrize("path", [
+        "/api/admin/users",
+        "/api/admin/orders",
+        "/api/admin/dashboard/stats",
+        "/api/admin/characters",
+    ])
+    def test_admin_routes_share_rate_limit_guard(self, admin_client, path):
+        """所有 admin 业务域都应走同一套后台限流。"""
+        app, client = admin_client
+        from routers.admin._helpers import _admin_rate_limit
+
+        def reject_admin_requests(*args, **kwargs):
+            raise HTTPException(status_code=429, detail="请求过于频繁")
+
+        saved_override = app.dependency_overrides.pop(_admin_rate_limit, None)
+        try:
+            with patch("services.rate_limit.enforce_rate_limit", side_effect=reject_admin_requests):
+                response = client.get(path)
+        finally:
+            if saved_override is not None:
+                app.dependency_overrides[_admin_rate_limit] = saved_override
+
+        assert response.status_code == 429
+
+    def test_character_route_runs_shared_rate_limit_once(self, admin_client):
+        """父子路由同时声明同一限流依赖时，不应重复扣同一次请求。"""
+        app, client = admin_client
+        from routers.admin._helpers import _admin_rate_limit
+
+        conn = FakeSequenceConn([
+            FakeQueryResult(many=[]),
+        ])
+
+        saved_override = app.dependency_overrides.pop(_admin_rate_limit, None)
+        try:
+            with override_db(app, conn), patch("services.rate_limit.enforce_rate_limit") as mock_limit:
+                response = client.get("/api/admin/characters")
+        finally:
+            if saved_override is not None:
+                app.dependency_overrides[_admin_rate_limit] = saved_override
+
+        assert response.status_code == 200
+        mock_limit.assert_called_once()
+
 
 # ── Users 端点 ───────────────────────────────────────────────────
 

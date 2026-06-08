@@ -5,11 +5,16 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
+
+from fastapi import Request
 
 from core.database import ConnType
 from core.exceptions import BadRequestError
+from repositories import admin_audit_repository as audit_repo
 from repositories import character_admin_memory_repository as memory_repo
 from repositories import character_admin_story_repository as story_repo
+from services import rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +42,17 @@ _ADMIN_EDITABLE_FIELDS = {
 }
 
 
+def _admin_rate_limit(request: Request) -> None:
+    """管理后台全局限流：每 IP 每分钟最多 60 次请求。"""
+    rate_limit.enforce_rate_limit(
+        "admin",
+        rate_limit.get_request_client_ip(request),
+        limit=60,
+        window_seconds=60,
+        detail="请求过于频繁",
+    )
+
+
 def _transaction(conn, func):
     """
     在事务中执行函数，出错时自动回滚。
@@ -49,6 +65,26 @@ def _transaction(conn, func):
         logger.exception("管理后台事务执行失败")
         conn.rollback()
         raise
+
+
+def _insert_admin_audit(
+    conn: ConnType,
+    current_user: Any,
+    *,
+    action: str,
+    target_type: str,
+    target_id: str | None,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    audit_repo.insert_audit_log(
+        conn,
+        operator_id=current_user.id,
+        operator_email=current_user.email,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        detail=detail or {},
+    )
 
 
 def _normalize_pagination(page: int, limit: int, *, max_limit: int) -> tuple[int, int]:

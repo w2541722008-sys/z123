@@ -181,7 +181,7 @@ function renderPager(container, page, totalPages, total, onPageChange) {
  */
 function downloadCSV(filename, rows) {
   const csv = rows.map(r => r.map(v => {
-    let val = String(v || '').replace(/"/g, '""');
+    let val = String(v == null ? '' : v).replace(/"/g, '""');
     // 防止 CSV 公式注入：对 =、+、-、@ 开头的单元格加单引号前缀
     if (/^[=+\-@]/.test(val)) {
       val = "'" + val;

@@ -49,11 +49,13 @@ def _build_main_stream_postprocess(
     estimate: dict[str, int],
     user_message: str,
     character: dict[str, Any],
+    wi_state: dict[str, Any] | None = None,
 ):
     return _bind_stream_postprocess(
         _postprocess_main_stream_result,
         user_id=user_id, guest_ip=guest_ip, character_id=character_id,
         estimate=estimate, user_message=user_message, character=character,
+        wi_state=wi_state,
     )
 
 

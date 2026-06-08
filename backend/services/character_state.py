@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -170,10 +171,13 @@ def _reset_daily_fields_if_needed(
     """
     today = _get_today_date()
     if isinstance(snapshot, dict):
-        if snapshot.get("daily_reset_date", "") != today:
-            snapshot["daily_event_counts"] = {}
-            snapshot["daily_affection_gained"] = 0
-            snapshot["daily_reset_date"] = today
+        reset_key = "_daily_reset_date" if "_daily_reset_date" in snapshot else "daily_reset_date"
+        counts_key = "_daily_event_counts" if "_daily_event_counts" in snapshot else "daily_event_counts"
+        gained_key = "_daily_affection_gained" if "_daily_affection_gained" in snapshot else "daily_affection_gained"
+        if snapshot.get(reset_key, "") != today:
+            snapshot[counts_key] = {}
+            snapshot[gained_key] = 0
+            snapshot[reset_key] = today
     else:
         if snapshot.daily_reset_date != today:
             snapshot.daily_event_counts = {}
@@ -244,6 +248,7 @@ _CUSTOM_VARS_BLACKLIST = {
 }
 
 _SHARED_MOMENTS_MAX = 15
+_AFFECTION_DELTA_PATTERN = re.compile(r"^[+-]?\d+$")
 
 
 def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
@@ -263,7 +268,9 @@ def _sanitize_state_delta(delta: dict[str, Any]) -> dict[str, Any]:
                     -AFFECTION_DELTA_MAX, min(AFFECTION_DELTA_MAX, int(value))
                 )
             elif isinstance(value, str):
-                sanitized[key] = value[:20]
+                stripped = value.strip()
+                if _AFFECTION_DELTA_PATTERN.match(stripped):
+                    sanitized[key] = stripped[:20]
 
         elif key == "event":
             if isinstance(value, str):

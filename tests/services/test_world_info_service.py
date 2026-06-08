@@ -168,6 +168,16 @@ class TestStickyState:
         )
         assert 1 not in new_sticky  # sticky 耗尽
 
+    def test_sticky_state_accepts_json_string_keys(self):
+        conn = FakeSequenceConn([
+            FakeQueryResult([_mem_row(mid=1, keywords="unrelated", sticky=2)])
+        ])
+        before, _, new_sticky, _ = resolve_triggered_memories(
+            conn, "c1", "unrelated text", sticky_state={"1": 2},
+        )
+        assert len(before) == 1
+        assert new_sticky == {1: 1}
+
 
 class TestCooldownState:
     """冷却状态机。"""
@@ -207,6 +217,31 @@ class TestCooldownState:
         ])
         before2, _, _, _ = resolve_triggered_memories(conn2, "c1", "hello")
         assert len(before2) == 1
+
+    def test_cooldown_state_accepts_json_string_keys(self):
+        conn = FakeSequenceConn([
+            FakeQueryResult([_mem_row(mid=1, keywords="hello")])
+        ])
+        before, _, _, new_cooldown = resolve_triggered_memories(
+            conn, "c1", "hello", cooldown_state={"1": 2},
+        )
+        assert before == []
+        assert new_cooldown == {1: 1}
+
+    def test_invalid_state_entries_are_ignored(self):
+        conn = FakeSequenceConn([
+            FakeQueryResult([_mem_row(mid=1, keywords="hello")])
+        ])
+        before, _, sticky, cooldown = resolve_triggered_memories(
+            conn,
+            "c1",
+            "hello",
+            sticky_state={"bad": 9, "1": "not-int"},
+            cooldown_state={"bad": 9, "1": 0},
+        )
+        assert len(before) == 1
+        assert sticky == {}
+        assert cooldown == {}
 
 
 class TestStorylineFilter:

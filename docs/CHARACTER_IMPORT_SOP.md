@@ -48,7 +48,7 @@
 | `card_type` | TEXT | ✅ | 产品卡类型（见第三章）：`intimate`/`scenario` |
 | `runtime_cache_json` | JSONB（经 002 迁移） | ✅ | **核心字段**：运行时分层数据（见第二章，最重要的字段） |
 | `is_visible` | INTEGER | ✅ | 是否对外可见：`1`=可见，`0`=隐藏（测试用） |
-| `affection_enabled` | INTEGER | — | 是否启用好感度：`1`=启用（默认），`0`=禁用（world 卡建议设 0） |
+| `affection_enabled` | INTEGER | — | 是否在前端展示好感度/关系状态条：`1`=展示（默认），`0`=隐藏；关闭计算请用 `affection_rules_json.enabled=false` |
 | `home_priority` | INTEGER | — | 前台广场排序优先级，1最高，999默认（不在前台） |
 
 ### 仅管理后台使用的字段（可选，保留历史数据兼容）

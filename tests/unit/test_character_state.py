@@ -270,6 +270,10 @@ class TestSanitizeStateDelta:
         result = _sanitize_state_delta({"affection": "+3"})
         assert result["affection"] == "+3"
 
+    def test_invalid_affection_strings_filtered(self):
+        assert "affection" not in _sanitize_state_delta({"affection": "+开心"})
+        assert "affection" not in _sanitize_state_delta({"affection": "+3分"})
+
     def test_affection_capped(self):
         result = _sanitize_state_delta({"affection": 999})
         assert result["affection"] == _AFFECTION_DELTA_MAX
@@ -329,6 +333,19 @@ class TestResetDailyFieldsIfNeeded:
         assert result.daily_event_counts == {}
         assert result.daily_affection_gained == 0
         assert result.daily_reset_date != "2020-01-01"
+
+    def test_guest_dict_internal_daily_fields_reset(self):
+        snapshot = {
+            "_daily_reset_date": "2020-01-01",
+            "_daily_event_counts": {"compliment": 2},
+            "_daily_affection_gained": 8,
+        }
+
+        result = _reset_daily_fields_if_needed(snapshot)
+
+        assert result["_daily_event_counts"] == {}
+        assert result["_daily_affection_gained"] == 0
+        assert result["_daily_reset_date"] != "2020-01-01"
 
 
 # ============================================================

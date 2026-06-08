@@ -27,6 +27,16 @@ function sanitizeCssUrl(url) {
   return window.AIFriendShared.sanitizeCssUrl(url);
 }
 
+function normalizeCharTags(tags) {
+  if (Array.isArray(tags)) {
+    return tags;
+  }
+  if (typeof tags === 'string') {
+    return tags.split(',').map(tag => tag.trim()).filter(Boolean);
+  }
+  return [];
+}
+
  /* ----------------------------------------------------------------
     toggleSection(key) — 点击分区标题时展开/收起该分区卡片列表
     ---------------------------------------------------------------- */
@@ -142,7 +152,7 @@ function sanitizeCssUrl(url) {
            <div class="char-bio">${escapeHtml(bioText || '暂无简介')}</div>
            <div class="char-tags" style="margin-top:8px">
              ${warningLabel}
-             ${(char.tags || []).slice(0,2).map(t => `<span class="char-tag">${t}</span>`).join('')}
+             ${normalizeCharTags(char.tags).slice(0,2).map(t => `<span class="char-tag">${escapeHtml(t)}</span>`).join('')}
            </div>
          </div>
        </div>

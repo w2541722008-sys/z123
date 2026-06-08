@@ -41,6 +41,7 @@ from services.chat_send import (
     store_user_message,
 )
 from services.chat_query import count_chat_messages
+from services.memory_service import run_memory_summary_background
 from services.rate_limit import enforce_rate_limit, get_request_client_ip
 
 from ._route_builders import (
@@ -116,6 +117,7 @@ def _run_chat_send_transaction(
             reply_text=reply,
         )
         conn.commit()
+        run_memory_summary_background(user.id, payload.character_id, character)
     except Exception as exc:
         conn.rollback()
         _log_failed_chat_request(

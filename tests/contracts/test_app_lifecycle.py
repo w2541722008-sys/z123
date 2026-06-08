@@ -44,6 +44,17 @@ class TestLifespanMigration:
             "/api/chat/continue",
         }
 
+    def test_background_db_tasks_can_be_disabled_for_tests(self):
+        from main import _should_start_background_db_tasks
+
+        assert _should_start_background_db_tasks({}) is True
+        assert _should_start_background_db_tasks(
+            {"AIFRIEND_DISABLE_BACKGROUND_DB_TASKS": "1"}
+        ) is False
+        assert _should_start_background_db_tasks(
+            {"AIFRIEND_DISABLE_BACKGROUND_DB_TASKS": "true"}
+        ) is False
+
     def test_register_api_routers_registers_all_main_routers(self):
         from main import _register_api_routers
 

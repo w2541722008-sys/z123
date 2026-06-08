@@ -40,7 +40,7 @@ from services.chat_stream import (
 # 字段提取器 — 从 StreamPrepareResult 中提取路由所需字段
 # ============================================================
 def _read_main_stream_prepared(prepared: dict[str, Any]) -> dict[str, Any]:
-    return {
+    result = {
         "guest_ip": prepared["guest_ip"],
         "ai_config": prepared["ai_config"],
         "character": prepared["character"],
@@ -48,6 +48,9 @@ def _read_main_stream_prepared(prepared: dict[str, Any]) -> dict[str, Any]:
         "stream_messages": prepared["stream_messages"],
         "estimate": prepared["estimate"],
     }
+    if "wi_state" in prepared:
+        result["wi_state"] = prepared["wi_state"]
+    return result
 
 
 def _read_guest_stream_prepared(prepared: dict[str, Any]) -> dict[str, Any]:
@@ -78,7 +81,13 @@ def _read_retry_stream_prepared(prepared: dict[str, Any]) -> dict[str, Any]:
 def _prepare_guest_stream_request(conn, *, payload: GuestChatPayload, request: Request) -> dict[str, Any]:
     guest_ip = get_request_client_ip(request)
     character = get_character_or_404(conn, payload.character_id, viewer_plan=GUEST_PLAN)
-    clean_text, prompt_messages = _build_guest_stream_messages(character, payload.message, payload.guest_history)
+    clean_text, prompt_messages = _build_guest_stream_messages(
+        character,
+        payload.message,
+        payload.guest_history,
+        conn=conn,
+        guest_ip=guest_ip,
+    )
     guest_policy = get_plan_policy(GUEST_PLAN)
     budget = _prepare_ai_budget(
         conn,
@@ -130,6 +139,7 @@ def _build_main_route_response(
         estimate=stream_state["estimate"],
         user_message=stream_state["clean_text"],
         character=stream_state["character"],
+        wi_state=stream_state.get("wi_state"),
     )
     return _build_main_stream_response(
         stream_messages=stream_state["stream_messages"],

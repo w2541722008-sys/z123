@@ -133,6 +133,15 @@ def _warn_if_multi_worker_configured(env: dict[str, str] | os._Environ[str]) -> 
         )
 
 
+def _should_start_background_db_tasks(env: dict[str, str] | os._Environ[str]) -> bool:
+    """Return whether startup should launch background tasks that touch the DB."""
+    return (env.get("AIFRIEND_DISABLE_BACKGROUND_DB_TASKS") or "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 def _serve_html_file(path: Path, missing_message: str) -> HTMLResponse:
     if not path.exists():
         return HTMLResponse(missing_message, status_code=404)
@@ -164,12 +173,15 @@ async def lifespan(app: FastAPI):
 
     register_circuit_breaker(get_circuit_breaker)
 
-    start_order_cleanup_daemon(interval_seconds=3600)
-    logger.info("✅ 订单清理后台任务已启动")
+    if _should_start_background_db_tasks(os.environ):
+        start_order_cleanup_daemon(interval_seconds=3600)
+        logger.info("✅ 订单清理后台任务已启动")
 
-    start_keepalive_daemon()
-    logger.info("✅ 数据库 keep-alive 守护线程已启动（间隔 %s 秒）",
-                os.environ.get("DB_KEEPALIVE_INTERVAL_SECONDS", "300"))
+        start_keepalive_daemon()
+        logger.info("✅ 数据库 keep-alive 守护线程已启动（间隔 %s 秒）",
+                    os.environ.get("DB_KEEPALIVE_INTERVAL_SECONDS", "300"))
+    else:
+        logger.info("已跳过后台数据库任务（AIFRIEND_DISABLE_BACKGROUND_DB_TASKS=1）")
 
     missing_configs = validate_production_config()
     if missing_configs:

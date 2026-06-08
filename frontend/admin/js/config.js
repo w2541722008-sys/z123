@@ -51,6 +51,7 @@ const AFFECTION_BASE_RULES = [
   ['first_hug', '第一次拥抱', 7],
   ['kiss', '亲吻', 8],
   ['confession', '表白', 10],
+  ['intimate_moment', '亲密时刻', 6],
   ['argument', '争吵冲突', -5],
   ['rude', '粗鲁无礼', -3],
   ['ignore', '敷衍忽视', -2],

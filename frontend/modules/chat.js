@@ -307,7 +307,7 @@ const Chat = (() => {
     }
     ChatState.batchContainer = document.createDocumentFragment();
     while (box.firstChild) { ChatState.batchContainer.appendChild(box.firstChild); }
-    messages.forEach(item => R.appendMsg(item.role, item.content, item.created_at));
+    messages.forEach(item => R.appendMsg(item.role, item.content, item.created_at, null, item.message_id || null));
     box.appendChild(ChatState.batchContainer);
     ChatState.batchContainer = null;
     scrollToBottom();
@@ -348,7 +348,10 @@ const Chat = (() => {
           ChatState.history = ChatState.history.slice(0, 300);
         }
         const frag = document.createDocumentFragment();
-        olderMessages.forEach(item => { ChatState.batchContainer = frag; R.appendMsg(item.role, item.content, item.created_at); });
+        olderMessages.forEach(item => {
+          ChatState.batchContainer = frag;
+          R.appendMsg(item.role, item.content, item.created_at, null, item.message_id || null);
+        });
         ChatState.batchContainer = null;
         const insertBefore = btn || box.firstChild;
         while (frag.firstChild) { box.insertBefore(frag.firstChild, insertBefore); }
@@ -408,6 +411,7 @@ const Chat = (() => {
   ChatState.sendMessage = send;
 
   async function handleSendFailure(err, userText) {
+    let specificToastShown = false;
     if (!Auth.isLoggedIn()) {
       await refreshGuestQuota();
         // 额度不足时温和提醒登录
@@ -420,13 +424,16 @@ const Chat = (() => {
 
       if ((err.message || '').includes('额度已用完')) {
         UI.toast('今日游客体验额度已用完，登录后可继续聊天', 'warn', 3200);
+        specificToastShown = true;
         setTimeout(() => Auth.openLogin(), 800);
       } else if ((err.message || '').includes('发送太快')) {
         UI.toast('发送太快了，请稍后再试', 'warn', 2500);
+        specificToastShown = true;
       }
     }
     R.removeTyping();
-    R.appendMsg('error', `发送失败：${err.message}`, null, userText);
+    R.removeLatestUserMessage(userText);
+    if (!specificToastShown) UI.toast(`发送失败：${err.message}`, 'warn', 3000);
   }
 
   async function send() {

@@ -8,7 +8,33 @@
  *   - STORAGE_KEYS: localStorage 键名常量
  */
 (() => {
+  function normalizeApiBase(value) {
+    return String(value || '').trim().replace(/\/+$/, '');
+  }
+
+  function readMetaContent(name) {
+    if (typeof document === 'undefined' || typeof document.querySelector !== 'function') {
+      return '';
+    }
+    const meta = document.querySelector(`meta[name="${name}"]`);
+    return meta ? normalizeApiBase(meta.content) : '';
+  }
+
+  function readConfiguredApiBase({ admin = false } = {}) {
+    const adminOverride = normalizeApiBase(window.__ADMIN_API_BASE__) || readMetaContent('aifriend-admin-api-base');
+    const baseOverride = normalizeApiBase(window.__API_BASE__) || readMetaContent('aifriend-api-base');
+    if (admin) {
+      if (adminOverride) return adminOverride;
+      if (baseOverride) return baseOverride.endsWith('/admin') ? baseOverride : `${baseOverride}/admin`;
+      return '';
+    }
+    return baseOverride;
+  }
+
   function resolveApiBase({ admin = false } = {}) {
+    const configuredBase = readConfiguredApiBase({ admin });
+    if (configuredBase) return configuredBase;
+
     const { protocol, hostname, port } = location;
     const isBackendOrigin = port === '8000' || port === '' || port === '443' || port === '80';
     if (isBackendOrigin) {

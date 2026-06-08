@@ -60,6 +60,11 @@ class TestBaseRules:
         assert "kiss" in merged
         assert "confession" in merged
 
+    def test_intimate_milestone_events_are_base_defaults(self):
+        assert _AFFECTION_BASE_RULES["first_hug"] == 7
+        assert _AFFECTION_BASE_RULES["kiss"] == 8
+        assert _AFFECTION_BASE_RULES["intimate_moment"] == 6
+
 
 # ============================================================
 # 冷却机制验证

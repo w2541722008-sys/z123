@@ -8,15 +8,17 @@
     - dashboard: 仪表盘 / 统计 / 审计日志
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from core.auth import get_admin_user
 from ._helpers import _ADMIN_EDITABLE_FIELDS, _transaction
+from ._helpers import _admin_rate_limit
 from ._router import router as characters_router
 from .users import router as users_router
 from .orders import router as orders_router
 from .dashboard import router as dashboard_router
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_admin_user), Depends(_admin_rate_limit)], tags=["admin"])
 router.include_router(characters_router)
 router.include_router(users_router)
 router.include_router(orders_router)

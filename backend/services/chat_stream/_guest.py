@@ -16,6 +16,7 @@ from services.prompt_assembler import (
     PromptBuildContext,
     build_layered_chat_messages_from_context,
 )
+from services.chat_stream._postprocess import get_guest_character_state_for_prompt
 from services.usage_guard import get_daily_usage
 
 logger = logging.getLogger(__name__)
@@ -47,12 +48,20 @@ def build_guest_stream_messages(
     character: dict[str, Any],
     message_text: str,
     guest_history: list[Any],
+    *,
+    conn: ConnType | None = None,
+    guest_ip: str | None = None,
 ) -> tuple[str, list[dict[str, str]]]:
     clean_text = _normalize_non_empty_message(message_text)
     fake_history = [
         message_projection(item.role, item.content) for item in guest_history
     ]
     fake_history.append({"role": "user", "content": clean_text})
+    character_state = (
+        get_guest_character_state_for_prompt(guest_ip, str(character.get("id") or ""))
+        if guest_ip
+        else None
+    )
     try:
         messages = build_layered_chat_messages_from_context(
             PromptBuildContext(
@@ -60,6 +69,8 @@ def build_guest_stream_messages(
                 recent_messages=fake_history,
                 related_assets=[],
                 user_name="访客",
+                character_state=character_state,
+                conn=conn,
             )
         )
     except Exception as exc:

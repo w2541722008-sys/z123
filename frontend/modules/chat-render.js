@@ -278,6 +278,18 @@ const ChatRender = ((ChatState) => {
     return row;
   }
 
+  function removeLatestUserMessage(text) {
+    const box = document.getElementById('chat-messages');
+    if (!box) return false;
+    const rows = Array.from(box.querySelectorAll('.msg-row.user'));
+    const target = rows[rows.length - 1];
+    if (!target) return false;
+    const bubble = target.querySelector('.msg-bubble.user');
+    if (text != null && bubble && bubble.textContent !== text) return false;
+    target.remove();
+    return true;
+  }
+
   /* ── 打字中 & 复制 ──────────────────────────────────── */
   function fillTypingBubble(bubble) {
     bubble.innerHTML = `<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>`;
@@ -333,7 +345,7 @@ const ChatRender = ((ChatState) => {
     createMessageRow, createMessageBubble, renderMessageBubble,
     appendPlainBubble, appendAssistantBubble, createMessageActionButtons,
     createAssistantActionButtons, mountAssistantBubble, appendBubbleContent, appendMessageBody,
-    appendMsg, fillTypingBubble, showTyping, removeTyping,
+    appendMsg, removeLatestUserMessage, fillTypingBubble, showTyping, removeTyping,
     flashElementClass, showCopyToast, copyMessageText, bindCopyHandlers,
     removeRowIfPresent, removeElementById,
   };

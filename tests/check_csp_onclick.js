@@ -1,10 +1,10 @@
 /**
  * CSP onclick 合规检查
  *
- * 主应用和 Admin 均启用严格 CSP（script-src 'self'），禁止任何 onclick/oninput 属性。
+ * 主应用和 Admin 均启用严格 CSP（script-src 'self'），禁止任何 onclick/oninput 属性和内联脚本。
  * 扫描范围：
  *   1. frontend/modules/ 与 frontend/admin/js/ JS 文件中的动态 HTML 内联事件
- *   2. frontend 下所有 HTML（包括 admin 子目录）
+ *   2. frontend 下所有 HTML（包括 admin 子目录）的内联事件与内联脚本
  *
  * 用法：node tests/check_csp_onclick.js
  * 退出码：0 = 合规，1 = 发现违规
@@ -65,21 +65,50 @@ function scanHtmlFiles(dir = FRONTEND_DIR) {
   return violations;
 }
 
+function scanInlineScripts(dir = FRONTEND_DIR) {
+  const violations = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      violations.push(...scanInlineScripts(fullPath));
+      continue;
+    }
+    if (!entry.name.endsWith('.html')) continue;
+
+    const content = fs.readFileSync(fullPath, 'utf-8');
+    const scriptPattern = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+    let match;
+    while ((match = scriptPattern.exec(content)) !== null) {
+      const attrs = match[1] || '';
+      const body = match[2] || '';
+      if (/\bsrc\s*=/i.test(attrs) || !body.trim()) continue;
+      const line = content.slice(0, match.index).split('\n').length;
+      violations.push({
+        file: path.relative(FRONTEND_DIR, fullPath),
+        line,
+        text: '<script> inline JavaScript',
+      });
+    }
+  }
+  return violations;
+}
+
 const jsViolations = [
   ...scanJsFiles(MODULES_DIR),
   ...scanJsFiles(ADMIN_JS_DIR),
 ];
 const htmlViolations = scanHtmlFiles(FRONTEND_DIR);
-const allViolations = [...jsViolations, ...htmlViolations];
+const inlineScriptViolations = scanInlineScripts(FRONTEND_DIR);
+const allViolations = [...jsViolations, ...htmlViolations, ...inlineScriptViolations];
 
 if (allViolations.length > 0) {
-  console.log(`❌ CSP onclick 检查：发现 ${allViolations.length} 处违规`);
-  console.log('   严格 CSP（script-src \'self\'）下，内联事件处理器会被浏览器拦截');
+  console.log(`❌ CSP 检查：发现 ${allViolations.length} 处违规`);
+  console.log('   严格 CSP（script-src \'self\'）下，内联事件处理器和内联脚本会被浏览器拦截');
   allViolations.forEach(v => {
     console.log(`   ${v.file}:${v.line}  ${v.text}`);
   });
   process.exit(1);
 } else {
-  console.log('✅ CSP onclick 检查通过：JS 内联事件 + HTML 内联事件 均无违规');
+  console.log('✅ CSP 检查通过：JS 内联事件 + HTML 内联事件 + 内联脚本均无违规');
   process.exit(0);
 }

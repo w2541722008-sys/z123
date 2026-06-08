@@ -136,8 +136,8 @@ logger = logging.getLogger("aifriend")
 # 对话窗口与记忆压缩配置
 # ============================================================
 # 触发摘要生成的消息数量阈值
-# 当未摘要的消息超过这个数量时，会触发后台摘要生成
-SUMMARY_TRIGGER_COUNT = _int_env("SUMMARY_TRIGGER_COUNT", 24, minimum=8, maximum=100)
+# 按 chat_messages 未摘要总数计算（用户消息 + 角色回复），16 条约等于 8 轮对话。
+SUMMARY_TRIGGER_COUNT = _int_env("SUMMARY_TRIGGER_COUNT", 16, minimum=8, maximum=100)
 
 # 摘要生成的最大 token 数（控制摘要长度）
 SUMMARY_MAX_TOKENS = _int_env("SUMMARY_MAX_TOKENS", 500, minimum=100, maximum=2000)

@@ -1,19 +1,11 @@
 """
 管理后台 - 子模块（从 admin.py 自动拆分）
 """
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from core.auth import get_admin_user
-from services.rate_limit import enforce_rate_limit, get_request_client_ip
 
-
-def _admin_rate_limit(request: Request) -> None:
-    """管理后台全局限流：每 IP 每分钟最多 60 次请求。"""
-    enforce_rate_limit(
-        "admin", get_request_client_ip(request),
-        limit=60, window_seconds=60, detail="请求过于频繁",
-    )
-
+from ._helpers import _admin_rate_limit
 
 router = APIRouter(
     dependencies=[Depends(get_admin_user), Depends(_admin_rate_limit)],

@@ -36,8 +36,12 @@ const ChatStream = ((ChatState) => {
     ChatState.bindMessageActionButtons(streamState.actionBtnsEl, streamState.streamRowEl, streamState.bubbleEl, messageId);
   }
 
-  function handleStreamError(streamState, payload, fallbackMessage = '网络波动，请稍后再试') {
+  function cleanupStreamError(streamState) {
     cleanupStreamState(streamState);
+  }
+
+  function handleStreamError(streamState, payload, fallbackMessage = '网络波动，请稍后再试') {
+    cleanupStreamError(streamState);
     UI.toast(payload?.message || fallbackMessage, 'warn', 3000);
   }
 
@@ -289,13 +293,13 @@ const ChatStream = ((ChatState) => {
           hideStreamActionButtons(streamState);
         }
       },
-      onError(payload) { handleStreamError(streamState, payload); },
+      onError() { cleanupStreamError(streamState); },
     };
   }
 
   return {
     createStreamState, handleStreamChunk, finalizeStreamReply,
-    appendLocalConversation, hideStreamActionButtons, bindPersistedStreamActions, handleStreamError,
+    appendLocalConversation, hideStreamActionButtons, bindPersistedStreamActions, cleanupStreamError, handleStreamError,
     resetStreamState, assignStreamState, attachStreamRow,
     ensureStreamState, ensureStreamReplyRow, renderStreamReply,
     discardStreamReply, cleanupStreamState,

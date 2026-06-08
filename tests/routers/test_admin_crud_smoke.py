@@ -19,6 +19,14 @@ from core.auth import CurrentUser, get_admin_user, get_current_user, get_optiona
 from conftest import FakeSequenceConn, FakeQueryResult, FakeRow, FakeDummyConn, override_db
 
 
+def _assert_audit_action(conn: FakeSequenceConn, action: str) -> None:
+    """确认 mutation 成功路径写入了预期审计动作。"""
+    assert any(
+        "INSERT INTO admin_audit_logs" in sql and params and params[2] == action
+        for sql, params in conn.executed
+    )
+
+
 # ── 记忆条目 CRUD ──────────────────────────────────────────────
 
 class TestAdminMemories:
@@ -57,6 +65,7 @@ class TestAdminMemories:
         conn = FakeSequenceConn([
             FakeQueryResult(one={"id": "luna"}),  # character exists
             FakeQueryResult(one={"id": 42}),       # RETURNING id
+            FakeQueryResult(rowcount=1),           # audit log INSERT
         ])
         with override_db(app, conn):
             response = client.post("/api/admin/character/luna/memories", json={
@@ -68,6 +77,7 @@ class TestAdminMemories:
         data = response.json()
         assert data["ok"] is True
         assert "id" in data
+        _assert_audit_action(conn, "create_memory")
 
     def test_update_memory_not_found(self, admin_client):
         app, client = admin_client
@@ -117,6 +127,7 @@ class TestAdminMemoryCategories:
         conn = FakeSequenceConn([
             FakeQueryResult(one={"id": "luna"}),
             FakeQueryResult(one={"id": 5}),
+            FakeQueryResult(rowcount=1),  # audit log INSERT
         ])
         with override_db(app, conn):
             response = client.post("/api/admin/character/luna/memory-categories", json={
@@ -126,6 +137,7 @@ class TestAdminMemoryCategories:
         data = response.json()
         assert data["ok"] is True
         assert "id" in data
+        _assert_audit_action(conn, "create_memory_category")
 
     def test_delete_memory_category_with_memories_returns_400(self, admin_client):
         app, client = admin_client
@@ -164,6 +176,7 @@ class TestAdminGreetings:
         conn = FakeSequenceConn([
             FakeQueryResult(one={"id": "luna"}),
             FakeQueryResult(one={"id": 10}),
+            FakeQueryResult(rowcount=1),  # audit log INSERT
         ])
         with override_db(app, conn):
             response = client.post("/api/admin/character/luna/greetings", json={
@@ -174,6 +187,7 @@ class TestAdminGreetings:
         data = response.json()
         assert data["ok"] is True
         assert "id" in data
+        _assert_audit_action(conn, "create_greeting")
 
     def test_delete_greeting_not_found(self, admin_client):
         app, client = admin_client
@@ -212,6 +226,7 @@ class TestAdminStorylines:
         conn = FakeSequenceConn([
             FakeQueryResult(one={"id": "luna"}),   # character exists
             FakeQueryResult(one={"id": 7}),         # RETURNING id
+            FakeQueryResult(rowcount=1),            # audit log INSERT
         ])
         with override_db(app, conn):
             response = client.post("/api/admin/character/luna/storylines", json={
@@ -222,6 +237,7 @@ class TestAdminStorylines:
         data = response.json()
         assert data["ok"] is True
         assert "id" in data
+        _assert_audit_action(conn, "create_storyline")
 
     def test_delete_storyline_not_found(self, admin_client):
         app, client = admin_client
@@ -259,6 +275,7 @@ class TestAdminPostRules:
         conn = FakeSequenceConn([
             FakeQueryResult(one={"id": "luna"}),
             FakeQueryResult(one={"id": 3}),
+            FakeQueryResult(rowcount=1),  # audit log INSERT
         ])
         with override_db(app, conn):
             response = client.post("/api/admin/character/luna/post-rules", json={
@@ -269,6 +286,7 @@ class TestAdminPostRules:
         data = response.json()
         assert data["ok"] is True
         assert "id" in data
+        _assert_audit_action(conn, "create_post_rule")
 
 
 # ── 剧情事件 CRUD ──────────────────────────────────────────────
@@ -299,6 +317,7 @@ class TestAdminStoryEvents:
         conn = FakeSequenceConn([
             FakeQueryResult(one={"id": "luna"}),
             FakeQueryResult(one={"id": 8}),
+            FakeQueryResult(rowcount=1),  # audit log INSERT
         ])
         with override_db(app, conn):
             response = client.post("/api/admin/character/luna/story-events", json={
@@ -311,6 +330,7 @@ class TestAdminStoryEvents:
         data = response.json()
         assert data["ok"] is True
         assert "id" in data
+        _assert_audit_action(conn, "create_story_event")
 
 
 # ── 配置摘要 / 消息预览 ──────────────────────────────────────────

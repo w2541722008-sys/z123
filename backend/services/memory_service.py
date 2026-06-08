@@ -168,6 +168,23 @@ def should_refresh_summary(
     return chat_repo.count_unsummarized_messages(conn, user_id, character_id) >= SUMMARY_TRIGGER_COUNT
 
 
+def _select_summary_target_rows(
+    unsummarized_rows: list[dict[str, Any]],
+    *,
+    has_existing_summary: bool,
+) -> list[dict[str, Any]]:
+    """选择本轮要写入长期记忆的消息，始终保留最近窗口给即时上下文。"""
+    if len(unsummarized_rows) < SUMMARY_TRIGGER_COUNT:
+        return []
+
+    summary_target_rows = unsummarized_rows[:-RECENT_MESSAGE_WINDOW]
+    if not summary_target_rows:
+        return []
+    if has_existing_summary and len(summary_target_rows) < RECENT_MESSAGE_WINDOW:
+        return []
+    return summary_target_rows
+
+
 # ============================================================
 # 结构化摘要解析与格式化
 # ============================================================
@@ -467,11 +484,14 @@ def refresh_memory_summary(
     if len(unsummarized_rows) < SUMMARY_TRIGGER_COUNT:
         return
 
-    summary_target_rows = unsummarized_rows[:-RECENT_MESSAGE_WINDOW]
-    if len(summary_target_rows) < RECENT_MESSAGE_WINDOW:
+    existing_summary = get_summary_text(conn, user_id, character_id)
+    summary_target_rows = _select_summary_target_rows(
+        unsummarized_rows,
+        has_existing_summary=bool(existing_summary),
+    )
+    if not summary_target_rows:
         return
 
-    existing_summary = get_summary_text(conn, user_id, character_id)
     prompt_messages = build_memory_summary_messages(character, existing_summary, summary_target_rows)
 
     try:

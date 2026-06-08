@@ -26,7 +26,7 @@ AI 生成回复（回复末尾附 [STATE_UPDATE]{...}[/STATE_UPDATE] 标签）
 parse_state_update_tag() 从回复中提取标签内容
     ↓
 apply_state_delta() 处理增量：
-    ├── 检查 affection_enabled（禁用的卡直接跳过）
+    ├── 检查 affection_rules_json.enabled（设为 false 时跳过好感度计算）
     ├── 读取当前状态（含三防计数器）
     ├── 惰性日重置（日期变了就清空当日统计）
     ├── 查找事件规则（全局底座 + 角色卡覆盖）
@@ -255,8 +255,8 @@ WHERE name = '陈序';
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `affection_enabled` | INTEGER（0/1） | 是否启用好感度，默认 1 |
-| `affection_rules_json` | JSONB（经 002 迁移） | 角色卡自定义加减分规则，空时使用全局底座 |
+| `affection_enabled` | INTEGER（0/1） | 前端是否展示好感度/关系状态条，默认 1 |
+| `affection_rules_json` | JSONB（经 002 迁移） | 角色卡自定义加减分规则，空时使用全局底座；`"enabled": false` 可关闭好感度计算 |
 
 ---
 
@@ -318,8 +318,8 @@ WHERE name = '陈序';
 
 ### 禁用某张卡的好感度
 
-方法一（推荐）：`UPDATE characters SET affection_enabled = 0 WHERE name = '角色名';`
-方法二：在 `affection_rules_json` 里加 `"enabled": false`
+关闭计算（推荐）：在 `affection_rules_json` 里加 `"enabled": false`
+隐藏前端状态条：`UPDATE characters SET affection_enabled = 0 WHERE name = '角色名';`
 
 ---
 

@@ -53,6 +53,9 @@ class AIChatError(Exception):
     """AI 调用失败时抛出，由路由层决定如何向用户展示错误。"""
 
 
+_PROMPT_RUNTIME_CUSTOM_KEYS = ("_wi_sticky", "_wi_cooldown", "_last_anchor_index")
+
+
 # ============================================================
 # 聊天上下文准备
 # ============================================================
@@ -303,7 +306,9 @@ def _build_stream_prepare_result(
     related_assets: list[Any] | None = None,
     character_id: str | None = None,
     current_content: str | None = None,
+    wi_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    effective_wi_state = wi_state if wi_state is not None else stream_payload.get("wi_state")
     result = {
         "guest_ip": guest_ip,
         "stream_messages": stream_payload["stream_messages"],
@@ -324,6 +329,8 @@ def _build_stream_prepare_result(
         result["character_id"] = character_id
     if current_content is not None:
         result["current_content"] = current_content
+    if effective_wi_state is not None:
+        result["wi_state"] = effective_wi_state
     return result
 
 
@@ -449,13 +456,16 @@ def _persist_wi_state(
     character_id: str,
     character_state: dict[str, Any],
 ) -> None:
-    """将 WI sticky/cooldown 状态持久化到 character_states.custom_vars。"""
+    """将 prompt 运行时状态持久化到 character_states.custom_vars。"""
     custom_vars = character_state.get("custom_vars") or {}
-    wi_sticky = custom_vars.get("_wi_sticky")
-    wi_cooldown = custom_vars.get("_wi_cooldown")
+    runtime_vars = {
+        key: custom_vars[key]
+        for key in _PROMPT_RUNTIME_CUSTOM_KEYS
+        if key in custom_vars
+    }
     # _pending_events 不在此处持久化，由 apply_state_delta 统一管理
     # 避免在 AI 调用前就清空，导致失败重试时事件丢失
-    if wi_sticky is None and wi_cooldown is None:
+    if not runtime_vars:
         return
     # 读取当前 DB 中的 custom_vars，合并状态后写回
     # FOR UPDATE 防止并发请求之间的 read-modify-write 竞态
@@ -466,10 +476,7 @@ def _persist_wi_state(
     if not row:
         return
     db_custom_vars = parse_json_object(row["custom_vars"])
-    if wi_sticky is not None:
-        db_custom_vars["_wi_sticky"] = wi_sticky
-    if wi_cooldown is not None:
-        db_custom_vars["_wi_cooldown"] = wi_cooldown
+    db_custom_vars.update(runtime_vars)
     conn.execute(
         "UPDATE character_states SET custom_vars = %s WHERE user_id = %s AND character_id = %s",
         (to_json_string(db_custom_vars), user_id, character_id),
@@ -533,12 +540,20 @@ def _build_user_stream_messages_and_budget(
             user_id=user.id,
         )
     )
-    # WI sticky/cooldown 状态已被 build_layered_chat_messages 写入 character_state.custom_vars
-    # 立即持久化到 DB，确保流式响应完成后状态不丢失
-    _persist_wi_state(conn, user.id, character_id, character_state)
+    custom_vars = character_state.get("custom_vars") or {}
+    wi_state = {
+        "custom_vars": {
+            key: custom_vars[key]
+            for key in _PROMPT_RUNTIME_CUSTOM_KEYS
+            if key in custom_vars
+        }
+    }
     budget = _prepare_user_ai_budget(conn, user=user, stream_messages=stream_messages)
-    return {
+    result = {
         "stream_messages": stream_messages,
         "ai_config": budget["ai_config"],
         "estimate": budget["estimate"],
     }
+    if wi_state["custom_vars"]:
+        result["wi_state"] = wi_state
+    return result

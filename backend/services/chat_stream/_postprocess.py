@@ -33,6 +33,7 @@ from services.chat_send import (
     store_user_message,
     _log_failed_chat_request,
     _log_successful_chat_request,
+    _persist_wi_state,
     _resolve_public_character_state,
 )
 from services.chat_retry import save_regenerated_version
@@ -60,6 +61,7 @@ def _persist_stream_result(
     estimate: dict[str, int],
     delta: dict[str, Any] | None,
     user_message: str | None = None,
+    wi_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """持久化流式结果（用户消息 + AI 回复 + 状态更新）。"""
     save_conn = get_conn()
@@ -75,6 +77,8 @@ def _persist_stream_result(
         character_state = _resolve_public_character_state(
             save_conn, user_id=user_id, character_id=character_id, delta=delta,
         )
+        if wi_state:
+            _persist_wi_state(save_conn, user_id, character_id, wi_state)
         save_conn.commit()
         return {"character_state": character_state, "message_id": message_id}
     except Exception:
@@ -94,12 +98,14 @@ def _postprocess_main_stream_result(
     delta: dict[str, Any] | None,
     user_message: str,
     character: dict[str, Any],
+    wi_state: dict[str, Any] | None = None,
 ):
     """主聊天流式后处理（持久化 + 后台摘要）。"""
     try:
         persisted_result = _persist_stream_result(
             user_id=user_id, guest_ip=guest_ip, character_id=character_id,
-            final_reply=final_text, estimate=estimate, delta=delta, user_message=user_message,
+            final_reply=final_text, estimate=estimate, delta=delta,
+            user_message=user_message, wi_state=wi_state,
         )
     except Exception as exc:
         yield _emit_stream_persist_failure(
@@ -138,8 +144,10 @@ def _postprocess_regenerate_or_continue_result(
                 save_conn, user_id=user_id, guest_ip=guest_ip, character_id=character_id,
                 endpoint=endpoint, estimate=estimate, reply_text=final_text,
             )
+            # 重新生成/续写只改已有助手消息。原始发送已更新过关系状态，
+            # 这里不能再次应用 STATE_UPDATE，否则反复重试会刷动好感度。
             raw_state = _resolve_public_character_state(
-                save_conn, user_id=user_id, character_id=character_id, delta=delta,
+                save_conn, user_id=user_id, character_id=character_id, delta=None,
             )
             save_conn.commit()
         except Exception as exc:
@@ -215,6 +223,17 @@ def _get_guest_state(guest_ip: str, character_id: str) -> dict[str, Any]:
     }
     _guest_state_cache[key] = state
     return state
+
+
+def get_guest_character_state_for_prompt(
+    guest_ip: str,
+    character_id: str,
+) -> dict[str, Any]:
+    """读取游客 prompt 使用的状态快照，返回副本避免构建 prompt 时污染缓存。"""
+    state = _get_guest_state(guest_ip, character_id)
+    public_state = {k: v for k, v in state.items() if not k.startswith("_")}
+    public_state["custom_vars"] = dict(public_state.get("custom_vars") or {})
+    return public_state
 
 
 def _compute_guest_character_state(

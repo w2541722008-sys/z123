@@ -140,6 +140,10 @@ function createAssistantHistoryEntry(content, messageId = null, createdAt = 'now
     };
 }
 
+function getHistoryMessageId(item = {}) {
+    return item.message_id || null;
+}
+
 function createMessageBubble(roleClass, text = '') {
     return {
         className: `msg-bubble ${roleClass}`,
@@ -605,6 +609,9 @@ function dispatchDelegatedClick(handlePrimaryActionImpl, actionHandlers, event) 
         content: 'hello',
         created_at: 'now',
     });
+
+    assert.strictEqual(getHistoryMessageId({ role: 'assistant', message_id: 'mid-2' }), 'mid-2');
+    assert.strictEqual(getHistoryMessageId({ role: 'user' }), null);
 
     const bubbleNode = createMessageBubble('ai', '你好');
     assert.deepStrictEqual(bubbleNode, {

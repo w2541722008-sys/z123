@@ -123,6 +123,14 @@ class TestInputValidation:
         assert storyline.is_active == 1
 
 
+class TestMemoryConfigDefaults:
+    def test_summary_trigger_count_counts_user_and_assistant_messages(self):
+        """摘要阈值按 chat_messages 未摘要总数计算，即用户消息 + 角色回复。"""
+        from core.config import SUMMARY_TRIGGER_COUNT
+
+        assert SUMMARY_TRIGGER_COUNT == 16
+
+
 class TestCSRFProtection:
     """验证 CSRF 保护机制。"""
 

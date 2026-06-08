@@ -6,7 +6,12 @@ memory_service 模块单元测试
   - structured summary helpers: 结构化摘要解析、格式化与合并
 """
 
-from services.memory_service import _empty_structured_summary, format_structured_summary, merge_summary_text
+from services.memory_service import (
+    _empty_structured_summary,
+    format_structured_summary,
+    merge_summary_text,
+    refresh_memory_summary,
+)
 from utils.stream_filter import parse_state_update_tag
 
 
@@ -137,3 +142,124 @@ class TestStructuredSummaryHelpers:
     def test_merge_summary_text_returns_new_text_when_old_not_structured(self):
         merged = merge_summary_text("旧版自由文本摘要", "[用户画像]\n- 喜欢旅行")
         assert merged == "[用户画像]\n- 喜欢旅行"
+
+
+# ============================================================
+# refresh_memory_summary 测试
+# ============================================================
+
+class TestRefreshMemorySummary:
+    def _rows(self, count: int):
+        return [
+            {
+                "id": idx,
+                "role": "user" if idx % 2 else "assistant",
+                "content": f"message {idx}",
+            }
+            for idx in range(1, count + 1)
+        ]
+
+    def _conn(self):
+        class FakeConn:
+            def __init__(self):
+                self.committed = False
+
+            def commit(self):
+                self.committed = True
+
+        return FakeConn()
+
+    def test_first_summary_at_trigger_summarizes_rows_before_recent_window(self, monkeypatch):
+        rows = self._rows(16)
+        conn = self._conn()
+        events = {}
+
+        monkeypatch.setattr("services.memory_service.get_unsummarized_messages", lambda *args: rows)
+        monkeypatch.setattr("services.memory_service.get_summary_record", lambda *args: None)
+
+        def build_messages(character, existing_summary, summary_target_rows):
+            events["target_ids"] = [row["id"] for row in summary_target_rows]
+            events["existing_summary"] = existing_summary
+            return [{"role": "user", "content": "summarize"}]
+
+        monkeypatch.setattr("services.memory_service.build_memory_summary_messages", build_messages)
+        monkeypatch.setattr("services.memory_service.request_chat_completion", lambda *args, **kwargs: "[用户画像]\n- 已认识")
+        monkeypatch.setattr("services.memory_service.get_ai_config", lambda env: {})
+        monkeypatch.setattr("services.memory_service.merge_summary_text", lambda existing, new: new)
+        monkeypatch.setattr(
+            "services.memory_service.save_summary",
+            lambda conn, user_id, character_id, summary_text, last_message_id: events.update(
+                saved=(summary_text, last_message_id)
+            ),
+        )
+        monkeypatch.setattr(
+            "services.memory_service.mark_messages_summarized",
+            lambda conn, ids: events.update(marked=ids),
+        )
+
+        refresh_memory_summary(conn, 1, "c1", {"name": "Test"})
+
+        assert events["existing_summary"] == ""
+        assert events["target_ids"] == [1, 2, 3, 4]
+        assert events["saved"] == ("[用户画像]\n- 已认识", 4)
+        assert events["marked"] == [1, 2, 3, 4]
+        assert conn.committed is True
+
+    def test_existing_summary_keeps_original_batch_threshold(self, monkeypatch):
+        rows = self._rows(16)
+        conn = self._conn()
+        events = []
+
+        monkeypatch.setattr("services.memory_service.get_unsummarized_messages", lambda *args: rows)
+        monkeypatch.setattr(
+            "services.memory_service.get_summary_record",
+            lambda *args: {"summary": "[用户画像]\n- 旧记忆"},
+        )
+        monkeypatch.setattr(
+            "services.memory_service.request_chat_completion",
+            lambda *args, **kwargs: events.append("request"),
+        )
+
+        refresh_memory_summary(conn, 1, "c1", {"name": "Test"})
+
+        assert events == []
+        assert conn.committed is False
+
+    def test_existing_summary_refreshes_when_full_batch_available(self, monkeypatch):
+        rows = self._rows(24)
+        conn = self._conn()
+        events = {}
+
+        monkeypatch.setattr("services.memory_service.get_unsummarized_messages", lambda *args: rows)
+        monkeypatch.setattr(
+            "services.memory_service.get_summary_record",
+            lambda *args: {"summary": "[用户画像]\n- 旧记忆"},
+        )
+
+        def build_messages(character, existing_summary, summary_target_rows):
+            events["target_ids"] = [row["id"] for row in summary_target_rows]
+            events["existing_summary"] = existing_summary
+            return [{"role": "user", "content": "summarize"}]
+
+        monkeypatch.setattr("services.memory_service.build_memory_summary_messages", build_messages)
+        monkeypatch.setattr("services.memory_service.request_chat_completion", lambda *args, **kwargs: "[用户画像]\n- 新记忆")
+        monkeypatch.setattr("services.memory_service.get_ai_config", lambda env: {})
+        monkeypatch.setattr("services.memory_service.merge_summary_text", lambda existing, new: new)
+        monkeypatch.setattr(
+            "services.memory_service.save_summary",
+            lambda conn, user_id, character_id, summary_text, last_message_id: events.update(
+                saved=(summary_text, last_message_id)
+            ),
+        )
+        monkeypatch.setattr(
+            "services.memory_service.mark_messages_summarized",
+            lambda conn, ids: events.update(marked=ids),
+        )
+
+        refresh_memory_summary(conn, 1, "c1", {"name": "Test"})
+
+        assert events["existing_summary"] == "[用户画像]\n- 旧记忆"
+        assert events["target_ids"] == list(range(1, 13))
+        assert events["saved"] == ("[用户画像]\n- 新记忆", 12)
+        assert events["marked"] == list(range(1, 13))
+        assert conn.committed is True

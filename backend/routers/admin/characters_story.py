@@ -4,16 +4,15 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from core.auth import CurrentUser, get_admin_user, get_current_user
+from core.auth import CurrentUser, get_admin_user
 from core.database import ConnType, get_db_dep
 from core.exceptions import BadRequestError, NotFoundError
 from core.schemas import GreetingPayload, StorylinePayload
-from repositories import admin_audit_repository as audit_repo
 from repositories import character_admin_story_repository as admin_repo
 from repositories import character_repository as char_repo
 from utils.json_utils import to_json_string
 
-from ._helpers import _assert_storyline_owned
+from ._helpers import _assert_storyline_owned, _insert_admin_audit
 
 # 认证依赖由父路由 _router.py 统一提供
 router = APIRouter(tags=["admin"])
@@ -50,6 +49,7 @@ def list_greetings(character_id: str, conn: ConnType = Depends(get_db_dep)) -> l
 def create_greeting(
     character_id: str,
     body: GreetingPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     _require_character(conn, character_id)
@@ -66,6 +66,14 @@ def create_greeting(
         is_active=body.is_active,
         comment=body.comment,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="create_greeting",
+        target_type="greeting",
+        target_id=str(new_id),
+        detail={"character_id": character_id, "story_phase": body.story_phase},
+    )
     conn.commit()
     return {"id": new_id, "ok": True}
 
@@ -75,6 +83,7 @@ def update_greeting(
     character_id: str,
     greeting_id: str,
     body: GreetingPayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_greeting(conn, greeting_id, character_id):
@@ -92,6 +101,14 @@ def update_greeting(
         is_active=body.is_active,
         comment=body.comment,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="update_greeting",
+        target_type="greeting",
+        target_id=str(greeting_id),
+        detail={"character_id": character_id, "story_phase": body.story_phase},
+    )
     conn.commit()
     return {"ok": True}
 
@@ -100,12 +117,21 @@ def update_greeting(
 def delete_greeting(
     character_id: str,
     greeting_id: str,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_greeting(conn, greeting_id, character_id):
         raise NotFoundError(detail="开场白不存在")
 
     admin_repo.admin_delete_greeting(conn, greeting_id)
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="delete_greeting",
+        target_type="greeting",
+        target_id=str(greeting_id),
+        detail={"character_id": character_id},
+    )
     conn.commit()
     return {"ok": True}
 
@@ -138,6 +164,7 @@ def list_storylines(character_id: str, conn: ConnType = Depends(get_db_dep)) -> 
 def create_storyline(
     character_id: str,
     body: StorylinePayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     _require_character(conn, character_id)
@@ -159,6 +186,14 @@ def create_storyline(
         is_active=body.is_active,
         sort_order=body.sort_order,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="create_storyline",
+        target_type="storyline",
+        target_id=str(new_id),
+        detail={"character_id": character_id, "name": body.name},
+    )
     conn.commit()
     return {"id": new_id, "ok": True}
 
@@ -168,6 +203,7 @@ def update_storyline(
     character_id: str,
     storyline_id: str,
     body: StorylinePayload,
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     if not admin_repo.admin_get_storyline(conn, storyline_id, character_id):
@@ -190,6 +226,14 @@ def update_storyline(
         is_active=body.is_active,
         sort_order=body.sort_order,
     )
+    _insert_admin_audit(
+        conn,
+        current_user,
+        action="update_storyline",
+        target_type="storyline",
+        target_id=str(storyline_id),
+        detail={"character_id": character_id, "name": body.name},
+    )
     conn.commit()
     return {"ok": True}
 
@@ -198,7 +242,7 @@ def update_storyline(
 def delete_storyline(
     character_id: str,
     storyline_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_admin_user),
     conn: ConnType = Depends(get_db_dep),
 ) -> dict[str, Any]:
     sl = admin_repo.admin_get_storyline(conn, storyline_id, character_id)
@@ -208,13 +252,12 @@ def delete_storyline(
     admin_repo.admin_detach_storyline_refs(conn, storyline_id)
     admin_repo.admin_delete_storyline(conn, storyline_id)
 
-    audit_repo.insert_audit_log(
+    _insert_admin_audit(
         conn,
-        operator_id=current_user.id,
-        operator_email=current_user.email,
+        current_user,
         action="delete_storyline",
         target_type="storyline",
-        target_id=storyline_id,
+        target_id=str(storyline_id),
         detail={
             "character_id": character_id,
             "storyline_name": sl["name"],

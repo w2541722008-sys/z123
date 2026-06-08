@@ -1,6 +1,6 @@
 """character_repository 集成测试 — 真实 SQL 执行验证。
 
-运行条件：需要 DATABASE_URL + 测试数据库中已有角色数据。
+运行条件：需要 TEST_DATABASE_URL + 测试数据库中已有角色数据。
 """
 from __future__ import annotations
 

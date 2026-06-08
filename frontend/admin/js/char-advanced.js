@@ -64,6 +64,10 @@ function updatePhaseButtons() {
 // ============================================================
 function closeModal(modalId) { document.getElementById(modalId).style.display = 'none'; }
 function cleanStorylineId(raw) { if (!raw) return null; const n = raw.trim(); return n || null; }
+function sameId(a, b) { return String(a) === String(b); }
+function getScoreLabel() {
+  return AdminState.currentCharData?.card_type === 'scenario' ? '沉浸度' : '好感度';
+}
 function validateStoryline(rawStorylineId, inactiveMsg) {
   if (!rawStorylineId) return null;
   const storyline = getStorylineById(rawStorylineId);
@@ -134,9 +138,10 @@ function renderWorldInfoGuide() {
 function renderStoryGuide() {
   const card = document.getElementById('story-guide-card');
   if (!card) return;
+  const scoreLabel = getScoreLabel();
   card.innerHTML = `<div class="guide-title">📖 剧情配置指南</div>
     <div class="guide-desc">剧情系统由剧情线、开场白、剧情事件、后置规则四部分组成，相互配合推进故事。</div>
-    <ol class="guide-list"><li>先建剧情线，至少设一条为默认。</li><li>为每个关系阶段准备至少 1 条开场白。</li><li>剧情事件按好感度阈值触发，先做 2~3 个关键事件。</li><li>后置规则只写强约束。</li></ol>
+    <ol class="guide-list"><li>先建剧情线，至少设一条为默认。</li><li>为每个关系阶段准备至少 1 条开场白。</li><li>剧情事件按${scoreLabel}阈值触发，先做 2~3 个关键事件。</li><li>后置规则只写强约束。</li></ol>
     <div class="guide-chip-row"><span class="guide-chip">剧情线先建</span><span class="guide-chip">开场白分阶段</span><span class="guide-chip">事件不要贪多</span></div>`;
 }
 
@@ -145,23 +150,23 @@ function renderStoryGuide() {
 // ============================================================
 function memoryCategoryName(categoryId) {
   if (categoryId == null) return '';
-  const c = (AdminState.advancedData.categories || []).find(x => x.id === categoryId);
+  const c = (AdminState.advancedData.categories || []).find(x => sameId(x.id, categoryId));
   return c ? c.name : ('#' + categoryId);
 }
 function getMemoryNameById(id) {
-  const item = (AdminState.advancedData.memories || []).find(x => String(x.id) === String(id));
+  const item = (AdminState.advancedData.memories || []).find(x => sameId(x.id, id));
   return item ? (item.keywords || item.comment || `记忆#${id}`) : `记忆#${id}`;
 }
 function getGreetingNameById(id) {
-  const item = (AdminState.advancedData.greetings || []).find(x => String(x.id) === String(id));
+  const item = (AdminState.advancedData.greetings || []).find(x => sameId(x.id, id));
   return item ? `${getPhaseLabel(item.story_phase)} / ${item.mood || 'neutral'}` : `开场白#${id}`;
 }
 function getStorylineNameById(id) {
-  const item = (AdminState.advancedData.storylines || []).find(x => String(x.id) === String(id));
+  const item = (AdminState.advancedData.storylines || []).find(x => sameId(x.id, id));
   return item ? (item.name || `剧情线#${id}`) : `剧情线#${id}`;
 }
 function getStorylineById(id) {
-  return (AdminState.advancedData.storylines || []).find(x => String(x.id) === String(id)) || null;
+  return (AdminState.advancedData.storylines || []).find(x => sameId(x.id, id)) || null;
 }
 function getMemoryMode(m) {
   if (m.constant) return 'constant';
@@ -246,7 +251,7 @@ function openMemoryModal() {
   document.getElementById('memory-modal').style.display = 'flex';
 }
 function editMemory(id) {
-  const m = AdminState.advancedData.memories.find(x => x.id === id);
+  const m = AdminState.advancedData.memories.find(x => sameId(x.id, id));
   if (!m) return;
   const mode = getMemoryMode(m);
   document.getElementById('memory-id').value = m.id;
@@ -327,7 +332,7 @@ function openGreetingModal() {
   document.getElementById('greeting-modal').style.display = 'flex';
 }
 function editGreeting(id) {
-  const g = AdminState.advancedData.greetings.find(x => x.id === id); if (!g) return;
+  const g = AdminState.advancedData.greetings.find(x => sameId(x.id, id)); if (!g) return;
   document.getElementById('greeting-id').value = g.id; document.getElementById('greeting-content').value = g.content;
   updatePhaseSelect('greeting-phase', g.story_phase);
   document.getElementById('greeting-mood').value = g.mood;
@@ -352,11 +357,12 @@ async function deleteGreeting() { await crudDelete('/greetings', document.getEle
 function renderStorylines() {
   const container = document.getElementById('storylines-list');
   if (!AdminState.advancedData.storylines.length) { container.innerHTML = '<div class="no-results">暂无剧情线，点击上方按钮添加</div>'; return; }
+  const scoreLabel = getScoreLabel();
   container.innerHTML = AdminState.advancedData.storylines.map(s => `<div class="item-card ${s.is_active?'':'inactive'}">
     <div class="item-header"><span class="item-title">${escHtml(s.name)}</span><div class="item-badges">
       ${s.is_default?'<span class="item-badge active">默认</span>':''}<span class="item-badge ${s.is_active?'active':''}">${s.is_active?'启用':'禁用'}</span></div></div>
     <div class="item-content">${escHtml(s.description||'无描述')}</div>
-    <div class="item-footer"><span class="item-meta">解锁好感度: ${s.unlock_score} | 排序: ${s.sort_order}</span>
+    <div class="item-footer"><span class="item-meta">解锁${scoreLabel}: ${s.unlock_score} | 排序: ${s.sort_order}</span>
       <div class="item-actions"><button class="item-btn edit" data-action="edit-storyline" data-id="${escHtml(String(s.id))}">编辑</button></div></div></div>`).join('');
 }
 function updateStorylineOptions() {
@@ -378,7 +384,7 @@ function openStorylineModal() {
   document.getElementById('storyline-modal').style.display='flex';
 }
 function editStoryline(id) {
-  const s = AdminState.advancedData.storylines.find(x=>x.id===id); if (!s) return;
+  const s = AdminState.advancedData.storylines.find(x=>sameId(x.id,id)); if (!s) return;
   document.getElementById('storyline-id').value=s.id; document.getElementById('storyline-name').value=s.name;
   document.getElementById('storyline-description').value=s.description||''; document.getElementById('storyline-unlock-score').value=s.unlock_score;
   document.getElementById('storyline-sort').value=s.sort_order; document.getElementById('storyline-is-default').checked=s.is_default;
@@ -424,7 +430,7 @@ function openCategoryModal() {
   document.getElementById('category-modal').style.display='flex';
 }
 function editCategory(id) {
-  const c = AdminState.advancedData.categories.find(x=>x.id===id); if (!c) return;
+  const c = AdminState.advancedData.categories.find(x=>sameId(x.id,id)); if (!c) return;
   document.getElementById('category-id').value=c.id; document.getElementById('category-name').value=c.name;
   document.getElementById('category-description').value=c.description||''; document.getElementById('category-color').value=c.color||'#a855f7';
   document.getElementById('category-sort-order').value=c.sort_order;
@@ -475,7 +481,7 @@ function openPostRuleModal() {
   document.getElementById('postrule-modal').style.display='flex';
 }
 function editPostRule(id) {
-  const r = AdminState.advancedData.postRules.find(x=>x.id===id); if (!r) return;
+  const r = AdminState.advancedData.postRules.find(x=>sameId(x.id,id)); if (!r) return;
   document.getElementById('postrule-id').value=r.id; document.getElementById('postrule-name').value=r.name;
   document.getElementById('postrule-content').value=r.content; document.getElementById('postrule-storyline').value=r.storyline_id||'';
   updatePhaseSelect('postrule-phase', r.story_phase||'');
@@ -517,6 +523,7 @@ function renderEventSelectors(selectedMemoryIds=[], selectedGreetingIds=[], sele
 function renderEvents() {
   const container = document.getElementById('events-list');
   if (!AdminState.advancedData.events.length) { container.innerHTML = '<div class="no-results">暂无剧情事件，点击上方按钮添加</div>'; return; }
+  const scoreLabel = getScoreLabel();
   container.innerHTML = AdminState.advancedData.events.map(e => {
     const memoryNames = splitCsvIds(e.unlocked_memory_ids).map(getMemoryNameById);
     const greetingNames = splitCsvIds(e.unlocked_greeting_ids).map(getGreetingNameById);
@@ -525,7 +532,7 @@ function renderEvents() {
     return `<div class="item-card ${e.is_active?'':'inactive'}">
       <div class="item-header"><span class="item-title">${escHtml(e.title)}</span><div class="item-badges">
         <span class="item-badge ${e.is_active?'active':''}">${e.is_active?'启用':'禁用'}</span>
-        <span class="item-badge">好感度 >= ${e.trigger_score}</span></div></div>
+        <span class="item-badge">${scoreLabel} >= ${e.trigger_score}</span></div></div>
       <div class="item-content">${escHtml(e.description||'无描述')}</div>
       ${unlocks?`<div class="item-unlocks">${unlocks}</div>`:''}
       <div class="item-footer"><span class="item-meta">${unlocks?'事件触发后将解锁以上内容':'没有配置解锁内容'}</span>
@@ -542,7 +549,7 @@ function openEventModal() {
   document.getElementById('event-modal').style.display='flex';
 }
 function editEvent(id) {
-  const e = AdminState.advancedData.events.find(x=>x.id===id); if (!e) return;
+  const e = AdminState.advancedData.events.find(x=>sameId(x.id,id)); if (!e) return;
   document.getElementById('event-id').value=e.id; document.getElementById('event-title').value=e.title;
   document.getElementById('event-description').value=e.description||''; document.getElementById('event-trigger-score').value=e.trigger_score;
   renderEventSelectors(splitCsvIds(e.unlocked_memory_ids),splitCsvIds(e.unlocked_greeting_ids),e.unlocked_storyline_id||'');
@@ -564,7 +571,7 @@ async function saveEvent() {
   const hasUnlocks = selectedMemoryIds.length || selectedGreetingIds.length || data.unlocked_storyline_id;
   if (!hasUnlocks) { const goOn = await showConfirm('这个事件没有配置解锁内容。仍然保存？','提示'); if (!goOn) return; }
   if (!String(data.event_content||'').trim()) { toast('⚠️ 事件内容（event_content）是 AI 的行动指导，必须填写！\n\n示例：【剧情推进】用户发现了一把生锈的钥匙。接下来应该：引导用户前往地下室探索...'); return; }
-  if (AdminState.currentCharData && !AdminState.currentCharData.affection_enabled) { const goOn = await showConfirm('当前角色隐藏了好感度状态栏，用户将看不到好感度进度。仍然继续？','提示'); if (!goOn) return; }
+  if (AdminState.currentCharData && !AdminState.currentCharData.affection_enabled) { const scoreLabel = getScoreLabel(); const goOn = await showConfirm(`当前角色隐藏了${scoreLabel}状态栏，用户将看不到${scoreLabel}进度。仍然继续？`,'提示'); if (!goOn) return; }
   await crudSave('/story-events', data, 'event-modal', id);
 }
 async function deleteEvent() { await crudDelete('/story-events', document.getElementById('event-id').value, 'event-modal', '确定删除此剧情事件？'); }

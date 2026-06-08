@@ -7,7 +7,8 @@
 AFFECTION_BASE_RULES: dict[str, int] = {
     "deep_conversation": 4, "light_chat": 1, "compliment": 2, "gift": 6,
     "help": 3, "shared_secret": 5, "first_meeting": 3, "comfort": 3,
-    "flirt": 2, "date": 5, "confession": 10, "intimate_moment": 6,
+    "flirt": 2, "date": 5, "first_hug": 7, "kiss": 8,
+    "confession": 10, "intimate_moment": 6,
     "argument": -5, "rude": -3, "ignore": -2, "lie": -4, "betray": -8, "insult": -6,
 }
 

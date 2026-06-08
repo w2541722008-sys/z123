@@ -221,7 +221,8 @@ function toggleAllUsers(checkbox) {
 function clearUserSelection() {
   AdminState.membershipData.selectedUserIds.clear();
   document.querySelectorAll('.user-checkbox[value]').forEach(cb => { cb.checked = false; });
-  document.getElementById('user-check-all').checked = false;
+  const checkAll = document.getElementById('user-check-all');
+  if (checkAll) checkAll.checked = false;
   updateBatchBar();
 }
 

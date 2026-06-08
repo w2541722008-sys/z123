@@ -17,19 +17,29 @@ def get_chat_history(
     """获取用户与角色的聊天历史（分页）。"""
     rows = conn.execute(
         """
-        SELECT role, content, created_at
-        FROM chat_messages
-        WHERE user_id = %s AND character_id = %s
-        ORDER BY created_at ASC
-        LIMIT %s OFFSET %s
+        SELECT id, role, content, created_at
+        FROM (
+            SELECT id, role, content, created_at
+            FROM chat_messages
+            WHERE user_id = %s AND character_id = %s
+            ORDER BY id DESC
+            LIMIT %s OFFSET %s
+        ) sub
+        ORDER BY id ASC
         """,
         (user_id, character_id, limit, offset),
     ).fetchall()
+    rows = list(rows)
     return [
         {
             "role": row["role"],
             "content": row["content"],
             "created_at": row["created_at"],
+            **(
+                {"message_id": str(row["id"])}
+                if row["role"] == "assistant"
+                else {}
+            ),
         }
         for row in rows
     ]
