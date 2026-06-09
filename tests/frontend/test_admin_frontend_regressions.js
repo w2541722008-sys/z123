@@ -35,7 +35,14 @@ function createDocumentStub({ missingIds = new Set() } = {}) {
         },
       },
       querySelector() {
+        if (this.innerHTML.includes('value=""')) {
+          return { value: '' };
+        }
         return null;
+      },
+      querySelectorAll(selector) {
+        if (selector !== 'input[type="checkbox"]:checked') return [];
+        return this.checkedValues ? this.checkedValues.map((value) => ({ value })) : [];
       },
       addEventListener() {},
       click() {},
@@ -95,6 +102,7 @@ function createAdminScriptContext(scriptPath, extra = {}) {
       },
       revokeObjectURL() {},
     },
+    URLSearchParams,
     requestAnimationFrame(fn) {
       fn();
     },
@@ -132,6 +140,11 @@ function createAdminScriptContext(scriptPath, extra = {}) {
   });
   vm.runInContext(readProjectFile(scriptPath), context, { filename: scriptPath });
   return context;
+}
+
+function getUrlQueryParams(rawUrl) {
+  const url = new URL(rawUrl, 'http://admin.test');
+  return url.searchParams;
 }
 
 function testAdvancedEditorsAcceptStringDomIds() {
@@ -245,7 +258,7 @@ function testScenarioScoreCopyUsesImmersion() {
   context.renderStorylines();
   context.renderEvents();
 
-  assert.match(context.document.get('storylines-list').innerHTML, /解锁沉浸度: 30/);
+  assert.match(context.document.get('storylines-list').innerHTML, /沉浸度门槛: 30/);
   assert.match(context.document.get('events-list').innerHTML, /沉浸度 >= 50/);
 
   const modals = readProjectFile('frontend/admin/partials/modals.html');
@@ -253,6 +266,258 @@ function testScenarioScoreCopyUsesImmersion() {
   assert.ok(!modals.includes('触发好感度'));
   assert.ok(modals.includes('解锁分数'));
   assert.ok(modals.includes('触发分数'));
+}
+
+function testStoryCopyUsesEnableTerminology() {
+  const overview = readProjectFile('frontend/admin/js/overview.js');
+  const config = readProjectFile('frontend/admin/js/config.js');
+  const advanced = readProjectFile('frontend/admin/js/char-advanced.js');
+
+  assert.ok(overview.includes('触发后启用内容'));
+  assert.ok(config.includes('触发后启用内容'));
+  assert.ok(advanced.includes('事件触发后将启用以上内容'));
+  assert.ok(!overview.includes('解锁内容'));
+  assert.ok(!config.includes('解锁内容'));
+}
+
+async function testPostRulePhaseCanStayGlobal() {
+  let savedPayload = null;
+  const context = createAdminScriptContext('frontend/admin/js/char-advanced.js', {
+    AdminAPI: {
+      API: '/api/admin',
+      apiFetch: async (_url, options) => {
+        if (options?.body) savedPayload = JSON.parse(options.body);
+        return { ok: true };
+      },
+    },
+  });
+
+  context.openPostRuleModal();
+  assert.match(context.document.get('postrule-phase').innerHTML, /value="">全部阶段/);
+  assert.strictEqual(context.document.get('postrule-phase').value, '');
+
+  context.document.get('postrule-name').value = '通用规则';
+  context.document.get('postrule-content').value = '每轮都要遵守';
+  await context.savePostRule();
+
+  assert.strictEqual(savedPayload.story_phase, null);
+}
+
+async function testStoryEventPreservesCustomTriggerKey() {
+  let savedPayload = null;
+  const context = createAdminScriptContext('frontend/admin/js/char-advanced.js', {
+    AdminAPI: {
+      API: '/api/admin',
+      apiFetch: async (_url, options) => {
+        if (options?.body) savedPayload = JSON.parse(options.body);
+        return { ok: true };
+      },
+    },
+    getCheckedValues(id) {
+      return context.document.get(id).checkedValues || [];
+    },
+  });
+  context.AdminState.advancedData.events = [{
+    id: 9,
+    title: '找到钥匙',
+    description: '',
+    trigger_score: 20,
+    trigger_custom_key: 'has_key',
+    unlocked_memory_ids: '',
+    unlocked_greeting_ids: '',
+    unlocked_storyline_id: null,
+    event_content: '引导用户开门',
+    sort_order: 0,
+    is_active: true,
+  }];
+
+  context.editEvent('9');
+  assert.strictEqual(context.document.get('event-trigger-custom-key').value, 'has_key');
+  await context.saveEvent();
+
+  assert.strictEqual(savedPayload.trigger_custom_key, 'has_key');
+}
+
+function testEventSelectorsIncludeInactiveAssetsAsPendingEnable() {
+  const context = createAdminScriptContext('frontend/admin/js/char-advanced.js');
+  context.AdminState.advancedData = {
+    memories: [
+      { id: 1, keywords: '启用记忆', content: 'A', comment: '', is_active: true },
+      { id: 2, keywords: '待启用记忆', content: 'B', comment: '', is_active: false },
+    ],
+    greetings: [
+      { id: 3, story_phase: 'stranger', mood: 'neutral', content: '你好', is_active: true },
+      { id: 4, story_phase: 'friend', mood: 'warm', content: '欢迎回来', is_active: false },
+    ],
+    storylines: [
+      { id: 5, name: '主线', is_active: true },
+      { id: 6, name: '隐藏线', is_active: false },
+    ],
+    categories: [],
+    postRules: [],
+    events: [],
+  };
+
+  context.renderEventSelectors(['2'], ['4'], '6');
+
+  assert.match(context.document.get('event-memory-selector').innerHTML, /待启用记忆/);
+  assert.match(context.document.get('event-memory-selector').innerHTML, /触发后启用/);
+  assert.match(context.document.get('event-greeting-selector').innerHTML, /欢迎回来/);
+  assert.match(context.document.get('event-storyline-id').innerHTML, /隐藏线/);
+}
+
+async function testStorylineAdvancedFieldsArePreserved() {
+  let savedPayload = null;
+  const context = createAdminScriptContext('frontend/admin/js/char-advanced.js', {
+    AdminAPI: {
+      API: '/api/admin',
+      apiFetch: async (_url, options) => {
+        if (options?.body) savedPayload = JSON.parse(options.body);
+        return { ok: true };
+      },
+    },
+  });
+  context.AdminState.advancedData.storylines = [{
+    id: 7,
+    storyline_id: 'route_hidden',
+    title: '隐藏路线标题',
+    name: '隐藏线',
+    description: '描述',
+    unlock_score: 40,
+    unlock_condition: '拿到钥匙',
+    stages: ['初遇', '抉择'],
+    sort_order: 1,
+    is_default: false,
+    is_active: true,
+  }];
+
+  context.editStoryline('7');
+  await context.saveStoryline();
+
+  assert.strictEqual(savedPayload.storyline_id, 'route_hidden');
+  assert.strictEqual(savedPayload.title, '隐藏路线标题');
+  assert.strictEqual(savedPayload.unlock_condition, '拿到钥匙');
+  assert.deepStrictEqual(savedPayload.stages, ['初遇', '抉择']);
+}
+
+async function testPromptPreviewSendsSimulatorInputs() {
+  let requestedUrl = '';
+  const context = createAdminScriptContext('frontend/admin/js/prompt-preview.js', {
+    AdminAPI: {
+      API: '/api/admin',
+      apiFetch: async (url) => {
+        requestedUrl = url;
+        return {
+          messages: [{ role: 'system', content: '系统预览' }],
+          preview_summary: {
+            has_sample_user_message: true,
+            has_world_info: true,
+            has_post_rules: true,
+            has_state_snapshot: true,
+          },
+        };
+      },
+    },
+  });
+  context.AdminState.currentCharId = 'luna';
+  context.document.get('prompt-preview-sample').value = '地下室钥匙';
+  context.document.get('prompt-preview-affection').value = '66';
+  context.document.get('prompt-preview-phase').value = 'friend';
+  context.document.get('prompt-preview-mood').value = 'warm';
+  context.document.get('prompt-preview-storyline').value = '7';
+  context.document.get('prompt-preview-custom-vars').value = '{"has_key":true}';
+
+  await context.loadPromptPreview();
+
+  const params = getUrlQueryParams(requestedUrl);
+  assert.strictEqual(params.get('sample_user_message'), '地下室钥匙');
+  assert.strictEqual(params.get('affection'), '66');
+  assert.strictEqual(params.get('story_phase'), 'friend');
+  assert.strictEqual(params.get('mood'), 'warm');
+  assert.strictEqual(params.get('storyline_id'), '7');
+  assert.strictEqual(params.get('custom_vars_json'), '{"has_key":true}');
+  assert.match(context.document.get('prompt-preview-content').innerHTML, /命中摘要/);
+}
+
+async function testPromptPreviewInvalidCustomVarsBlocksRequest() {
+  let requestCount = 0;
+  const context = createAdminScriptContext('frontend/admin/js/prompt-preview.js', {
+    AdminAPI: {
+      API: '/api/admin',
+      apiFetch: async () => {
+        requestCount += 1;
+        return { messages: [] };
+      },
+    },
+  });
+  context.AdminState.currentCharId = 'luna';
+  context.document.get('prompt-preview-custom-vars').value = '{"broken"';
+
+  await context.loadPromptPreview();
+
+  assert.strictEqual(requestCount, 0);
+  assert.match(context.document.get('prompt-preview-content').innerHTML, /自定义变量 JSON 格式错误/);
+}
+
+function testOverviewUsesBackendAuthoritativeEventStats() {
+  const context = createAdminScriptContext('frontend/admin/js/overview.js');
+  context.AdminState.currentCharData = {
+    name: '露娜',
+    system_prompt: '你是露娜',
+    affection_enabled: 1,
+    affection_rules_json: '{"enabled":true}',
+  };
+  context.AdminState.advancedData.events = [];
+  context.renderCharacterOverview({
+    name: '露娜',
+    subtitle: '',
+    completeness: 70,
+    default_storyline_id: 1,
+    warnings: [],
+    stats: {
+      memories: 3,
+      active_memories: 3,
+      greetings: 2,
+      active_greetings: 2,
+      greeting_phase_coverage: 2,
+      storylines: 1,
+      active_storylines: 1,
+      post_rules: 1,
+      active_post_rules: 1,
+      events: 2,
+      active_events: 2,
+      empty_enable_events: 1,
+      empty_event_content_events: 1,
+    },
+  });
+
+  const html = context.document.get('tab-overview').innerHTML;
+  assert.match(html, /缺启用内容 1 \/ 缺文案 1/);
+  assert.match(html, /当前还有 1 个事件缺触发后启用内容、1 个事件缺触发文案/);
+}
+
+function testChatStreamUsesEnableTerminologyForStoryEvents() {
+  const source = readProjectFile('frontend/modules/chat-stream.js');
+  assert.ok(source.includes('启用记忆'));
+  assert.ok(source.includes('启用开场白'));
+  assert.ok(source.includes('启用新剧情线'));
+  assert.ok(source.includes('剧情已启用'));
+  assert.ok(!source.includes('解锁记忆'));
+  assert.ok(!source.includes('解锁开场白'));
+  assert.ok(!source.includes('解锁新剧情线'));
+  assert.ok(!source.includes('剧情已解锁'));
+}
+
+function testGreetingMoodOptionsMatchBackendEnum() {
+  const modals = readProjectFile('frontend/admin/partials/modals.html');
+  const moodSelect = modals.match(/<select id="greeting-mood"[\s\S]*?<\/select>/);
+  assert.ok(moodSelect, 'missing greeting mood select');
+  const uiMoods = new Set([...moodSelect[0].matchAll(/<option value="([^"]+)">/g)].map((match) => match[1]));
+  const moodPy = readProjectFile('backend/constants/mood.py');
+  const backendMoods = new Set([...moodPy.matchAll(/= "([^"]+)"/g)].map((match) => match[1]));
+
+  assert.deepStrictEqual([...uiMoods].sort(), [...backendMoods].sort());
+  assert.ok(!uiMoods.has('flirty'));
 }
 
 function testClearUserSelectionHandlesMissingCheckAll() {
@@ -408,6 +673,16 @@ async function testAdvancedDataLoadReusesInFlightAndCachedRequest() {
 async function run() {
   testAdvancedEditorsAcceptStringDomIds();
   testScenarioScoreCopyUsesImmersion();
+  testStoryCopyUsesEnableTerminology();
+  await testPostRulePhaseCanStayGlobal();
+  await testStoryEventPreservesCustomTriggerKey();
+  testEventSelectorsIncludeInactiveAssetsAsPendingEnable();
+  await testStorylineAdvancedFieldsArePreserved();
+  await testPromptPreviewSendsSimulatorInputs();
+  await testPromptPreviewInvalidCustomVarsBlocksRequest();
+  testOverviewUsesBackendAuthoritativeEventStats();
+  testChatStreamUsesEnableTerminologyForStoryEvents();
+  testGreetingMoodOptionsMatchBackendEnum();
   testClearUserSelectionHandlesMissingCheckAll();
   testDownloadCsvPreservesZeroValues();
   testAuditLogCoversAllBackendActions();

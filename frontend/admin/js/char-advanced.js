@@ -37,20 +37,20 @@ function getPhaseEmoji(phase) {
 function getPhaseLabel(phase) {
   return getPhaseLabels()[phase] || phase;
 }
-function updatePhaseSelect(selectId, currentValue) {
+function updatePhaseSelect(selectId, currentValue, optionsConfig = {}) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
   const ct = AdminState.currentCharData?.card_type || 'intimate';
   const labels = PHASE_LABEL_MAPS[ct] || INTIMATE_PHASE_LABELS;
   const emojis = PHASE_EMOJI_MAPS[ct] || INTIMATE_PHASE_EMOJIS;
-  const hasAllOption = sel.querySelector('option[value=""]');
+  const hasAllOption = optionsConfig.includeAll || sel.querySelector('option[value=""]');
   sel.innerHTML = '';
-  let options = hasAllOption ? '<option value="">全部阶段</option>' : '';
+  let options = hasAllOption ? `<option value="">${escHtml(optionsConfig.allLabel || '全部阶段')}</option>` : '';
   for (const [val, label] of Object.entries(labels)) {
     options += `<option value="${val}">${emojis[val]||''} ${label}</option>`;
   }
   sel.innerHTML = options;
-  sel.value = currentValue || 'stranger';
+  sel.value = currentValue || (hasAllOption ? '' : 'stranger');
 }
 function updatePhaseButtons() {
   const container = document.getElementById('greeting-phase-buttons');
@@ -215,6 +215,13 @@ function getMemoryMode(m) {
 }
 function getMemoryModeLabel(mode) {
   return { keyword: '🔑关键词', constant: '🔄常驻', always: '📋始终' }[mode] || mode;
+}
+function splitLines(value) {
+  return String(value || '').split('\n').map(x => x.trim()).filter(Boolean);
+}
+function setValueIfExists(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.value = value == null ? '' : value;
 }
 
 // ============================================================
@@ -402,7 +409,7 @@ function renderStorylines() {
     <div class="item-header"><span class="item-title">${escHtml(s.name)}</span><div class="item-badges">
       ${s.is_default?'<span class="item-badge active">默认</span>':''}<span class="item-badge ${s.is_active?'active':''}">${s.is_active?'启用':'禁用'}</span></div></div>
     <div class="item-content">${escHtml(s.description||'无描述')}</div>
-    <div class="item-footer"><span class="item-meta">解锁${scoreLabel}: ${s.unlock_score} | 排序: ${s.sort_order}</span>
+    <div class="item-footer"><span class="item-meta">${scoreLabel}门槛: ${s.unlock_score} | 排序: ${s.sort_order}</span>
       <div class="item-actions"><button class="item-btn edit" data-action="edit-storyline" data-id="${escHtml(String(s.id))}">编辑</button></div></div></div>`).join('');
 }
 function updateStorylineOptions() {
@@ -410,7 +417,7 @@ function updateStorylineOptions() {
   ['greeting-storyline','postrule-storyline','event-storyline-id'].forEach(selId => {
     const sel = document.getElementById(selId); if (!sel) return;
     const current = sel.value;
-    const defaultLabel = selId==='event-storyline-id'?'不解锁剧情线':(selId==='postrule-storyline'?'通用规则':'默认');
+    const defaultLabel = selId==='event-storyline-id'?'不启用剧情线':(selId==='postrule-storyline'?'通用规则':'默认');
     sel.innerHTML = `<option value="">${defaultLabel}</option>` + options; if (current) sel.value = current;
   });
 }
@@ -419,6 +426,10 @@ function openStorylineModal() {
   document.getElementById('storyline-description').value=''; document.getElementById('storyline-unlock-score').value=0;
   document.getElementById('storyline-sort').value=0; document.getElementById('storyline-is-default').checked=false;
   document.getElementById('storyline-is-active').checked=true;
+  setValueIfExists('storyline-code', '');
+  setValueIfExists('storyline-title', '');
+  setValueIfExists('storyline-unlock-condition', '');
+  setValueIfExists('storyline-stages', '');
   document.getElementById('storyline-modal-title').textContent='新增剧情线';
   document.getElementById('storyline-delete-btn').style.display='none';
   document.getElementById('storyline-modal').style.display='flex';
@@ -429,6 +440,10 @@ function editStoryline(id) {
   document.getElementById('storyline-description').value=s.description||''; document.getElementById('storyline-unlock-score').value=s.unlock_score;
   document.getElementById('storyline-sort').value=s.sort_order; document.getElementById('storyline-is-default').checked=s.is_default;
   document.getElementById('storyline-is-active').checked=s.is_active;
+  setValueIfExists('storyline-code', s.storyline_id || '');
+  setValueIfExists('storyline-title', s.title || '');
+  setValueIfExists('storyline-unlock-condition', s.unlock_condition || '');
+  setValueIfExists('storyline-stages', Array.isArray(s.stages) ? s.stages.join('\n') : '');
   document.getElementById('storyline-modal-title').textContent='编辑剧情线';
   document.getElementById('storyline-delete-btn').style.display='';
   document.getElementById('storyline-modal').style.display='flex';
@@ -436,15 +451,28 @@ function editStoryline(id) {
 function closeStorylineModal() { closeModal('storyline-modal'); }
 async function saveStoryline() {
   const id = document.getElementById('storyline-id').value;
-  await crudSave('/storylines', { name: document.getElementById('storyline-name').value, description: document.getElementById('storyline-description').value, unlock_score: parseInt(document.getElementById('storyline-unlock-score').value)||0, sort_order: parseInt(document.getElementById('storyline-sort').value)||0, is_default: document.getElementById('storyline-is-default').checked?1:0, is_active: document.getElementById('storyline-is-active').checked?1:0 }, 'storyline-modal', id);
+  const name = document.getElementById('storyline-name').value;
+  await crudSave('/storylines', {
+    storyline_id: document.getElementById('storyline-code')?.value || '',
+    title: document.getElementById('storyline-title')?.value || name,
+    name,
+    description: document.getElementById('storyline-description').value,
+    unlock_score: parseInt(document.getElementById('storyline-unlock-score').value)||0,
+    unlock_condition: document.getElementById('storyline-unlock-condition')?.value || null,
+    stages: splitLines(document.getElementById('storyline-stages')?.value || ''),
+    sort_order: parseInt(document.getElementById('storyline-sort').value)||0,
+    is_default: document.getElementById('storyline-is-default').checked?1:0,
+    is_active: document.getElementById('storyline-is-active').checked?1:0
+  }, 'storyline-modal', id);
 }
 async function deleteStoryline() {
   const id = document.getElementById('storyline-id').value; if (!id) return;
   let confirmMsg = '确定要删除这个剧情线吗？';
   try {
-    const impact = await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/storylines/${id}/delete-impact`);
-    const summary = impact.summary || {};
-    confirmMsg = `确定要删除剧情线「${impact.storyline?.name||id}」吗？\n\n关联开场白：${summary.greeting_count||0} 条\n关联后置规则：${summary.post_rule_count||0} 条\n解锁该线的事件：${summary.unlock_event_count||0} 条\n\n删除后不会自动修复。`;
+	    const impact = await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/storylines/${id}/delete-impact`);
+	    const summary = impact.summary || {};
+	    const defaultHint = impact.storyline?.is_default ? '\n\n注意：这是默认剧情线，删除后请重新设置默认剧情线。' : '';
+	    confirmMsg = `确定要删除剧情线「${impact.storyline?.name||id}」吗？\n\n关联开场白：${summary.greeting_count||0} 条\n关联后置规则：${summary.post_rule_count||0} 条\n触发后启用该线的事件：${summary.unlock_event_count||0} 条${defaultHint}\n\n删除后关联内容会改为通用/不启用剧情线。`;
   } catch(e) { confirmMsg = '确定要删除这个剧情线吗？关联内容可能会受到影响。'; }
   await crudDelete('/storylines', id, 'storyline-modal', confirmMsg);
 }
@@ -513,7 +541,7 @@ function renderPostRules() {
 function openPostRuleModal() {
   document.getElementById('postrule-id').value=''; document.getElementById('postrule-name').value='';
   document.getElementById('postrule-content').value=''; document.getElementById('postrule-storyline').value='';
-  updatePhaseSelect('postrule-phase', '');
+  updatePhaseSelect('postrule-phase', '', { includeAll: true, allLabel: '全部阶段/通用阶段' });
   document.getElementById('postrule-priority').value=100;
   document.getElementById('postrule-is-active').checked=true;
   document.getElementById('postrule-modal-title').textContent='新增后置规则';
@@ -524,7 +552,7 @@ function editPostRule(id) {
   const r = AdminState.advancedData.postRules.find(x=>sameId(x.id,id)); if (!r) return;
   document.getElementById('postrule-id').value=r.id; document.getElementById('postrule-name').value=r.name;
   document.getElementById('postrule-content').value=r.content; document.getElementById('postrule-storyline').value=r.storyline_id||'';
-  updatePhaseSelect('postrule-phase', r.story_phase||'');
+  updatePhaseSelect('postrule-phase', r.story_phase||'', { includeAll: true, allLabel: '全部阶段/通用阶段' });
   document.getElementById('postrule-priority').value=r.priority;
   document.getElementById('postrule-is-active').checked=r.is_active;
   document.getElementById('postrule-modal-title').textContent='编辑后置规则';
@@ -552,12 +580,12 @@ function renderEventSelectors(selectedMemoryIds=[], selectedGreetingIds=[], sele
   const storylineSelect = document.getElementById('event-storyline-id');
   const selectedMemSet = new Set((selectedMemoryIds||[]).map(String));
   const selectedGreetingSet = new Set((selectedGreetingIds||[]).map(String));
-  const memories = (AdminState.advancedData.memories||[]).filter(x=>x.is_active);
-  memorySelector.innerHTML = memories.length ? memories.map(m=>`<label class="selector-option"><input type="checkbox" value="${m.id}" ${selectedMemSet.has(String(m.id))?'checked':''} /><div><div class="title">${escHtml(m.keywords)}</div><div class="meta">${escHtml((m.comment||m.content||'').slice(0,60))}</div></div></label>`).join('') : '<div class="selector-empty">暂无可选记忆条目</div>';
-  const greetings = (AdminState.advancedData.greetings||[]).filter(x=>x.is_active);
-  greetingSelector.innerHTML = greetings.length ? greetings.map(g=>`<label class="selector-option"><input type="checkbox" value="${g.id}" ${selectedGreetingSet.has(String(g.id))?'checked':''} /><div><div class="title">${escHtml(getPhaseLabel(g.story_phase))} / ${escHtml(g.mood||'neutral')}</div><div class="meta">${escHtml((g.content||'').slice(0,60))}</div></div></label>`).join('') : '<div class="selector-empty">暂无可选开场白</div>';
-  const options = (AdminState.advancedData.storylines||[]).filter(s=>s.is_active).map(s=>`<option value="${s.id}">${escHtml(s.name)}</option>`).join('');
-  storylineSelect.innerHTML = '<option value="">不解锁剧情线</option>' + options;
+  const memories = (AdminState.advancedData.memories||[]);
+  memorySelector.innerHTML = memories.length ? memories.map(m=>`<label class="selector-option"><input type="checkbox" value="${m.id}" ${selectedMemSet.has(String(m.id))?'checked':''} /><div><div class="title">${escHtml(m.keywords)}${m.is_active?'':' · 触发后启用'}</div><div class="meta">${escHtml((m.comment||m.content||'').slice(0,60))}</div></div></label>`).join('') : '<div class="selector-empty">暂无可选记忆条目</div>';
+  const greetings = (AdminState.advancedData.greetings||[]);
+  greetingSelector.innerHTML = greetings.length ? greetings.map(g=>`<label class="selector-option"><input type="checkbox" value="${g.id}" ${selectedGreetingSet.has(String(g.id))?'checked':''} /><div><div class="title">${escHtml(getPhaseLabel(g.story_phase))} / ${escHtml(g.mood||'neutral')}${g.is_active?'':' · 触发后启用'}</div><div class="meta">${escHtml((g.content||'').slice(0,60))}</div></div></label>`).join('') : '<div class="selector-empty">暂无可选开场白</div>';
+  const options = (AdminState.advancedData.storylines||[]).map(s=>`<option value="${s.id}">${escHtml(s.name)}${s.is_active?'':'（触发后启用）'}</option>`).join('');
+  storylineSelect.innerHTML = '<option value="">不启用剧情线</option>' + options;
   storylineSelect.value = selectedStorylineId!=null&&selectedStorylineId!==''?String(selectedStorylineId):'';
 }
 function renderEvents() {
@@ -574,14 +602,16 @@ function renderEvents() {
         <span class="item-badge ${e.is_active?'active':''}">${e.is_active?'启用':'禁用'}</span>
         <span class="item-badge">${scoreLabel} >= ${e.trigger_score}</span></div></div>
       <div class="item-content">${escHtml(e.description||'无描述')}</div>
-      ${unlocks?`<div class="item-unlocks">${unlocks}</div>`:''}
-      <div class="item-footer"><span class="item-meta">${unlocks?'事件触发后将解锁以上内容':'没有配置解锁内容'}</span>
+	      ${e.trigger_custom_key?`<div class="item-meta">自定义条件：${escHtml(e.trigger_custom_key)}</div>`:''}
+	      ${unlocks?`<div class="item-unlocks">${unlocks}</div>`:''}
+	      <div class="item-footer"><span class="item-meta">${unlocks?'事件触发后将启用以上内容':'没有配置触发后启用内容'}</span>
         <div class="item-actions"><button class="item-btn edit" data-action="edit-event" data-id="${escHtml(String(e.id))}">编辑</button></div></div></div>`;
   }).join('');
 }
 function openEventModal() {
   document.getElementById('event-id').value=''; document.getElementById('event-title').value='';
   document.getElementById('event-description').value=''; document.getElementById('event-trigger-score').value=0;
+  setValueIfExists('event-trigger-custom-key', '');
   renderEventSelectors([],[],''); document.getElementById('event-content').value='';
   document.getElementById('event-sort-order').value=0; document.getElementById('event-is-active').checked=true;
   document.getElementById('event-modal-title').textContent='新增剧情事件';
@@ -592,6 +622,7 @@ function editEvent(id) {
   const e = AdminState.advancedData.events.find(x=>sameId(x.id,id)); if (!e) return;
   document.getElementById('event-id').value=e.id; document.getElementById('event-title').value=e.title;
   document.getElementById('event-description').value=e.description||''; document.getElementById('event-trigger-score').value=e.trigger_score;
+  setValueIfExists('event-trigger-custom-key', e.trigger_custom_key || '');
   renderEventSelectors(splitCsvIds(e.unlocked_memory_ids),splitCsvIds(e.unlocked_greeting_ids),e.unlocked_storyline_id||'');
   document.getElementById('event-content').value=e.event_content||''; document.getElementById('event-sort-order').value=e.sort_order;
   document.getElementById('event-is-active').checked=e.is_active;
@@ -605,11 +636,10 @@ async function saveEvent() {
   const selectedMemoryIds = getCheckedValues('event-memory-selector');
   const selectedGreetingIds = getCheckedValues('event-greeting-selector');
   const rawStorylineId = String(document.getElementById('event-storyline-id').value||'').trim();
-  const err = validateStoryline(rawStorylineId); if (err) { toast(err); return; }
-  const data = { title: document.getElementById('event-title').value, description: document.getElementById('event-description').value, trigger_score: parseInt(document.getElementById('event-trigger-score').value)||0, unlocked_memory_ids: selectedMemoryIds.join(','), unlocked_greeting_ids: selectedGreetingIds.join(','), unlocked_storyline_id: cleanStorylineId(rawStorylineId), event_content: document.getElementById('event-content').value, sort_order: parseInt(document.getElementById('event-sort-order').value)||0, is_active: document.getElementById('event-is-active').checked?1:0 };
+  const data = { title: document.getElementById('event-title').value, description: document.getElementById('event-description').value, trigger_score: parseInt(document.getElementById('event-trigger-score').value)||0, trigger_custom_key: document.getElementById('event-trigger-custom-key')?.value || '', unlocked_memory_ids: selectedMemoryIds.join(','), unlocked_greeting_ids: selectedGreetingIds.join(','), unlocked_storyline_id: cleanStorylineId(rawStorylineId), event_content: document.getElementById('event-content').value, sort_order: parseInt(document.getElementById('event-sort-order').value)||0, is_active: document.getElementById('event-is-active').checked?1:0 };
   if (!data.title.trim()) { toast('请输入事件标题'); return; }
   const hasUnlocks = selectedMemoryIds.length || selectedGreetingIds.length || data.unlocked_storyline_id;
-  if (!hasUnlocks) { const goOn = await showConfirm('这个事件没有配置解锁内容。仍然保存？','提示'); if (!goOn) return; }
+  if (!hasUnlocks) { const goOn = await showConfirm('这个事件没有配置触发后启用内容。仍然保存？','提示'); if (!goOn) return; }
   if (!String(data.event_content||'').trim()) { toast('⚠️ 事件内容（event_content）是 AI 的行动指导，必须填写！\n\n示例：【剧情推进】用户发现了一把生锈的钥匙。接下来应该：引导用户前往地下室探索...'); return; }
   if (AdminState.currentCharData && !AdminState.currentCharData.affection_enabled) { const scoreLabel = getScoreLabel(); const goOn = await showConfirm(`当前角色隐藏了${scoreLabel}状态栏，用户将看不到${scoreLabel}进度。仍然继续？`,'提示'); if (!goOn) return; }
   await crudSave('/story-events', data, 'event-modal', id);

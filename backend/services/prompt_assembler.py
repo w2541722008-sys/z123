@@ -520,6 +520,7 @@ def build_message_preview(
     related_assets: list[Any] | None = None,
     user_name: str = "",
     character_state: dict | None = None,
+    conn: ConnType | None = None,
 ) -> dict[str, Any]:
     """调试用：返回最终 messages、运行时层和关联资产概览。"""
     runtime_bundle = build_runtime_bundle(character, related_assets=related_assets)
@@ -535,6 +536,7 @@ def build_message_preview(
             related_assets=related_assets,
             user_name=user_name,
             character_state=character_state,
+            conn=conn,
         )
     )
     return {

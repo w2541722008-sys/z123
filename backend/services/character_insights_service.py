@@ -37,6 +37,27 @@ def _split_csv_ids(value: str | None) -> list[str]:
     return [x.strip() for x in (value or "").split(",") if x.strip()]
 
 
+def compute_story_event_health_stats(events: list[dict[str, Any]]) -> dict[str, int]:
+    """统计剧情事件缺失项，兼容旧 empty_unlock_events 字段名。"""
+    empty_enable_events = 0
+    empty_event_content_events = 0
+    for event in events:
+        has_enable_targets = bool(
+            _split_csv_ids(event.get("unlocked_memory_ids"))
+            or _split_csv_ids(event.get("unlocked_greeting_ids"))
+            or event.get("unlocked_storyline_id")
+        )
+        if not has_enable_targets:
+            empty_enable_events += 1
+        if not str(event.get("event_content") or "").strip():
+            empty_event_content_events += 1
+    return {
+        "empty_enable_events": empty_enable_events,
+        "empty_unlock_events": empty_enable_events,
+        "empty_event_content_events": empty_event_content_events,
+    }
+
+
 def _affection_rules_use_default(raw: Any) -> bool:
     """判断好感度规则是否使用默认值（空规则）。"""
     if isinstance(raw, dict):
@@ -100,26 +121,26 @@ def compute_advanced_warnings(
     if character.get("card_type") in VALID_CARD_TYPES and stats["greeting_count"] == 0:
         warnings.append("当前角色还没有多阶段开场白，首次体验会偏单一")
 
-    empty_unlock_event_count = 0
-    empty_event_content_count = 0
+    event_health = {
+        "empty_enable_events": 0,
+        "empty_unlock_events": 0,
+        "empty_event_content_events": 0,
+    }
     if stats["story_event_count"] > 0:
         events = get_story_events_for_validation(conn, character["id"])
+        event_health = compute_story_event_health_stats(events)
         valid_ids = get_valid_asset_ids(conn, character["id"])
         for event in events:
             bad_m = [x for x in _split_csv_ids(event["unlocked_memory_ids"]) if x not in valid_ids["memories"]]
             bad_g = [x for x in _split_csv_ids(event["unlocked_greeting_ids"]) if x not in valid_ids["greetings"]]
             bad_s = event["unlocked_storyline_id"] and event["unlocked_storyline_id"] not in valid_ids["storylines"]
-            has_unlocks = bool(_split_csv_ids(event["unlocked_memory_ids"]) or _split_csv_ids(event["unlocked_greeting_ids"]) or event["unlocked_storyline_id"])
-            has_event_content = bool((event["event_content"] or "").strip())
-            if not has_unlocks:
-                empty_unlock_event_count += 1
-            if not has_event_content:
-                empty_event_content_count += 1
             if bad_m or bad_g or bad_s:
-                warnings.append(f"剧情事件 #{event['id']} 存在失效的解锁对象引用")
+                warnings.append(f"剧情事件 #{event['id']} 存在失效的触发后启用对象引用")
                 break
-    if empty_unlock_event_count:
-        warnings.append(f"有 {empty_unlock_event_count} 个剧情事件还没有配置任何解锁内容。")
+    empty_enable_count = event_health["empty_enable_events"]
+    empty_event_content_count = event_health["empty_event_content_events"]
+    if empty_enable_count:
+        warnings.append(f"有 {empty_enable_count} 个剧情事件还没有配置任何触发后启用内容。")
     if empty_event_content_count:
         warnings.append(f"有 {empty_event_content_count} 个剧情事件没有触发文案，剧情衔接可能偏生硬")
     return warnings
@@ -164,15 +185,22 @@ def get_character_config_summary(conn: ConnType, character_id: str) -> dict[str,
     greeting_phase_coverage = get_greeting_phase_coverage(conn, character_id)
     default_storyline_id = get_default_storyline_id(conn, character_id)
     active_greetings = get_active_greeting_count(conn, character_id)
+    event_health_stats = (
+        compute_story_event_health_stats(get_story_events_for_validation(conn, character_id))
+        if stats["story_event_count"] > 0
+        else {
+            "empty_enable_events": 0,
+            "empty_unlock_events": 0,
+            "empty_event_content_events": 0,
+        }
+    )
 
     warnings = compute_config_warnings(dict(row), runtime_layers)
     warnings += compute_advanced_warnings(
         conn, dict(row), stats, greeting_phase_coverage, default_storyline_id, active_greetings,
     )
 
-    empty_unlock_count = sum(
-        1 for w in warnings if "还没有配置任何解锁内容" in w
-    )
+    empty_unlock_count = sum(1 for w in warnings if "还没有配置任何触发后启用内容" in w)
     completion_score = compute_completeness_score(
         dict(row), runtime_layers, stats, active_greetings,
         greeting_phase_coverage, default_storyline_id, empty_unlock_count,
@@ -202,6 +230,7 @@ def get_character_config_summary(conn: ConnType, character_id: str) -> dict[str,
             "active_post_rules": stats["post_rule_active"],
             "events": stats["story_event_count"],
             "active_events": stats["story_event_active"],
+            **event_health_stats,
         },
     }
 

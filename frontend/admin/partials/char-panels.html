@@ -126,7 +126,7 @@
         <h3>🎭 剧情事件</h3>
         <button class="btn btn-primary btn-sm" data-action="open-event-modal">+ 新增事件</button>
       </div>
-      <div class="section-block-desc">当用户好感度达到设定阈值时自动触发。建议同时配置触发文案和解锁内容。</div>
+      <div class="section-block-desc">当用户分数达到设定阈值时自动触发。建议同时配置触发文案和触发后启用内容。</div>
       <div id="events-list" class="items-list"></div>
     </div>
 
@@ -150,7 +150,28 @@
         <div class="preview-title">🧾 Prompt 预览</div>
         <div class="hint">AI 实际会收到什么设定、记忆和限制，都能在这里看到。</div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <div class="preview-actions">
+        <input type="text" id="prompt-preview-sample" class="input-search" placeholder="模拟用户消息，可触发世界书" style="min-width:220px;" />
+        <input type="number" id="prompt-preview-affection" class="input-search" value="30" min="0" max="100" title="模拟分数" style="width:92px;" />
+        <select id="prompt-preview-phase" class="input-search" title="模拟阶段" style="width:120px;">
+          <option value="stranger">stranger</option>
+          <option value="acquaintance">acquaintance</option>
+          <option value="friend">friend</option>
+          <option value="lover">lover</option>
+        </select>
+        <select id="prompt-preview-mood" class="input-search" title="模拟心情/氛围" style="width:120px;">
+          <option value="neutral">neutral</option>
+          <option value="happy">happy</option>
+          <option value="warm">warm</option>
+          <option value="melting">melting</option>
+          <option value="cold">cold</option>
+          <option value="angry">angry</option>
+          <option value="sad">sad</option>
+          <option value="shy">shy</option>
+          <option value="surprised">surprised</option>
+        </select>
+        <input type="number" id="prompt-preview-storyline" class="input-search" placeholder="剧情线ID" title="模拟剧情线ID" style="width:110px;" />
+        <input type="text" id="prompt-preview-custom-vars" class="input-search" placeholder='custom_vars JSON，如 {"has_key":true}' style="min-width:240px;" />
         <button class="btn btn-ghost" data-action="load-prompt-preview">🔄 刷新预览</button>
         <button class="btn btn-primary" data-action="copy-prompt-preview">📋 复制</button>
       </div>

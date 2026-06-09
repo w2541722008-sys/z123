@@ -29,6 +29,49 @@ function buildPromptSourceSections() {
   return sections.filter(x => x.content);
 }
 
+function getPromptPreviewQuery() {
+  const params = new URLSearchParams();
+  const sample = document.getElementById('prompt-preview-sample')?.value || '';
+  const affection = document.getElementById('prompt-preview-affection')?.value || '';
+  const phase = document.getElementById('prompt-preview-phase')?.value || '';
+  const mood = document.getElementById('prompt-preview-mood')?.value || '';
+  const storyline = document.getElementById('prompt-preview-storyline')?.value || '';
+  const customVars = document.getElementById('prompt-preview-custom-vars')?.value || '';
+  if (sample.trim()) params.set('sample_user_message', sample.trim());
+  if (affection !== '') params.set('affection', String(Math.max(0, Math.min(100, parseInt(affection, 10) || 0))));
+  if (phase) params.set('story_phase', phase);
+  if (mood) params.set('mood', mood);
+  if (storyline.trim()) params.set('storyline_id', storyline.trim());
+  if (customVars.trim()) {
+    try {
+      const parsed = JSON.parse(customVars);
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+        throw new Error('custom_vars must be object');
+      }
+      params.set('custom_vars_json', JSON.stringify(parsed));
+    } catch (e) {
+      return { error: '自定义变量 JSON 格式错误，请输入对象，例如 {"has_key":true}' };
+    }
+  }
+  const query = params.toString();
+  return { query: query ? `?${query}` : '' };
+}
+
+function buildPreviewSummaryHtml(summary = {}) {
+  const items = [
+    ['模拟消息', summary.has_sample_user_message],
+    ['世界书/记忆', summary.has_world_info],
+    ['后置规则', summary.has_post_rules],
+    ['状态快照', summary.has_state_snapshot],
+  ];
+  return `<div class="preview-section">
+    <h4>命中摘要</h4>
+    <div class="preview-summary-grid">
+      ${items.map(([label, hit]) => `<div class="preview-summary-item ${hit ? 'hit' : ''}">${hit ? '✓' : '—'} ${escHtml(label)}</div>`).join('')}
+    </div>
+  </div>`;
+}
+
 async function loadPromptPreview() {
   const container = document.getElementById('prompt-preview-content');
   if (!AdminState.currentCharId) {
@@ -37,7 +80,14 @@ async function loadPromptPreview() {
   }
   container.innerHTML = '<div class="preview-box muted">正在生成 Prompt 预览...</div>';
   try {
-    const data = await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/message-preview`);
+    const queryResult = getPromptPreviewQuery();
+    if (queryResult.error) {
+      AdminState.currentPromptPreview = null;
+      container.innerHTML = `<div class="preview-box muted">${escHtml(queryResult.error)}</div>`;
+      return;
+    }
+    const query = queryResult.query || '';
+    const data = await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/message-preview${query}`);
     AdminState.currentPromptPreview = data;
     const messages = Array.isArray(data.messages) ? data.messages : [];
     const systemParts = messages
@@ -48,6 +98,7 @@ async function loadPromptPreview() {
     const sourceSections = buildPromptSourceSections();
 
     container.innerHTML = `
+      ${buildPreviewSummaryHtml(data.preview_summary)}
       <div class="preview-section">
         <h4>System Prompt 拼装结果</h4>
         <div class="preview-box">${escHtml(systemParts.join('\n\n---\n\n') || '（无 system 内容）')}</div>

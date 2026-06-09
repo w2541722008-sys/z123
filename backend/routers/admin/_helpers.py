@@ -131,23 +131,22 @@ def _assert_story_event_unlock_refs_owned(
     memory_ids = _split_csv_ids(unlocked_memory_ids)
     greeting_ids = _split_csv_ids(unlocked_greeting_ids)
 
-    # 解锁目标只需存在且属于该角色，不要求 is_active=1
-    # 因为解锁类对象（记忆、开场白、剧情线）通常 is_active=0，
-    # 正是由故事事件触发后才激活
+    # 触发后启用目标只需存在且属于该角色，不要求 is_active=1。
+    # 这类对象通常先保持 is_active=0，由剧情事件触发后全局启用。
     if memory_ids:
         valid_memory_ids = memory_repo.admin_list_memory_ids(conn, character_id)
         bad_ids = [x for x in memory_ids if x not in valid_memory_ids]
         if bad_ids:
-            raise BadRequestError(detail=f"存在无效的记忆解锁对象：{bad_ids}")
+            raise BadRequestError(detail=f"存在无效的记忆触发后启用对象：{bad_ids}")
 
     if greeting_ids:
         valid_greeting_ids = story_repo.admin_list_greeting_ids(conn, character_id)
         bad_ids = [x for x in greeting_ids if x not in valid_greeting_ids]
         if bad_ids:
-            raise BadRequestError(detail=f"存在无效的开场白解锁对象：{bad_ids}")
+            raise BadRequestError(detail=f"存在无效的开场白触发后启用对象：{bad_ids}")
 
     if unlocked_storyline_id:
         if not story_repo.admin_get_storyline(
             conn, unlocked_storyline_id, character_id
         ):
-            raise BadRequestError(detail="解锁的剧情线不存在或不属于该角色")
+            raise BadRequestError(detail="触发后启用的剧情线不存在或不属于该角色")

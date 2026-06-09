@@ -15,6 +15,8 @@ function renderCharacterOverview(summary) {
   const activeGreetings = stats.active_greetings ?? stats.greetings ?? 0;
   const activeStorylines = stats.active_storylines ?? stats.storylines ?? 0;
   const activeEvents = stats.active_events ?? stats.events ?? 0;
+  const emptyEnableEvents = stats.empty_enable_events ?? stats.empty_unlock_events ?? 0;
+  const emptyEventContentEvents = stats.empty_event_content_events ?? 0;
 
   container.innerHTML = `
     <div class="overview-card">
@@ -48,7 +50,7 @@ function renderCharacterOverview(summary) {
         <div class="overview-stat">
           <div class="stat-label">剧情事件</div>
           <div class="stat-value">${activeEvents}</div>
-          <div class="stat-sub">缺解锁 ${stats.empty_unlock_events || 0} / 缺文案 ${stats.empty_event_content_events || 0}</div>
+          <div class="stat-sub">缺启用内容 ${emptyEnableEvents} / 缺文案 ${emptyEventContentEvents}</div>
         </div>
       </div>
     </div>
@@ -144,11 +146,13 @@ function buildExtraWarnings(summary) {
   if ((stats.events || 0) > 0 && (stats.storylines || 0) === 0) {
     extra.push('已经配置剧情事件，但没有剧情线，后续扩展会不方便。');
   }
-  if ((stats.empty_unlock_events || 0) > 0) {
-    extra.push(`有 ${stats.empty_unlock_events} 个剧情事件还没有配置任何解锁内容。`);
+  const emptyEnableEvents = stats.empty_enable_events ?? stats.empty_unlock_events ?? 0;
+  const emptyEventContentEvents = stats.empty_event_content_events ?? 0;
+  if (emptyEnableEvents > 0) {
+    extra.push(`有 ${emptyEnableEvents} 个剧情事件还没有配置任何触发后启用内容。`);
   }
-  if ((stats.empty_event_content_events || 0) > 0) {
-    extra.push(`有 ${stats.empty_event_content_events} 个剧情事件还没有触发文案，剧情衔接可能生硬。`);
+  if (emptyEventContentEvents > 0) {
+    extra.push(`有 ${emptyEventContentEvents} 个剧情事件还没有触发文案，剧情衔接可能生硬。`);
   }
   return extra;
 }
@@ -166,7 +170,7 @@ function buildChecklist(summary) {
   const activePostRules = stats.active_post_rules ?? (AdminState.advancedData.postRules || []).filter(x => x.is_active).length;
   const activeEvents = stats.active_events ?? events.filter(x => x.is_active).length;
   const phaseCoverage = stats.greeting_phase_coverage ?? phases.size;
-  const emptyUnlockEvents = stats.empty_unlock_events ?? events.filter(e => !(splitCsvIds(e.unlocked_memory_ids).length || splitCsvIds(e.unlocked_greeting_ids).length || e.unlocked_storyline_id)).length;
+  const emptyUnlockEvents = stats.empty_enable_events ?? stats.empty_unlock_events ?? events.filter(e => !(splitCsvIds(e.unlocked_memory_ids).length || splitCsvIds(e.unlocked_greeting_ids).length || e.unlocked_storyline_id)).length;
   const emptyEventContentEvents = stats.empty_event_content_events ?? events.filter(e => !String(e.event_content || '').trim()).length;
   const affectionVisible = AdminState.currentCharData?.affection_enabled === 1 || AdminState.currentCharData?.affection_enabled === '1';
   const hasAffectionRules = hasUsableAffectionRules(AdminState.currentCharData?.affection_rules_json);
@@ -204,10 +208,10 @@ function buildChecklist(summary) {
       ok: activeEvents === 0 || (emptyUnlockEvents === 0 && emptyEventContentEvents === 0),
       title: '剧情事件完整度',
       text: activeEvents === 0
-        ? '还没有剧情事件，后续可以按好感阈值逐步添加。'
+        ? '还没有剧情事件，后续可以按分数门槛逐步添加。'
         : ((emptyUnlockEvents === 0 && emptyEventContentEvents === 0)
-            ? '所有启用中的剧情事件都具备解锁内容和触发文案。'
-            : `当前还有 ${emptyUnlockEvents} 个事件缺解锁内容、${emptyEventContentEvents} 个事件缺触发文案。`)
+            ? '所有启用中的剧情事件都具备触发后启用内容和触发文案。'
+            : `当前还有 ${emptyUnlockEvents} 个事件缺触发后启用内容、${emptyEventContentEvents} 个事件缺触发文案。`)
     },
     {
       ok: (stats.post_rules || 0) === 0 || activePostRules > 0,

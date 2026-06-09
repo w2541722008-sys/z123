@@ -424,6 +424,10 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
 .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .preview-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .preview-toolbar .hint { font-size: 12px; color: var(--text-dim); }
+.preview-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.preview-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.preview-summary-item { background: var(--bg-deep); border: 1px solid var(--border); border-radius: 10px; padding: 10px; font-size: 12px; color: var(--text-secondary); }
+.preview-summary-item.hit { border-color: #1f5132; color: #86efac; }
 .preview-section { margin-bottom: 14px; }
 .preview-section h4 { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .08em; }
 .preview-box { background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 14px; white-space: pre-wrap; line-height: 1.7; font-size: 13px; color: #e5e7eb; max-height: 420px; overflow: auto; }

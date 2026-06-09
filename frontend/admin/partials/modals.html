@@ -106,9 +106,13 @@
           <select id="greeting-mood">
             <option value="neutral">😐 平静</option>
             <option value="happy">😊 开心</option>
+            <option value="warm">🥰 温柔</option>
+            <option value="melting">💗 心动</option>
+            <option value="cold">🧊 冷淡</option>
             <option value="sad">😢 难过</option>
             <option value="angry">😠 生气</option>
-            <option value="flirty">😉 暧昧</option>
+            <option value="shy">😳 害羞</option>
+            <option value="surprised">😲 惊讶</option>
           </select>
         </div>
       </div>
@@ -145,10 +149,10 @@
     </div>
     <div class="modal-body">
       <input type="hidden" id="storyline-id" />
-      <div class="form-group">
-        <label>名称</label>
-        <input type="text" id="storyline-name" placeholder="例如：校园初遇" />
-      </div>
+        <div class="form-group">
+          <label>名称</label>
+          <input type="text" id="storyline-name" placeholder="例如：校园初遇" />
+        </div>
       <div class="form-group">
         <label>描述</label>
         <textarea id="storyline-description" rows="3" placeholder="剧情线简介..."></textarea>
@@ -157,6 +161,7 @@
         <div class="form-group">
           <label>解锁分数</label>
           <input type="number" id="storyline-unlock-score" value="0" />
+          <div class="field-hint">用于后台排序和健康检查；当前不会自动切换用户剧情线。</div>
         </div>
         <div class="form-group">
           <label>排序</label>
@@ -165,10 +170,30 @@
       </div>
       <div class="form-group checkbox-group">
         <label><input type="checkbox" id="storyline-is-default" /> 设为默认剧情线</label>
+        <div class="field-hint">默认剧情线用于后台完整度提示；用户当前剧情线仍由剧情进展或状态上报切换。</div>
       </div>
       <div class="form-group checkbox-group">
         <label><input type="checkbox" id="storyline-is-active" checked /> 启用</label>
       </div>
+      <details class="advanced-details">
+        <summary>高级兼容字段</summary>
+        <div class="form-group">
+          <label>剧情线标识 storyline_id</label>
+          <input type="text" id="storyline-code" placeholder="例如：main_route" />
+        </div>
+        <div class="form-group">
+          <label>标题 title</label>
+          <input type="text" id="storyline-title" placeholder="不填则使用名称" />
+        </div>
+        <div class="form-group">
+          <label>解锁条件说明</label>
+          <textarea id="storyline-unlock-condition" rows="2" placeholder="例如：完成钥匙事件后启用"></textarea>
+        </div>
+        <div class="form-group">
+          <label>阶段列表 stages（一行一个）</label>
+          <textarea id="storyline-stages" rows="3" placeholder="初遇&#10;抉择&#10;结局"></textarea>
+        </div>
+      </details>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" data-action="close-storyline-modal">取消</button>
@@ -241,6 +266,7 @@
         <div class="form-group">
           <label>适用阶段（可选）</label>
           <select id="postrule-phase"></select>
+          <div class="field-hint">选择“全部阶段/通用阶段”时，所有关系/剧情阶段都会生效。</div>
         </div>
       </div>
       <div class="form-group">
@@ -282,26 +308,32 @@
         <div class="field-hint">当用户分数达到此值时自动触发</div>
       </div>
       <div class="form-group">
-        <label>解锁内容</label>
+        <label>自定义触发变量（可选）</label>
+        <input type="text" id="event-trigger-custom-key" placeholder="例如：has_key,opened_gate" />
+        <div class="field-hint">需要 AI 在状态更新里写入同名 custom 变量后才触发；多个变量用逗号分隔。</div>
+      </div>
+      <div class="form-group">
+        <label>触发后启用内容</label>
         <div class="selector-grid">
           <div class="selector-panel">
-            <h4>解锁的记忆条目</h4>
+            <h4>启用的记忆条目</h4>
             <div id="event-memory-selector" class="selector-list">
               <div class="selector-empty">暂无记忆条目</div>
             </div>
           </div>
           <div class="selector-panel">
-            <h4>解锁的开场白</h4>
+            <h4>启用的开场白</h4>
             <div id="event-greeting-selector" class="selector-list">
               <div class="selector-empty">暂无开场白</div>
             </div>
           </div>
         </div>
+        <div class="field-hint">v1 会把选中资产设为启用，属于当前全局语义；不是单个用户私有解锁。</div>
       </div>
       <div class="form-group">
-        <label>解锁的剧情线</label>
+        <label>触发后启用的剧情线</label>
         <select id="event-storyline-id">
-          <option value="">不解锁剧情线</option>
+          <option value="">不启用剧情线</option>
         </select>
       </div>
       <div class="form-group">

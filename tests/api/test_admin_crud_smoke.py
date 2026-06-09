@@ -348,6 +348,191 @@ class TestAdminInsights:
             response = client.get("/api/admin/character/nonexistent/config-summary")
         assert response.status_code == 404
 
+    def test_message_preview_passes_conn_and_sample_user_message(self, admin_client):
+        app, client = admin_client
+        char_row = FakeRow({
+            "id": "luna",
+            "name": "露娜",
+            "description": "",
+            "system_prompt": "你是露娜",
+            "opening_message": "你好",
+            "structured_asset_json": '{"runtime_layers":{"base_profile":"角色档案"}}',
+            "runtime_cache_json": "",
+            "card_type": "scenario",
+            "asset_type": "character",
+            "life_profile_json": "{}",
+            "affection_rules_json": '{"scenario_type":"adventure"}',
+            "phase_behaviors_json": "{}",
+        })
+        conn = FakeSequenceConn([
+            FakeQueryResult(one=char_row),
+            FakeQueryResult(many=[
+                FakeRow({
+                    "id": 1,
+                    "keywords": "地下室钥匙",
+                    "trigger_logic": "any",
+                    "content": "地下室钥匙能打开北侧暗门。",
+                    "position": "before",
+                    "priority": 10,
+                    "selective": 1,
+                    "constant": 0,
+                    "sticky": 0,
+                    "cooldown": 0,
+                }),
+            ]),
+            FakeQueryResult(many=[
+                FakeRow({"content": "回复前先检查剧情后果。", "priority": 10}),
+            ]),
+            FakeQueryResult(one={
+                "affection_rules_json": '{"scenario_type":"adventure"}',
+                "affection_enabled": 1,
+            }),
+        ])
+        with override_db(app, conn):
+            response = client.get(
+                "/api/admin/character/luna/message-preview?sample_user_message=地下室钥匙",
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        system_content = data["messages"][0]["content"]
+        assert "地下室钥匙能打开北侧暗门。" in system_content
+        assert "回复前先检查剧情后果。" in system_content
+        assert data["messages"][-1] == {"role": "user", "content": "地下室钥匙"}
+        assert any("FROM character_memories" in sql for sql, _ in conn.executed)
+        assert any("FROM character_post_rules" in sql for sql, _ in conn.executed)
+
+    def test_message_preview_without_sample_includes_constant_memory_and_general_post_rule(self, admin_client):
+        app, client = admin_client
+        char_row = FakeRow({
+            "id": "luna",
+            "name": "露娜",
+            "description": "",
+            "system_prompt": "你是露娜",
+            "opening_message": "你好",
+            "structured_asset_json": '{"runtime_layers":{"base_profile":"角色档案"}}',
+            "runtime_cache_json": "",
+            "card_type": "scenario",
+            "asset_type": "character",
+            "life_profile_json": "{}",
+            "affection_rules_json": '{"scenario_type":"adventure"}',
+            "phase_behaviors_json": "{}",
+        })
+        conn = FakeSequenceConn([
+            FakeQueryResult(one=char_row),
+            FakeQueryResult(many=[
+                FakeRow({
+                    "id": 2,
+                    "keywords": "",
+                    "trigger_logic": "any",
+                    "content": "王城常驻设定：夜晚会宵禁。",
+                    "position": "after",
+                    "priority": 10,
+                    "selective": 0,
+                    "constant": 1,
+                    "sticky": 0,
+                    "cooldown": 0,
+                }),
+            ]),
+            FakeQueryResult(many=[
+                FakeRow({"content": "全部阶段规则：不要跳过玩家选择。", "priority": 10}),
+            ]),
+            FakeQueryResult(one={
+                "affection_rules_json": '{"scenario_type":"adventure"}',
+                "affection_enabled": 1,
+            }),
+        ])
+
+        with override_db(app, conn):
+            response = client.get("/api/admin/character/luna/message-preview")
+
+        assert response.status_code == 200
+        system_content = response.json()["messages"][0]["content"]
+        assert "王城常驻设定：夜晚会宵禁。" in system_content
+        assert "全部阶段规则：不要跳过玩家选择。" in system_content
+
+    def test_message_preview_accepts_custom_vars_and_storyline_filters(self, admin_client):
+        from services.cache_service import cache
+        cache.clear()
+        app, client = admin_client
+        char_row = FakeRow({
+            "id": "luna",
+            "name": "露娜",
+            "description": "",
+            "system_prompt": "你是露娜",
+            "opening_message": "你好",
+            "structured_asset_json": '{"runtime_layers":{"base_profile":"角色档案"}}',
+            "runtime_cache_json": "",
+            "card_type": "scenario",
+            "asset_type": "character",
+            "life_profile_json": "{}",
+            "affection_rules_json": '{"scenario_type":"adventure"}',
+            "phase_behaviors_json": "{}",
+        })
+        conn = FakeSequenceConn([
+            FakeQueryResult(one=char_row),
+            FakeQueryResult(many=[
+                FakeRow({
+                    "id": 3,
+                    "keywords": "@storyline:7,地下室钥匙",
+                    "trigger_logic": "any",
+                    "content": "剧情线七专属设定：钥匙来自钟楼。",
+                    "position": "before",
+                    "priority": 10,
+                    "selective": 1,
+                    "constant": 0,
+                    "sticky": 0,
+                    "cooldown": 0,
+                }),
+            ]),
+            FakeQueryResult(many=[
+                FakeRow({"content": "剧情线七专属规则：回应必须提到钟声。", "priority": 10}),
+            ]),
+            FakeQueryResult(one={
+                "affection_rules_json": '{"scenario_type":"adventure"}',
+                "affection_enabled": 1,
+            }),
+            FakeQueryResult(one={"name": "钟楼线"}),
+        ])
+
+        with override_db(app, conn):
+            response = client.get(
+                "/api/admin/character/luna/message-preview"
+                "?sample_user_message=地下室钥匙"
+                "&storyline_id=7"
+                "&custom_vars_json=%7B%22has_key%22%3Atrue%7D",
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        system_content = data["messages"][0]["content"]
+        assert "剧情线七专属设定：钥匙来自钟楼。" in system_content
+        assert "剧情线七专属规则：回应必须提到钟声。" in system_content
+        assert "- 当前剧情线：钟楼线" in system_content
+        assert "- has_key：True" in system_content
+        assert data["character_state"]["custom_vars"] == {
+            "has_key": True,
+            "_wi_sticky": {},
+            "_wi_cooldown": {},
+        }
+        assert data["preview_summary"]["has_sample_user_message"] is True
+        assert data["preview_summary"]["has_world_info"] is True
+        assert data["preview_summary"]["has_post_rules"] is True
+        assert data["preview_summary"]["has_state_snapshot"] is True
+
+    def test_message_preview_rejects_invalid_custom_vars_json(self, admin_client):
+        from services.cache_service import cache
+        cache.clear()
+        app, client = admin_client
+        conn = FakeSequenceConn([])
+
+        with override_db(app, conn):
+            response = client.get(
+                "/api/admin/character/luna/message-preview?custom_vars_json=%7Bbroken",
+            )
+
+        assert response.status_code == 400
+
 
 # ── Admin 子路由鉴权守卫 ────────────────────────────────────────
 

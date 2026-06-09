@@ -195,7 +195,7 @@ const ChatStream = ((ChatState) => {
     const toast = document.createElement('div');
     const isUpgrade = eventData.type === 'phase_upgrade';
     toast.className = isUpgrade ? 'story-event-toast phase-upgrade-toast' : 'story-event-toast';
-    const title = eventData.title || '剧情解锁';
+    const title = eventData.title || '剧情事件';
     const desc = eventData.description || '';
     const icon = isUpgrade ? '💕' : '🎬';
     toast.innerHTML = `<div class="event-title">${icon} ${escapeHtml(title)}</div>${desc ? `<div class="event-desc">${escapeHtml(desc)}</div>` : ''}`;
@@ -211,10 +211,10 @@ const ChatStream = ((ChatState) => {
   function showEventDetail(eventData) {
     const unlocked = eventData.unlocked || {};
     const parts = [];
-    if (unlocked.memories?.length) parts.push(`解锁记忆 ${unlocked.memories.length} 条`);
-    if (unlocked.greetings?.length) parts.push(`解锁开场白 ${unlocked.greetings.length} 个`);
-    if (unlocked.storyline_id) parts.push('解锁新剧情线');
-    const content = eventData.event_content || parts.join('、') || '剧情已解锁';
+    if (unlocked.memories?.length) parts.push(`启用记忆 ${unlocked.memories.length} 条`);
+    if (unlocked.greetings?.length) parts.push(`启用开场白 ${unlocked.greetings.length} 个`);
+    if (unlocked.storyline_id) parts.push('启用新剧情线');
+    const content = eventData.event_content || parts.join('、') || '剧情已启用';
     UI.toast(`${eventData.title}\n\n${content}`, 'info', 5000);
   }
 

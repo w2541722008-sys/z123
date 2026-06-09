@@ -148,6 +148,32 @@ class TestComputeConfigWarnings:
         assert not any("好感度规则" in x for x in w)
 
 
+class TestStoryEventHealthStats:
+    def test_counts_empty_enable_targets_and_empty_event_content(self):
+        from services.character_insights_service import compute_story_event_health_stats
+
+        stats = compute_story_event_health_stats([
+            {
+                "unlocked_memory_ids": "",
+                "unlocked_greeting_ids": "",
+                "unlocked_storyline_id": None,
+                "event_content": "",
+            },
+            {
+                "unlocked_memory_ids": "1",
+                "unlocked_greeting_ids": "",
+                "unlocked_storyline_id": None,
+                "event_content": "推进剧情",
+            },
+        ])
+
+        assert stats == {
+            "empty_enable_events": 1,
+            "empty_unlock_events": 1,
+            "empty_event_content_events": 1,
+        }
+
+
 # ── compute_completeness_score ──────────────────────────
 
 class TestComputeCompletenessScore:

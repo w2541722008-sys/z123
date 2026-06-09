@@ -3,7 +3,7 @@
 
 从 character_state.py 拆分出来，职责：
     - 检查好感度阈值触发剧情事件
-    - 解锁记忆条目、开场白、剧情线
+    - 触发后启用记忆条目、开场白、剧情线
     - 更新用户剧情进度
 """
 from __future__ import annotations
@@ -58,12 +58,12 @@ def _should_trigger_event(
     return True
 
 
-def _unlock_event_assets(
+def _enable_event_assets(
     conn: ConnType,
     event: dict[str, Any],
     character_id: str,
 ) -> dict[str, Any]:
-    """解锁事件关联的记忆、开场白、剧情线。返回解锁内容摘要。"""
+    """全局启用事件关联的记忆、开场白、剧情线。返回启用内容摘要。"""
     unlocked: dict[str, Any] = {}
 
     if event["unlocked_memory_ids"]:
@@ -92,6 +92,15 @@ def _unlock_event_assets(
         unlocked["storyline_id"] = storyline_id
 
     return unlocked
+
+
+def _unlock_event_assets(
+    conn: ConnType,
+    event: dict[str, Any],
+    character_id: str,
+) -> dict[str, Any]:
+    """兼容旧内部测试/调用名；实际语义是触发后全局启用资产。"""
+    return _enable_event_assets(conn, event, character_id)
 
 
 def _persist_story_progress(
@@ -128,7 +137,7 @@ def check_and_trigger_story_events(
     检查并触发剧情事件。
 
     当用户好感度达到事件触发阈值且自定义变量条件满足时，自动触发对应的剧情事件，
-    解锁相关的记忆、开场白、剧情线等内容。
+    全局启用相关的记忆、开场白、剧情线等内容。
     """
     triggered: list[dict[str, Any]] = []
     _custom_vars = custom_vars or {}
@@ -152,7 +161,7 @@ def check_and_trigger_story_events(
                 "description": event["description"] or "",
                 "trigger_score": event["trigger_score"],
                 "event_content": event["event_content"] or "",
-                "unlocked": _unlock_event_assets(conn, event, character_id),
+                "unlocked": _enable_event_assets(conn, event, character_id),
             }
             triggered.append(event_data)
 
