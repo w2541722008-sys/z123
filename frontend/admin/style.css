@@ -197,6 +197,16 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
 .field-group select { width: 100%; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-primary); padding: 8px 12px; font-size: 13px; outline: none; }
 .field-row { display: flex; gap: 12px; flex-wrap: wrap; }
 .field-row .field-group { flex: 1; min-width: 140px; }
+.section-help {
+  margin: -4px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-deep);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .section-title {
   font-size: 13px;
   text-transform: uppercase;
@@ -226,6 +236,48 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
 .save-status { font-size: 13px; color: var(--text-secondary); }
 .save-status.ok { color: var(--success-light); }
 .save-status.err { color: var(--danger-light); }
+
+.editor-risk-card {
+  border: 1px solid #5b3a00;
+  background: #1d1606;
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  margin: 0 0 16px;
+}
+.editor-risk-title {
+  color: #fbbf24;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.editor-risk-item {
+  color: #f8d28b;
+  font-size: 12px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+.raw-json-details {
+  border: 1px dashed var(--border-hover);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  background: var(--bg-deep);
+  margin: 12px 0 16px;
+}
+.raw-json-details summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.raw-json-note {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 8px 0 10px;
+}
+.raw-json-details .field-group {
+  margin-bottom: 0;
+}
 
 /* ---- 只读文本域 ---- */
 .field-readonly {

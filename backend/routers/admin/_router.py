@@ -5,10 +5,8 @@ from fastapi import APIRouter, Depends
 
 from core.auth import get_admin_user
 
-from ._helpers import _admin_rate_limit
-
 router = APIRouter(
-    dependencies=[Depends(get_admin_user), Depends(_admin_rate_limit)],
+    dependencies=[Depends(get_admin_user)],
     tags=["admin"],
 )
 

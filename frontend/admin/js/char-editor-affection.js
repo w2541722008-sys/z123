@@ -59,7 +59,10 @@ function renderAffectionRuleEditor(value) {
   const positive = baseRules.filter(([, , score]) => score >= 0);
   const negative = baseRules.filter(([, , score]) => score < 0);
   const knownKeys = new Set(allRules.map(([key]) => key));
-  const customEntries = Object.entries(parsed).filter(([key]) => key !== 'enabled' && !knownKeys.has(key));
+  const metaKeys = (typeof AdminCharEditorFields !== 'undefined' && AdminCharEditorFields.AFFECTION_META_KEYS)
+    ? AdminCharEditorFields.AFFECTION_META_KEYS
+    : new Set(['enabled', 'daily_cap', 'allow_regression', 'show_bar', 'scenario_type']);
+  const customEntries = Object.entries(parsed).filter(([key]) => !metaKeys.has(key) && !knownKeys.has(key));
 
   const buildRows = (list) => list.map(([key, label, score]) => `
     <div class="affection-rule-row">
@@ -80,7 +83,7 @@ function renderAffectionRuleEditor(value) {
         </div>
         <label class="checkbox-group" style="margin-left:auto;">
           <input type="checkbox" id="affection-enabled-override" data-affection-sync="true" ${parsed.enabled === false ? '' : 'checked'} />
-          <span>启用该角色的${typeConfig.metricName}规则</span>
+          <span>启用规则计算</span>
         </label>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button type="button" class="btn btn-ghost" data-action="reset-affection-rules">↺ 一键恢复默认</button>
@@ -98,7 +101,7 @@ function renderAffectionRuleEditor(value) {
       </div>
       <div class="affection-card" style="margin-top:10px;">
         <h4>自定义事件</h4>
-        <div id="affection-custom-list" class="affection-custom-list">
+        <div id="affection-custom-list" class="affection-custom-list" data-original-custom-keys="${escHtml(JSON.stringify(customEntries.map(([key]) => key)))}">
           ${customEntries.length ? customEntries.map(([key, score]) => `
             <div class="affection-custom-row">
               <input type="text" data-affection-custom-key value="${escHtml(key)}" placeholder="事件名，例如：study_together" />
@@ -113,16 +116,6 @@ function renderAffectionRuleEditor(value) {
       </div>
       <div class="affection-card" style="margin-top:10px;">
         <h4>⚙️ 高级配置</h4>
-        ${cardType === 'scenario' ? `
-        <div class="affection-rule-row">
-          <div class="affection-rule-name">剧情类型（scenario_type）<span style="color:#666">（决定使用哪套剧情 System Prompt 和沉浸度事件）</span></div>
-          <select data-affection-meta="scenario_type" data-affection-refresh="true">
-            <option value="" ${!parsed.scenario_type ? 'selected' : ''}>默认（冒险剧情）</option>
-            <option value="adventure" ${parsed.scenario_type === 'adventure' ? 'selected' : ''}>🗡️ 冒险剧情</option>
-            <option value="romance" ${parsed.scenario_type === 'romance' ? 'selected' : ''}>💕 恋爱剧情</option>
-          </select>
-        </div>
-        ` : ''}
         <div class="affection-rule-row">
           <div class="affection-rule-name">每日${typeConfig.metricName}涨幅上限（daily_cap）<span style="color:#666">（默认 15，设为 0 = 不限制，适合剧情沙盒）</span></div>
           <input type="number" data-affection-meta="daily_cap" value="${parsed.daily_cap != null ? parsed.daily_cap : ''}" placeholder="15" min="0" max="100" />
@@ -147,7 +140,7 @@ function renderAffectionRuleEditor(value) {
       <div class="affection-note">
         说明：<br />
         - 留空表示"沿用系统默认值"；<br />
-        - enabled = false 表示这张角色卡关闭好感度系统；<br />
+        - “启用规则计算”关闭后才会停止该角色的${typeConfig.metricName}计算；<br />
         - daily_cap = 0 表示不限制每日涨幅，适合剧情沙盒让重度玩家一次性通关；<br />
         - 自定义事件名尽量用英文下划线，例如 study_together；<br />
         - 建议分值尽量控制在 -15 到 +15 之间。
@@ -196,6 +189,11 @@ function validateAffectionRulesEditor() {
 
   const issues = [];
   let filledCount = 0;
+  const rawRules = document.getElementById('field-affection_rules_json');
+  if (rawRules) {
+    const jsonCheck = AdminCharEditorFields.validateAffectionRulesJson(rawRules.value);
+    if (!jsonCheck.ok) issues.push(jsonCheck.message);
+  }
 
   document.querySelectorAll('[data-affection-key]').forEach(input => {
     const key = input.getAttribute('data-affection-key');
@@ -249,21 +247,57 @@ function validateAffectionRulesEditor() {
 function syncAffectionRulesEditor() {
   const target = document.getElementById('field-affection_rules_json');
   if (!target) return;
-  const obj = {};
+  if (document.activeElement === target || target.dataset.affectionRawEdited === 'true') {
+    validateAffectionRulesEditor();
+    return;
+  }
+  let obj = {};
+  try {
+    const parsed = JSON.parse(target.value || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      obj = parsed;
+    }
+  } catch (_) {
+    const status = document.getElementById('affection-editor-status');
+    if (status) {
+      status.className = 'affection-status warn';
+      status.textContent = '规则 JSON 不是合法 JSON，保存会被阻止。';
+    }
+    return;
+  }
+  const scenarioTypeField = document.getElementById('field-scenario_type');
+  const scenarioType = scenarioTypeField ? scenarioTypeField.value : '';
 
   const enabledCheckbox = document.getElementById('affection-enabled-override');
   if (enabledCheckbox && !enabledCheckbox.checked) {
     obj.enabled = false;
+  } else {
+    delete obj.enabled;
+  }
+  if (scenarioType) {
+    obj.scenario_type = scenarioType;
+  } else {
+    delete obj.scenario_type;
   }
 
   document.querySelectorAll('[data-affection-key]').forEach(input => {
     const key = input.getAttribute('data-affection-key');
     const raw = String(input.value || '').trim();
-    if (!raw) return;
+    if (!raw) {
+      delete obj[key];
+      return;
+    }
     const num = parseInt(raw, 10);
     if (!Number.isNaN(num)) obj[key] = num;
   });
 
+  const customList = document.getElementById('affection-custom-list');
+  try {
+    const originalCustomKeys = JSON.parse(customList?.dataset?.originalCustomKeys || '[]');
+    originalCustomKeys.forEach(key => delete obj[key]);
+  } catch (_) {
+    // dataset 异常时忽略，下面仍会写入当前可见的自定义事件。
+  }
   document.querySelectorAll('.affection-custom-row').forEach(row => {
     const key = row.querySelector('[data-affection-custom-key]')?.value?.trim();
     const raw = row.querySelector('[data-affection-custom-score]')?.value?.trim();
@@ -280,12 +314,14 @@ function syncAffectionRulesEditor() {
       if (val === 'true') obj[metaKey] = true;
       else if (val === 'false') obj[metaKey] = false;
       else if (val && val !== '') obj[metaKey] = val; // scenario_type 等字符串类型
-      // 空值不写入，使用系统默认
+      else delete obj[metaKey]; // 空值不写入，使用系统默认
     } else if (el.type === 'number') {
       const raw = String(el.value || '').trim();
       if (raw !== '') {
         const num = parseInt(raw, 10);
         if (!Number.isNaN(num)) obj[metaKey] = num;
+      } else {
+        delete obj[metaKey];
       }
     }
   });
@@ -301,7 +337,7 @@ function refreshAffectionEditor() {
   if (!affectionField || !AdminState.currentCharData) return;
 
   const currentValue = affectionField.value;
-  const affectionContainer = affectionField.closest('.field-group');
+  const affectionContainer = document.querySelector('.affection-editor');
   if (!affectionContainer) return;
 
   // 重新渲染编辑器

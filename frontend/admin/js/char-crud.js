@@ -174,42 +174,75 @@ async function saveChar() {
     return;
   }
 
+  syncAffectionRulesEditor();
+  syncLifeProfileEditor();
+  syncPhaseBehaviorsEditor();
+
+  const riskWarnings = AdminCharEditorFields.getRiskWarnings({
+    cardType: document.getElementById('field-card_type')?.value || AdminState.currentCharData?.card_type || 'intimate',
+    lifeProfileJson: document.getElementById('field-life_profile_json')?.value || AdminState.currentCharData?.life_profile_json || '{}',
+    systemPrompt: document.getElementById('field-system_prompt')?.value || '',
+    primarySystemPrompt: document.getElementById('field-rl__primary_system_prompt')?.value || AdminState.currentCharData?.rl__primary_system_prompt || '',
+    openingMessage: document.getElementById('field-opening_message')?.value || '',
+    affectionEnabled: document.getElementById('field-affection_enabled')?.value ?? AdminState.currentCharData?.affection_enabled,
+    affectionRulesJson: document.getElementById('field-affection_rules_json')?.value || AdminState.currentCharData?.affection_rules_json || '{}',
+  });
+  if (riskWarnings.length > 0) {
+    const confirmed = await showConfirm(`检测到 ${riskWarnings.length} 个配置提醒：\n\n${riskWarnings.join('\n')}\n\n仍然保存？`, '保存提醒');
+    if (!confirmed) {
+      AdminState.isSaving = false;
+      return;
+    }
+  }
+
   const updates = {};
 
   try {
-    for (const section of FIXED_SECTIONS) {
-      for (const field of section.fields) {
-        const el = document.getElementById(`field-${field}`);
-        if (!el) continue;
-        if (field === 'tags') {
-          updates.tags = formTagsToServer(el.value);
-          continue;
-        }
-        if (field === 'affection_rules_json') {
-          syncAffectionRulesEditor();
-          updates[field] = validateJsonString(el.value, '好感度规则');
-          continue;
-        }
-        if (field === 'life_profile_json') {
-          syncLifeProfileEditor();
-          updates[field] = validateJsonString(el.value, '人生档案');
-          continue;
-        }
-        if (field === 'phase_behaviors_json') {
-          syncPhaseBehaviorsEditor();
-          updates[field] = validateJsonString(el.value, '阶段行为');
-          continue;
-        }
-        let val = el.value;
-        if (FIXED_FIELD_META[field]?.type === 'number') val = parseInt(val, 10) || 0;
-        if (['is_visible', 'import_locked', 'affection_enabled'].includes(field)) val = parseInt(val, 10);
-        updates[field] = val;
+    for (const field of AdminCharEditorFields.listAllFixedFields()) {
+      const el = document.getElementById(`field-${field}`);
+      if (!el) continue;
+      if (field === 'tags') {
+        updates.tags = formTagsToServer(el.value);
+        continue;
       }
+      if (field === 'affection_rules_json') {
+        syncAffectionRulesEditor();
+        const jsonCheck = AdminCharEditorFields.validateAffectionRulesJson(el.value);
+        if (!jsonCheck.ok) throw new Error(jsonCheck.message);
+        updates[field] = el.value.trim() || '{}';
+        continue;
+      }
+      if (field === 'life_profile_json') {
+        syncLifeProfileEditor();
+        updates[field] = validateJsonString(el.value, '人生档案');
+        continue;
+      }
+      if (field === 'phase_behaviors_json') {
+        syncPhaseBehaviorsEditor();
+        updates[field] = validateJsonString(el.value, '阶段行为');
+        continue;
+      }
+      let val = el.value;
+      if (FIXED_FIELD_META[field]?.type === 'number') val = parseInt(val, 10) || 0;
+      if (['is_visible', 'import_locked', 'affection_enabled'].includes(field)) val = parseInt(val, 10);
+      updates[field] = val;
+    }
+
+    const scenarioTypeEl = document.getElementById('field-scenario_type');
+    if (scenarioTypeEl && !Object.prototype.hasOwnProperty.call(updates, 'affection_rules_json')) {
+      const mergedRules = AdminCharEditorFields.upsertAffectionMeta(
+        AdminState.currentCharData?.affection_rules_json || '{}',
+        'scenario_type',
+        scenarioTypeEl.value
+      );
+      updates.affection_rules_json = JSON.stringify(mergedRules, null, 2);
     }
 
     for (const rlKey of AdminState.currentRlFields) {
       const el = document.getElementById(`field-rl__${rlKey}`);
       if (!el) continue;
+      const jsonCheck = AdminCharEditorFields.validateDangerousRuntimeJson(rlKey, el.value);
+      if (!jsonCheck.ok) throw new Error(jsonCheck.message);
       updates[`rl__${rlKey}`] = el.value;
     }
   } catch (e) {

@@ -177,10 +177,17 @@ function bindAdminInputEvents() {
     if (target.matches('[data-update-len="true"]')) {
       updateLen(target);
     }
+    if (target.matches('[data-affection-raw-json="true"]')) {
+      target.dataset.affectionRawEdited = 'true';
+      validateAffectionRulesEditor();
+      return;
+    }
     if (
       target.matches('[data-affection-key], [data-affection-custom-key], [data-affection-custom-score], [data-affection-meta]')
       || target.matches('[data-affection-sync="true"]')
     ) {
+      const rawRules = document.getElementById('field-affection_rules_json');
+      if (rawRules) rawRules.dataset.affectionRawEdited = 'false';
       syncAffectionRulesEditor();
     }
     if (target.matches('[data-phase-behavior-input="true"]')) {
@@ -195,6 +202,8 @@ function bindAdminInputEvents() {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     if (target.matches('[data-affection-refresh="true"]')) {
+      const rawRules = document.getElementById('field-affection_rules_json');
+      if (rawRules) rawRules.dataset.affectionRawEdited = 'false';
       syncAffectionRulesEditor();
       refreshAffectionEditor();
       return;
@@ -203,6 +212,8 @@ function bindAdminInputEvents() {
       target.matches('[data-affection-key], [data-affection-custom-key], [data-affection-custom-score], [data-affection-meta]')
       || target.matches('[data-affection-sync="true"]')
     ) {
+      const rawRules = document.getElementById('field-affection_rules_json');
+      if (rawRules) rawRules.dataset.affectionRawEdited = 'false';
       syncAffectionRulesEditor();
     }
     if (target.matches('[data-user-check-all="true"]')) {

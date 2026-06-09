@@ -7,14 +7,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import Request
-
 from core.database import ConnType
 from core.exceptions import BadRequestError
 from repositories import admin_audit_repository as audit_repo
 from repositories import character_admin_memory_repository as memory_repo
 from repositories import character_admin_story_repository as story_repo
-from services import rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -40,18 +37,6 @@ _ADMIN_EDITABLE_FIELDS = {
     "phase_behaviors_json",
     "life_profile_json",
 }
-
-
-def _admin_rate_limit(request: Request) -> None:
-    """管理后台全局限流：每 IP 每分钟最多 60 次请求。"""
-    rate_limit.enforce_rate_limit(
-        "admin",
-        rate_limit.get_request_client_ip(request),
-        limit=60,
-        window_seconds=60,
-        detail="请求过于频繁",
-    )
-
 
 def _transaction(conn, func):
     """

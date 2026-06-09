@@ -115,7 +115,6 @@ def admin_client(app_client):
     """TestClient with admin dependencies preconfigured."""
     app, client = app_client
     from core.auth import CurrentUser, get_admin_user, get_current_user, get_optional_user
-    from routers.admin._helpers import _admin_rate_limit
 
     admin = CurrentUser(
         id=1,
@@ -129,7 +128,6 @@ def admin_client(app_client):
     app.dependency_overrides[get_current_user] = lambda: admin
     app.dependency_overrides[get_optional_user] = lambda: admin
     app.dependency_overrides[get_admin_user] = lambda: admin
-    app.dependency_overrides[_admin_rate_limit] = lambda: None
     yield app, client
     app.dependency_overrides = saved_overrides
 

@@ -19,6 +19,11 @@ const PHASE_EMOJI_MAPS = {
   intimate: INTIMATE_PHASE_EMOJIS,
   scenario: SCENARIO_PHASE_EMOJIS,
 };
+const ADVANCED_DATA_CACHE_MS = 30000;
+let advancedDataLoadPromise = null;
+let advancedDataLoadingCharId = null;
+let advancedDataLoadedCharId = null;
+let advancedDataLoadedAt = 0;
 
 function getPhaseLabels() {
   const ct = AdminState.currentCharData?.card_type || 'intimate';
@@ -81,7 +86,7 @@ async function crudSave(endpoint, data, modalId, idValue) {
     : `${AdminAPI.API}/character/${AdminState.currentCharId}${endpoint}`;
   try {
     await AdminAPI.apiFetch(url, { method: idValue ? 'PUT' : 'POST', body: JSON.stringify(data) });
-    closeModal(modalId); toast('保存成功'); loadAdvancedData();
+    closeModal(modalId); toast('保存成功'); loadAdvancedData({ force: true });
   } catch (e) { toast('保存失败：' + e.message); }
 }
 async function crudDelete(endpoint, idValue, modalId, confirmMsg) {
@@ -90,15 +95,23 @@ async function crudDelete(endpoint, idValue, modalId, confirmMsg) {
   if (!confirmed) return;
   try {
     await AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}${endpoint}/${idValue}`, { method: 'DELETE' });
-    closeModal(modalId); toast('删除成功'); loadAdvancedData();
+    closeModal(modalId); toast('删除成功'); loadAdvancedData({ force: true });
   } catch (e) { toast('删除失败：' + e.message); }
 }
 
 // ============================================================
 // 加载高级配置数据
 // ============================================================
-async function loadAdvancedData() {
+function renderAdvancedData() {
+  updatePhaseButtons();
+  renderMemories(); updateMemoryCategoryFilter(); renderCategories();
+  renderGreetings(); renderStorylines(); renderPostRules(); renderEvents();
+  updateStorylineOptions(); renderWorldInfoGuide(); renderStoryGuide();
+}
+
+async function loadAdvancedData(options = {}) {
   if (!AdminState.currentCharId) return;
+  const characterId = AdminState.currentCharId;
   const worldinfoEmpty = document.getElementById('worldinfo-empty');
   const worldinfoContent = document.getElementById('worldinfo-content');
   if (worldinfoEmpty) worldinfoEmpty.style.display = 'none';
@@ -107,21 +120,48 @@ async function loadAdvancedData() {
   const storyContent = document.getElementById('story-content');
   if (storyEmpty) storyEmpty.style.display = 'none';
   if (storyContent) storyContent.style.display = '';
-  try {
+  const canUseCache = !options.force
+    && advancedDataLoadedCharId === characterId
+    && Date.now() - advancedDataLoadedAt < ADVANCED_DATA_CACHE_MS;
+  if (canUseCache) {
+    renderAdvancedData();
+    return;
+  }
+  if (advancedDataLoadPromise && advancedDataLoadingCharId === characterId) {
+    await advancedDataLoadPromise;
+    renderAdvancedData();
+    return;
+  }
+  if (advancedDataLoadPromise) {
+    advancedDataLoadPromise = null;
+    advancedDataLoadingCharId = null;
+  }
+
+  advancedDataLoadingCharId = characterId;
+  advancedDataLoadPromise = (async () => {
     const [memories, categories, greetings, storylines, postRules, events] = await Promise.all([
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/memories`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/memory-categories`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/greetings`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/storylines`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/post-rules`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${AdminState.currentCharId}/story-events`),
+      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/memories`),
+      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/memory-categories`),
+      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/greetings`),
+      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/storylines`),
+      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/post-rules`),
+      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/story-events`),
     ]);
+    if (AdminState.currentCharId !== characterId) return;
     AdminState.advancedData = { memories, categories, greetings, storylines, postRules, events };
-    updatePhaseButtons();
-    renderMemories(); updateMemoryCategoryFilter(); renderCategories();
-    renderGreetings(); renderStorylines(); renderPostRules(); renderEvents();
-    updateStorylineOptions(); renderWorldInfoGuide(); renderStoryGuide();
-  } catch (e) { toast('加载配置失败：' + e.message); }
+    advancedDataLoadedCharId = characterId;
+    advancedDataLoadedAt = Date.now();
+  })();
+
+  try {
+    await advancedDataLoadPromise;
+    renderAdvancedData();
+  } catch (e) {
+    toast('加载配置失败：' + e.message);
+  } finally {
+    advancedDataLoadPromise = null;
+    advancedDataLoadingCharId = null;
+  }
 }
 
 // ============================================================

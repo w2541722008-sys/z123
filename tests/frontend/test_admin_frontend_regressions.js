@@ -378,12 +378,47 @@ function testDashboardRendersActionableConfigHealth() {
   assert.ok(!html.includes('sk-secret'));
 }
 
-testAdvancedEditorsAcceptStringDomIds();
-testScenarioScoreCopyUsesImmersion();
-testClearUserSelectionHandlesMissingCheckAll();
-testDownloadCsvPreservesZeroValues();
-testAuditLogCoversAllBackendActions();
-testOrderStatusFilterMatchesBackendEnum();
-testDashboardRendersActionableConfigHealth();
+async function testAdvancedDataLoadReusesInFlightAndCachedRequest() {
+  let requestCount = 0;
+  const context = createAdminScriptContext('frontend/admin/js/char-advanced.js', {
+    AdminAPI: {
+      API: '/api/admin',
+      apiFetch: async () => {
+        requestCount += 1;
+        return [];
+      },
+    },
+  });
+  context.AdminState.currentCharId = 'luna';
+  context.AdminState.currentCharData = { card_type: 'scenario', affection_enabled: true };
 
-console.log('✅ 管理后台前端回归测试全部通过');
+  await Promise.all([
+    context.loadAdvancedData(),
+    context.loadAdvancedData(),
+  ]);
+  assert.strictEqual(requestCount, 6);
+
+  await context.loadAdvancedData();
+  assert.strictEqual(requestCount, 6);
+
+  await context.loadAdvancedData({ force: true });
+  assert.strictEqual(requestCount, 12);
+}
+
+async function run() {
+  testAdvancedEditorsAcceptStringDomIds();
+  testScenarioScoreCopyUsesImmersion();
+  testClearUserSelectionHandlesMissingCheckAll();
+  testDownloadCsvPreservesZeroValues();
+  testAuditLogCoversAllBackendActions();
+  testOrderStatusFilterMatchesBackendEnum();
+  testDashboardRendersActionableConfigHealth();
+  await testAdvancedDataLoadReusesInFlightAndCachedRequest();
+
+  console.log('✅ 管理后台前端回归测试全部通过');
+}
+
+run().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
