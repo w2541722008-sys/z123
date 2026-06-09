@@ -20,6 +20,14 @@ const PHASE_EMOJI_MAPS = {
   scenario: SCENARIO_PHASE_EMOJIS,
 };
 const ADVANCED_DATA_CACHE_MS = 30000;
+const ADVANCED_DATA_ENDPOINTS = [
+  ['memories', '记忆条目', '/memories'],
+  ['categories', '记忆分类', '/memory-categories'],
+  ['greetings', '开场白', '/greetings'],
+  ['storylines', '剧情线', '/storylines'],
+  ['postRules', '后置规则', '/post-rules'],
+  ['events', '剧情事件', '/story-events'],
+];
 let advancedDataLoadPromise = null;
 let advancedDataLoadingCharId = null;
 let advancedDataLoadedCharId = null;
@@ -106,7 +114,7 @@ function renderAdvancedData() {
   updatePhaseButtons();
   renderMemories(); updateMemoryCategoryFilter(); renderCategories();
   renderGreetings(); renderStorylines(); renderPostRules(); renderEvents();
-  updateStorylineOptions(); renderWorldInfoGuide(); renderStoryGuide();
+  updateStorylineOptions(); updatePromptPreviewStorylineOptions(); renderWorldInfoGuide(); renderStoryGuide();
 }
 
 async function loadAdvancedData(options = {}) {
@@ -139,18 +147,28 @@ async function loadAdvancedData(options = {}) {
 
   advancedDataLoadingCharId = characterId;
   advancedDataLoadPromise = (async () => {
-    const [memories, categories, greetings, storylines, postRules, events] = await Promise.all([
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/memories`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/memory-categories`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/greetings`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/storylines`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/post-rules`),
-      AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}/story-events`),
-    ]);
+    const results = await Promise.allSettled(
+      ADVANCED_DATA_ENDPOINTS.map(([, , path]) => (
+        AdminAPI.apiFetch(`${AdminAPI.API}/character/${characterId}${path}`)
+      ))
+    );
     if (AdminState.currentCharId !== characterId) return;
-    AdminState.advancedData = { memories, categories, greetings, storylines, postRules, events };
+    const nextData = { memories: [], categories: [], greetings: [], storylines: [], postRules: [], events: [] };
+    const failedLabels = [];
+    results.forEach((result, index) => {
+      const [key, label] = ADVANCED_DATA_ENDPOINTS[index];
+      if (result.status === 'fulfilled') {
+        nextData[key] = Array.isArray(result.value) ? result.value : [];
+      } else {
+        failedLabels.push(label);
+      }
+    });
+    AdminState.advancedData = nextData;
     advancedDataLoadedCharId = characterId;
     advancedDataLoadedAt = Date.now();
+    if (failedLabels.length) {
+      toast(`部分配置加载失败：${failedLabels.join('、')}。其他模块已正常显示。`);
+    }
   })();
 
   try {
@@ -420,6 +438,16 @@ function updateStorylineOptions() {
     const defaultLabel = selId==='event-storyline-id'?'不启用剧情线':(selId==='postrule-storyline'?'通用规则':'默认');
     sel.innerHTML = `<option value="">${defaultLabel}</option>` + options; if (current) sel.value = current;
   });
+}
+function updatePromptPreviewStorylineOptions() {
+  const sel = document.getElementById('prompt-preview-storyline');
+  if (!sel) return;
+  const current = sel.value;
+  const options = (AdminState.advancedData.storylines || [])
+    .map(s => `<option value="${s.id}">${escHtml(s.name || `剧情线#${s.id}`)}${s.is_active ? '' : '（禁用）'}</option>`)
+    .join('');
+  sel.innerHTML = '<option value="">默认剧情线</option>' + options;
+  if (current) sel.value = current;
 }
 function openStorylineModal() {
   document.getElementById('storyline-id').value=''; document.getElementById('storyline-name').value='';

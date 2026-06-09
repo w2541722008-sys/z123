@@ -67,6 +67,7 @@ async function loadCharList() {
 
 async function selectChar(charId) {
   AdminState.currentCharId = charId;
+  AdminState.currentPromptPreview = null;
   document.querySelectorAll('.char-item').forEach(el => {
     el.classList.toggle('active', el.dataset.charId === String(charId));
   });
@@ -80,13 +81,14 @@ async function selectChar(charId) {
   overviewPanel.innerHTML = '<div class="empty-state"><div class="icon">⏳</div><div>加载中...</div></div>';
   try {
     const raw = await AdminAPI.apiFetch(`${AdminAPI.API}/character/${charId}`);
+    if (AdminState.currentCharId !== charId) return;
     const normalized = normalizeCharacterDetail(raw);
     AdminState.currentCharData = normalized;
     AdminState.isDirty = false;
     renderEditPanel(normalized);
     loadCharacterSummary();
-    loadPromptPreview();
   } catch (e) {
+    if (AdminState.currentCharId !== charId) return;
     overviewPanel.innerHTML = `<div class="empty-state" style="color:var(--danger-light)">加载失败：${escHtml(e.message)}</div>`;
   }
 }

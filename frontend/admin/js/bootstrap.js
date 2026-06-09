@@ -67,7 +67,10 @@ async function switchCharTab(tab) {
 
   if (tab === 'worldinfo' && AdminState.currentCharId) loadAdvancedData();
   if (tab === 'story' && AdminState.currentCharId) loadAdvancedData();
-  if (tab === 'preview' && AdminState.currentCharId) loadPromptPreview();
+  if (tab === 'preview' && AdminState.currentCharId) {
+    await loadAdvancedData();
+    loadPromptPreview();
+  }
   _syncHash(false, tab);
   _updateBreadcrumb(false, tab);
 }

@@ -170,12 +170,17 @@
           <option value="shy">shy</option>
           <option value="surprised">surprised</option>
         </select>
-        <input type="number" id="prompt-preview-storyline" class="input-search" placeholder="剧情线ID" title="模拟剧情线ID" style="width:110px;" />
-        <input type="text" id="prompt-preview-custom-vars" class="input-search" placeholder='custom_vars JSON，如 {"has_key":true}' style="min-width:240px;" />
+        <select id="prompt-preview-storyline" class="input-search" title="模拟剧情线" style="width:150px;">
+          <option value="">默认剧情线</option>
+        </select>
         <button class="btn btn-ghost" data-action="load-prompt-preview">🔄 刷新预览</button>
         <button class="btn btn-primary" data-action="copy-prompt-preview">📋 复制</button>
       </div>
     </div>
+    <details class="preview-advanced-options">
+      <summary>高级模拟变量</summary>
+      <input type="text" id="prompt-preview-custom-vars" class="input-search" placeholder='custom_vars JSON，如 {"has_key":true}' />
+    </details>
     <div id="prompt-preview-content">
       <div class="preview-box muted">请先从左侧选择角色。</div>
     </div>

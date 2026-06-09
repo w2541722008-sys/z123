@@ -118,13 +118,10 @@ function hasUsableAffectionRules(raw) {
 function buildExtraWarnings(summary) {
   const extra = [];
   const stats = summary?.stats || {};
-  const storylines = AdminState.advancedData.storylines || [];
-  const greetings = AdminState.advancedData.greetings || [];
-  const phases = new Set(greetings.filter(x => x.is_active).map(x => x.story_phase));
   const activeMemories = stats.active_memories ?? stats.memories ?? 0;
   const activeGreetings = stats.active_greetings ?? stats.greetings ?? 0;
   const activePostRules = stats.active_post_rules ?? stats.post_rules ?? 0;
-  const phaseCoverage = stats.greeting_phase_coverage ?? phases.size;
+  const phaseCoverage = stats.greeting_phase_coverage ?? 0;
   const affectionVisible = AdminState.currentCharData?.affection_enabled === 1 || AdminState.currentCharData?.affection_enabled === '1';
   const hasAffectionRules = hasUsableAffectionRules(AdminState.currentCharData?.affection_rules_json);
 
@@ -140,7 +137,7 @@ function buildExtraWarnings(summary) {
   if ((stats.post_rules || 0) > 0 && activePostRules === 0) {
     extra.push('后置规则虽然配置了，但目前全部处于禁用状态。');
   }
-  if (storylines.length > 0 && !summary.default_storyline_id) {
+  if ((stats.active_storylines ?? stats.storylines ?? 0) > 0 && !summary.default_storyline_id) {
     extra.push('已有剧情线，但还没有设置默认剧情线。');
   }
   if ((stats.events || 0) > 0 && (stats.storylines || 0) === 0) {
@@ -159,19 +156,14 @@ function buildExtraWarnings(summary) {
 
 function buildChecklist(summary) {
   const stats = summary?.stats || {};
-  const greetings = AdminState.advancedData.greetings || [];
-  const storylines = AdminState.advancedData.storylines || [];
-  const memories = AdminState.advancedData.memories || [];
-  const events = AdminState.advancedData.events || [];
-  const phases = new Set(greetings.filter(x => x.is_active).map(x => x.story_phase));
-  const activeMemories = stats.active_memories ?? memories.filter(x => x.is_active).length;
-  const activeGreetings = stats.active_greetings ?? greetings.filter(x => x.is_active).length;
-  const activeStorylines = stats.active_storylines ?? storylines.filter(x => x.is_active).length;
-  const activePostRules = stats.active_post_rules ?? (AdminState.advancedData.postRules || []).filter(x => x.is_active).length;
-  const activeEvents = stats.active_events ?? events.filter(x => x.is_active).length;
-  const phaseCoverage = stats.greeting_phase_coverage ?? phases.size;
-  const emptyUnlockEvents = stats.empty_enable_events ?? stats.empty_unlock_events ?? events.filter(e => !(splitCsvIds(e.unlocked_memory_ids).length || splitCsvIds(e.unlocked_greeting_ids).length || e.unlocked_storyline_id)).length;
-  const emptyEventContentEvents = stats.empty_event_content_events ?? events.filter(e => !String(e.event_content || '').trim()).length;
+  const activeMemories = stats.active_memories ?? stats.memories ?? 0;
+  const activeGreetings = stats.active_greetings ?? stats.greetings ?? 0;
+  const activeStorylines = stats.active_storylines ?? stats.storylines ?? 0;
+  const activePostRules = stats.active_post_rules ?? stats.post_rules ?? 0;
+  const activeEvents = stats.active_events ?? stats.events ?? 0;
+  const phaseCoverage = stats.greeting_phase_coverage ?? 0;
+  const emptyUnlockEvents = stats.empty_enable_events ?? stats.empty_unlock_events ?? 0;
+  const emptyEventContentEvents = stats.empty_event_content_events ?? 0;
   const affectionVisible = AdminState.currentCharData?.affection_enabled === 1 || AdminState.currentCharData?.affection_enabled === '1';
   const hasAffectionRules = hasUsableAffectionRules(AdminState.currentCharData?.affection_rules_json);
 

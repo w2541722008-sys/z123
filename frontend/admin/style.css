@@ -425,6 +425,22 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
 .preview-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .preview-toolbar .hint { font-size: 12px; color: var(--text-dim); }
 .preview-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.preview-advanced-options {
+  border: 1px dashed var(--border-hover);
+  border-radius: var(--radius-lg);
+  background: var(--bg-deep);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.preview-advanced-options summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+.preview-advanced-options .input-search {
+  margin-top: 10px;
+}
 .preview-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
 .preview-summary-item { background: var(--bg-deep); border: 1px solid var(--border); border-radius: 10px; padding: 10px; font-size: 12px; color: var(--text-secondary); }
 .preview-summary-item.hit { border-color: #1f5132; color: #86efac; }
@@ -662,6 +678,13 @@ body { font-family: var(--font-stack); background: var(--bg-deepest); color: var
   /* 移动端显示汉堡菜单按钮 */
   .hamburger-btn { display: block !important; }
   .save-bar { padding-right: 20px; }
+  .preview-actions > .input-search,
+  .preview-actions > .btn {
+    width: 100% !important;
+  }
+  .preview-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 /* ---- 数据库存储用量进度条 ---- */

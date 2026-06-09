@@ -30,6 +30,8 @@ function createDocumentStub({ missingIds = new Set() } = {}) {
       style: {},
       classList: {
         toggles: [],
+        add() {},
+        remove() {},
         toggle(name, value) {
           this.toggles.push([name, value]);
         },
@@ -58,6 +60,9 @@ function createDocumentStub({ missingIds = new Set() } = {}) {
     getElementById(id) {
       if (missingIds.has(id)) return null;
       return this.get(id);
+    },
+    querySelector() {
+      return null;
     },
     querySelectorAll() {
       return [];
@@ -496,6 +501,42 @@ function testOverviewUsesBackendAuthoritativeEventStats() {
   assert.match(html, /当前还有 1 个事件缺触发后启用内容、1 个事件缺触发文案/);
 }
 
+function testOverviewDoesNotRequireAdvancedDataForDefaultStorylineWarning() {
+  const context = createAdminScriptContext('frontend/admin/js/overview.js');
+  context.AdminState.currentCharData = {
+    name: '露娜',
+    system_prompt: '你是露娜',
+    affection_enabled: 0,
+    affection_rules_json: '{}',
+  };
+  context.AdminState.advancedData.storylines = [];
+  context.renderCharacterOverview({
+    name: '露娜',
+    subtitle: '',
+    completeness: 60,
+    default_storyline_id: null,
+    warnings: [],
+    stats: {
+      memories: 3,
+      active_memories: 3,
+      greetings: 2,
+      active_greetings: 2,
+      greeting_phase_coverage: 2,
+      storylines: 1,
+      active_storylines: 1,
+      post_rules: 0,
+      active_post_rules: 0,
+      events: 0,
+      active_events: 0,
+      empty_enable_events: 0,
+      empty_event_content_events: 0,
+    },
+  });
+
+  const html = context.document.get('tab-overview').innerHTML;
+  assert.match(html, /已有剧情线，但还没有设置默认剧情线/);
+}
+
 function testChatStreamUsesEnableTerminologyForStoryEvents() {
   const source = readProjectFile('frontend/modules/chat-stream.js');
   assert.ok(source.includes('启用记忆'));
@@ -643,6 +684,106 @@ function testDashboardRendersActionableConfigHealth() {
   assert.ok(!html.includes('sk-secret'));
 }
 
+function testAdminAssetVersionsAreUnified() {
+  const indexHtml = readProjectFile('frontend/admin/index.html');
+  const adminAssets = [
+    ...indexHtml.matchAll(/(?:src|href)="(\/api\/frontend\/admin\/(?:js\/[^"?]+\.js|style\.css)\?v=([^"]+))"/g),
+  ];
+  assert.ok(adminAssets.length > 10, 'expected admin JS/CSS assets in index.html');
+  const versions = new Set(adminAssets.map((match) => match[2]));
+  assert.deepStrictEqual([...versions], ['20260609b']);
+
+  const partialsLoader = readProjectFile('frontend/admin/js/partials-loader.js');
+  assert.ok(partialsLoader.includes('ADMIN_BUILD_VERSION'));
+  assert.ok(partialsLoader.includes("'.html?v='"));
+}
+
+async function testSelectCharDoesNotAutoLoadPromptPreview() {
+  let previewLoadCount = 0;
+  const context = createAdminScriptContext('frontend/admin/js/char-list.js', {
+    AdminAPI: {
+      API: '/api/admin',
+      apiFetch: async () => ({
+        id: 'luna',
+        name: '露娜',
+        tags: [],
+        is_visible: true,
+        import_locked: false,
+        affection_enabled: true,
+      }),
+    },
+    switchCharTab: async () => {},
+    normalizeCharacterDetail: (value) => value,
+    renderEditPanel: () => {},
+    loadCharacterSummary: () => {},
+    loadPromptPreview: () => { previewLoadCount += 1; },
+  });
+
+  await context.selectChar('luna');
+
+  assert.strictEqual(previewLoadCount, 0);
+}
+
+async function testSelectCharIgnoresStaleDetailResponse() {
+  let resolveFetch;
+  let renderCount = 0;
+  const context = createAdminScriptContext('frontend/admin/js/char-list.js', {
+    AdminAPI: {
+      API: '/api/admin',
+      apiFetch: async () => new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    },
+    switchCharTab: async () => {},
+    normalizeCharacterDetail: (value) => value,
+    renderEditPanel: () => { renderCount += 1; },
+    loadCharacterSummary: () => {},
+    loadPromptPreview: () => {},
+  });
+
+  const promise = context.selectChar('old_char');
+  context.AdminState.currentCharId = 'new_char';
+  resolveFetch({
+    id: 'old_char',
+    name: '旧角色',
+    tags: [],
+    is_visible: true,
+    import_locked: false,
+    affection_enabled: true,
+  });
+  await promise;
+
+  assert.strictEqual(renderCount, 0);
+  assert.notStrictEqual(context.AdminState.currentCharData?.id, 'old_char');
+}
+
+function testPromptPreviewUsesStorylineSelect() {
+  const panelHtml = readProjectFile('frontend/admin/partials/char-panels.html');
+  assert.ok(panelHtml.includes('<select id="prompt-preview-storyline"'));
+  assert.ok(!panelHtml.includes('type="number" id="prompt-preview-storyline"'));
+}
+
+async function testPreviewTabLoadsAdvancedDataForStorylineOptions() {
+  const context = createAdminScriptContext('frontend/admin/js/bootstrap.js', {
+    loadAdvancedData: () => {
+      context.advancedLoadCount += 1;
+    },
+    loadPromptPreview: () => {
+      context.previewLoadCount += 1;
+    },
+    history: { replaceState() {} },
+    location: { hash: '' },
+  });
+  context.advancedLoadCount = 0;
+  context.previewLoadCount = 0;
+  context.AdminState.currentCharId = 'luna';
+
+  await context.switchCharTab('preview');
+
+  assert.strictEqual(context.advancedLoadCount, 1);
+  assert.strictEqual(context.previewLoadCount, 1);
+}
+
 async function testAdvancedDataLoadReusesInFlightAndCachedRequest() {
   let requestCount = 0;
   const context = createAdminScriptContext('frontend/admin/js/char-advanced.js', {
@@ -670,6 +811,40 @@ async function testAdvancedDataLoadReusesInFlightAndCachedRequest() {
   assert.strictEqual(requestCount, 12);
 }
 
+async function testAdvancedDataLoadKeepsSuccessfulSectionsWhenOneRequestFails() {
+  let renderCount = 0;
+  let toastMessage = '';
+  const context = createAdminScriptContext('frontend/admin/js/char-advanced.js', {
+    AdminAPI: {
+      API: '/api/admin',
+      apiFetch: async (url) => {
+        if (url.endsWith('/memory-categories')) {
+          throw new Error('分类接口失败');
+        }
+        if (url.endsWith('/memories')) return [{ id: 1, keywords: '钥匙', content: '钥匙设定', is_active: true }];
+        return [];
+      },
+    },
+    toast: (message) => {
+      toastMessage = message;
+    },
+  });
+  context.AdminState.currentCharId = 'luna';
+  context.AdminState.currentCharData = { card_type: 'scenario', affection_enabled: true };
+  context.renderAdvancedData = () => {
+    renderCount += 1;
+  };
+
+  await context.loadAdvancedData({ force: true });
+
+  assert.strictEqual(renderCount, 1);
+  assert.strictEqual(context.AdminState.advancedData.memories.length, 1);
+  assert.ok(Array.isArray(context.AdminState.advancedData.categories));
+  assert.strictEqual(context.AdminState.advancedData.categories.length, 0);
+  assert.match(toastMessage, /部分配置加载失败/);
+  assert.match(toastMessage, /记忆分类/);
+}
+
 async function run() {
   testAdvancedEditorsAcceptStringDomIds();
   testScenarioScoreCopyUsesImmersion();
@@ -681,6 +856,7 @@ async function run() {
   await testPromptPreviewSendsSimulatorInputs();
   await testPromptPreviewInvalidCustomVarsBlocksRequest();
   testOverviewUsesBackendAuthoritativeEventStats();
+  testOverviewDoesNotRequireAdvancedDataForDefaultStorylineWarning();
   testChatStreamUsesEnableTerminologyForStoryEvents();
   testGreetingMoodOptionsMatchBackendEnum();
   testClearUserSelectionHandlesMissingCheckAll();
@@ -688,7 +864,13 @@ async function run() {
   testAuditLogCoversAllBackendActions();
   testOrderStatusFilterMatchesBackendEnum();
   testDashboardRendersActionableConfigHealth();
+  testAdminAssetVersionsAreUnified();
+  await testSelectCharDoesNotAutoLoadPromptPreview();
+  await testSelectCharIgnoresStaleDetailResponse();
+  testPromptPreviewUsesStorylineSelect();
+  await testPreviewTabLoadsAdvancedDataForStorylineOptions();
   await testAdvancedDataLoadReusesInFlightAndCachedRequest();
+  await testAdvancedDataLoadKeepsSuccessfulSectionsWhenOneRequestFails();
 
   console.log('✅ 管理后台前端回归测试全部通过');
 }
