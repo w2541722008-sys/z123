@@ -383,6 +383,8 @@ def _select_mode_builder(
 ) -> Callable[..., list[dict[str, str]]]:
     if card_type == "scenario":
         return scenario_builder
+    if card_type == "intimate":
+        return character_builder
     if asset_type == "character":
         return character_builder
     if asset_type == "scenario":

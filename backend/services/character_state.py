@@ -630,6 +630,28 @@ def apply_state_delta(
     return _persist_and_finalize(conn, snapshot, commit=commit)
 
 
+def tick_passive_character_state(
+    conn: ConnType,
+    *,
+    user_id: int | str,
+    character_id: str,
+    commit: bool = False,
+) -> dict[str, Any]:
+    """在 AI 未上报 STATE_UPDATE 时推进被动状态。
+
+    只处理沉默轮数与可自然恢复的心情，不触发好感、阶段、剧情事件。
+    """
+    state_dict = get_character_state(conn, user_id, character_id, for_update=True)
+    snapshot = CharacterStateSnapshot.from_legacy_dict(
+        state_dict, user_id, character_id
+    )
+    snapshot = _reset_daily_fields_if_needed(snapshot)
+    snapshot = _resolve_mood_and_moments(snapshot, {})
+    snapshot = _resolve_custom_vars_and_silence(snapshot, {})
+    upsert_character_state(conn, snapshot, commit=commit)
+    return _serialize_public_character_state(conn, snapshot.to_dict(), character_id)
+
+
 def _resolve_show_bar_preference(conn: ConnType, character_id: str) -> bool:
     """从角色配置读取状态栏显隐偏好，解析失败时保持显示。"""
     try:

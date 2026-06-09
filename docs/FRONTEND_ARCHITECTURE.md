@@ -40,5 +40,5 @@ API 基地址：生产环境默认 `/api`（Nginx 同源代理），开发环境
 
 ## 质量门禁
 
-- 前端单测：`node tests/test_frontend_utils.js`
-- 后台 action 校验：`node tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json`
+- 前端单测：`node tests/frontend/test_frontend_utils.js`
+- 后台 action 校验：`node tests/frontend/check_admin_actions.js --strict --allow-list=tests/frontend/admin_action_allowlist.json`

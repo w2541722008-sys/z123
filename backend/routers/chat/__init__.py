@@ -41,6 +41,7 @@ from services.chat_send import (
     store_user_message,
 )
 from services.chat_query import count_chat_messages
+from services.chat_stream._guest import build_guest_quota_payload
 from services.memory_service import run_memory_summary_background
 from services.rate_limit import enforce_rate_limit, get_request_client_ip
 
@@ -204,6 +205,15 @@ def chat_guest_stream(
         detail="游客请求过于频繁，请稍后再试或登录继续",
     )
     return _build_guest_route_response(conn=conn, payload=payload, request=request)
+
+
+@router.get("/chat/guest-quota")
+def chat_guest_quota(
+    request: Request,
+    conn: ConnType = Depends(get_db_dep),
+) -> dict[str, Any]:
+    guest_ip = get_request_client_ip(request)
+    return build_guest_quota_payload(conn, guest_ip)
 
 
 @router.post("/chat/regenerate")

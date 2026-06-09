@@ -10,7 +10,7 @@ async function loadDashboard() {
   if (!box) return;
   box.innerHTML = skeletonHtml(2, 4);
   try {
-    const [stats, trend, mediaMissing] = await Promise.all([
+    const [stats, trend, mediaMissing, configHealth] = await Promise.all([
       AdminAPI.apiFetch(`${AdminAPI.API}/dashboard/stats`),
       AdminAPI.apiFetch(`${AdminAPI.API}/dashboard/trend?days=7`),
       AdminAPI.apiFetch(`${AdminAPI.API}/media-missing`).catch(() => ({
@@ -19,16 +19,28 @@ async function loadDashboard() {
         items: [],
         truncated: false,
       })),
+      AdminAPI.apiFetch(`${AdminAPI.API}/config-health`).catch(() => ({
+        ok: false,
+        summary: { ready_count: 0, warning_count: 0, error_count: 1 },
+        items: [{
+          key: 'config_health',
+          label: '配置健康',
+          status: 'error',
+          value: '检查失败',
+          hint: '无法读取配置健康状态，请检查后台服务。',
+        }],
+      })),
     ]);
-    renderDashboard(stats, trend, mediaMissing);
+    renderDashboard(stats, trend, mediaMissing, configHealth);
   } catch (e) {
     box.innerHTML = `<div class="no-results" style="color:#f87171">加载失败：${escHtml(e.message)}</div>`;
   }
 }
 
-function renderDashboard(stats, trend, mediaMissing = {}) {
+function renderDashboard(stats, trend, mediaMissing = {}, configHealth = {}) {
   const box = document.getElementById('dashboard-content');
   if (!box) return;
+  const configHealthClasses = new Set(['ready', 'warning', 'error']);
   const dist = stats.plan_distribution || {};
   const trendData = trend.trend || [];
   const maxUsers = Math.max(...trendData.map(t => t.new_users), 1);
@@ -45,6 +57,26 @@ function renderDashboard(stats, trend, mediaMissing = {}) {
   const truncatedHint = mediaMissing.truncated
     ? '<div class="media-missing-hint">仅展示样例，请点击“刷新缺失清单”获取最新结果。</div>'
     : '';
+  const configItems = Array.isArray(configHealth.items) ? configHealth.items : [];
+  const configSummary = configHealth.summary || {};
+  const configStatusClass = configHealth.ok ? 'ok' : (Number(configSummary.error_count || 0) > 0 ? 'error' : 'warn');
+  const configStatusText = configHealth.ok
+    ? '关键配置正常'
+    : `正常 ${configSummary.ready_count || 0} 项，警告 ${configSummary.warning_count || 0} 项，错误 ${configSummary.error_count || 0} 项`;
+  const configHealthHtml = configItems.length > 0
+    ? configItems.map(item => {
+      const itemStatus = configHealthClasses.has(item.status) ? item.status : 'warning';
+      return `
+        <div class="config-health-item ${itemStatus}">
+          <div class="config-health-main">
+            <span class="config-health-label">${escHtml(item.label || item.key || '')}</span>
+            <span class="config-health-value">${escHtml(item.value || '')}</span>
+          </div>
+          <div class="config-health-hint">${escHtml(item.hint || '')}</div>
+        </div>
+      `;
+    }).join('')
+    : '<div class="media-missing-empty">暂无配置健康数据</div>';
 
   const storage = stats.storage || {};
   const usedPercent = Number(storage.used_percent || 0);
@@ -91,6 +123,14 @@ function renderDashboard(stats, trend, mediaMissing = {}) {
         <div class="storage-bar-fill ${storageClass}" style="width:${storageBarWidth}%"></div>
       </div>
       <div class="storage-footer">已使用 ${usedPercent}%${usedPercent >= 80 ? ' ⚠️ 请关注扩容' : ''}</div>
+    </div>
+
+    <div class="dashboard-section config-health-section">
+      <div class="media-missing-header">
+        <h3>🧭 配置健康</h3>
+      </div>
+      <div class="config-health-status ${configStatusClass}">${configStatusText}</div>
+      <div class="config-health-list">${configHealthHtml}</div>
     </div>
 
     <div class="dashboard-section">

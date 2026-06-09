@@ -4,12 +4,11 @@ from fastapi import HTTPException
 
 from core.auth import CurrentUser, get_admin_user, get_current_user
 from core.database import get_db_dep
-from conftest import (
+from tests.support.assertions import assert_detail_as_list, assert_detail_as_string
+from tests.support.db import (
+    FakeDummyConn,
     FakeQueryResult,
     FakeSequenceConn,
-    FakeDummyConn,
-    assert_detail_as_list,
-    assert_detail_as_string,
 )
 
 

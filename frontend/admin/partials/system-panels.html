@@ -26,7 +26,7 @@
         <button class="btn btn-ghost" data-action="export-users-csv">📥 导出 CSV</button>
       </div>
     </div>
-    <div class="desc" style="margin-bottom:14px;">支持搜索、筛选、编辑和删除用户。删除会清理该用户所有关联数据。</div>
+    <div class="desc" style="margin-bottom:14px;">支持搜索、筛选、编辑和删除用户。当前删除是永久清理，适合测试号清理；停用、封禁、恢复需要后续单独接入用户状态字段。</div>
     <div class="search-bar">
       <input type="search" id="user-search" placeholder="搜索邮箱或昵称…" class="input-search" style="flex:1;min-width:180px;" />
       <select id="user-plan-filter" class="input-select">
@@ -64,16 +64,14 @@
         <button class="btn btn-ghost" data-action="export-orders-csv">📥 导出 CSV</button>
       </div>
     </div>
-    <div class="desc" style="margin-bottom:14px;">支持搜索和状态筛选，点击订单号查看完整详情。</div>
+    <div class="desc" style="margin-bottom:14px;">支持搜索和状态筛选，点击订单号查看完整详情。当前支付网关尚未接入，后台先用于查看和导出订单。</div>
     <div class="search-bar">
       <input type="search" id="order-search" placeholder="搜索订单号或用户邮箱…" class="input-search" style="flex:1;min-width:180px;" />
       <select id="order-status-filter" class="input-select">
         <option value="">全部状态</option>
         <option value="pending">待支付</option>
         <option value="paid">已支付</option>
-        <option value="expired">已过期</option>
         <option value="closed">已关闭</option>
-        <option value="refunded">已退款</option>
       </select>
       <div class="count" id="order-count-label"></div>
     </div>
@@ -101,7 +99,24 @@
       <option value="create_character">创建角色</option>
       <option value="update_character">更新角色</option>
       <option value="delete_character">删除角色</option>
+      <option value="create_memory">创建记忆</option>
+      <option value="update_memory">更新记忆</option>
+      <option value="delete_memory">删除记忆</option>
+      <option value="create_memory_category">创建记忆分类</option>
+      <option value="update_memory_category">更新记忆分类</option>
+      <option value="delete_memory_category">删除记忆分类</option>
+      <option value="create_greeting">创建开场白</option>
+      <option value="update_greeting">更新开场白</option>
+      <option value="delete_greeting">删除开场白</option>
+      <option value="create_storyline">创建剧情线</option>
+      <option value="update_storyline">更新剧情线</option>
       <option value="delete_storyline">删除剧情线</option>
+      <option value="create_post_rule">创建后置规则</option>
+      <option value="update_post_rule">更新后置规则</option>
+      <option value="delete_post_rule">删除后置规则</option>
+      <option value="create_story_event">创建剧情事件</option>
+      <option value="update_story_event">更新剧情事件</option>
+      <option value="delete_story_event">删除剧情事件</option>
     </select>
     <input type="date" id="audit-date-from" class="input-search" style="width:140px;" title="起始日期" />
     <span style="color:var(--text-dim);font-size:12px;">至</span>

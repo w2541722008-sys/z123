@@ -54,5 +54,5 @@ conn = FakeSequenceConn([
 
 ## 相关
 - CLAUDE.md "测试 Mock"规则："修改路由/服务 SQL 后，必须同步更新对应测试的 FakeQueryResult"
-- `tests/factories.py` — FakeSequenceConn 定义
+- `tests/support/db.py` — FakeSequenceConn 定义
 - `tests/unit/` — 主要使用场景

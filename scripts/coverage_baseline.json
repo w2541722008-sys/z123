@@ -1,0 +1,20 @@
+{
+  "allowed_drop_percent": 2,
+  "modules": {
+    "backend/routers/admin/_helpers.py": 62.24,
+    "backend/routers/admin/_router.py": 100.0,
+    "backend/routers/admin/characters_core.py": 48.09,
+    "backend/routers/admin/characters_insights.py": 57.89,
+    "backend/routers/admin/characters_memory.py": 76.84,
+    "backend/routers/admin/characters_rules_events.py": 57.65,
+    "backend/routers/admin/characters_story.py": 56.73,
+    "backend/routers/admin/dashboard.py": 73.91,
+    "backend/routers/admin/orders.py": 76.09,
+    "backend/routers/admin/users.py": 60.43,
+    "backend/routers/characters.py": 36.09,
+    "backend/services/character_state.py": 44.87,
+    "backend/services/chat_stream/_postprocess.py": 33.72,
+    "backend/services/email.py": 25.4
+  },
+  "total": 70.14
+}

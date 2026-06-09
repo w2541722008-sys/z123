@@ -47,5 +47,5 @@
 ## 开发注意
 
 - 交互事件统一走 `data-action` + 委托分发
-- 新增 action 需通过 `tests/check_admin_actions.js --strict`
+- 新增 action 需通过 `tests/frontend/check_admin_actions.js --strict`
 - 页面脚本顺序在 `frontend/admin/index.html` 已定义，调整时需同步验证

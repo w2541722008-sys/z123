@@ -14,7 +14,7 @@
 - 后端：Python 3.10+、FastAPI、Uvicorn、httpx、psycopg2（ThreadedConnectionPool）
 - 数据库：PostgreSQL（Supabase）+ Alembic 迁移（16 个版本）
 - 前端：原生 HTML/CSS/JavaScript（IIFE 模块模式）
-- 测试：pytest（1242+ tests）+ Node.js 脚本
+- 测试：pytest（1280 左右 Python tests）+ Node.js 脚本
 
 ## 本地开发
 
@@ -52,11 +52,11 @@ python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ```bash
 cd backend
-python3 -m pytest ../tests/ -q --ignore=../tests/integration
+python3 -m pytest ../tests/unit ../tests/service_flows ../tests/api ../tests/contracts -q
 
 cd ..
-node tests/test_frontend_utils.js
-node tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json
+node tests/frontend/test_frontend_utils.js
+node tests/frontend/check_admin_actions.js --strict --allow-list=tests/frontend/admin_action_allowlist.json
 ```
 
 ## 一键部署

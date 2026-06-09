@@ -12,15 +12,15 @@ cp .env.example .env   # 然后编辑 .env 配置 DATABASE_URL、AIFRIEND_API_KE
 # Run dev server
 cd backend && python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
-# Run tests (unit/routers/services, excludes integration)
-cd backend && python3 -m pytest ../tests/ -q --ignore=../tests/integration
+# Run tests (unit/service flows/API/contracts, excludes integration)
+cd backend && python3 -m pytest ../tests/unit ../tests/service_flows ../tests/api ../tests/contracts -q
 
 # Run a single test file
-cd backend && python3 -m pytest ../tests/unit/test_prompt_assembler_service.py -q
+cd backend && python3 -m pytest ../tests/unit/services/test_prompt_assembler.py -q
 
 # Frontend tests
-node tests/test_frontend_utils.js
-node tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json
+node tests/frontend/test_frontend_utils.js
+node tests/frontend/check_admin_actions.js --strict --allow-list=tests/frontend/admin_action_allowlist.json
 
 # DB migrations
 cd backend && python3 -m alembic upgrade head
@@ -45,7 +45,7 @@ routers/ → services/ → repositories/ → core/ + constants/
 - `backend/utils/` — 通用工具：`card_text.py`、`json_utils.py`、`stream_filter.py`
 - `frontend/modules/` — 原生 JS IIFE 模块（用户端聊天 UI，18 个模块）
 - `frontend/admin/js/` — 管理后台 JS 模块（18 个模块）
-- `tests/` — `unit/`（37 文件）、`services/`（12 文件）、`routers/`（8 文件）、`contracts/`（4 文件）、`integration/`（需真实 DB，3 文件）、`regression/`（1 文件）、`load/`（1 文件）
+- `tests/` — `support/`（测试基础设施）、`unit/`（core/services/repositories/utils）、`service_flows/`（跨 service 流程）、`api/`（TestClient 路由行为）、`contracts/`、`integration/`（需真实 DB）、`regression/`、`frontend/`、`ops/`、`load/`
 
 ## 协作规则（必须严格遵守）
 

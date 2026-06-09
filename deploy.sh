@@ -55,27 +55,27 @@ run_local_checks() {
 
   # 2. Service + API tests
   echo "  → Service & API tests..."
-  python3 -m pytest ../tests/services/ ../tests/routers/ ../tests/contracts/ -x -q || failed=1
+  python3 -m pytest ../tests/service_flows/ ../tests/api/ ../tests/contracts/ -x -q || failed=1
 
   # 3. 前端冒烟测试
   echo "  → 前端冒烟测试..."
-  node ../tests/frontend_smoke.js || failed=1
+  node ../tests/frontend/frontend_smoke.js || failed=1
 
   # 4. 前端工具函数测试
   echo "  → 前端工具函数测试..."
-  node ../tests/test_frontend_utils.js || failed=1
+  node ../tests/frontend/test_frontend_utils.js || failed=1
 
   # 5. 前端安全回归测试
   echo "  → 前端安全回归测试..."
-  node ../tests/test_frontend_security.js || failed=1
+  node ../tests/frontend/test_frontend_security.js || failed=1
 
   # 6. CSP onclick 合规检查（防止动态 onclick 被严格 CSP 拦截回归）
   echo "  → CSP onclick 合规检查..."
-  node ../tests/check_csp_onclick.js || failed=1
+  node ../tests/frontend/check_csp_onclick.js || failed=1
 
   # 7. Admin action 完整性检查
   echo "  → Admin action 检查..."
-  node ../tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json || failed=1
+  node ../tests/frontend/check_admin_actions.js --strict --allow-list=tests/frontend/admin_action_allowlist.json || failed=1
 
   popd >/dev/null
 

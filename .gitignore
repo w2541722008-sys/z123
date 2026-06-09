@@ -113,6 +113,7 @@ skills-lock.json
 .ruff_cache/
 .mypy_cache/
 .coverage
+coverage.json
 
 # Lint 专用虚拟环境
 .venv_lint/

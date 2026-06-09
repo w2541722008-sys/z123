@@ -11,8 +11,8 @@
 | 层级 | 目录 | 执行时机 | 运行时 |
 |------|------|---------|--------|
 | 单元测试 | `tests/unit/` | pre-commit | < 10s |
-| 服务测试 | `tests/services/` | pre-push, 部署门禁 | < 30s |
-| 路由测试 | `tests/routers/` | pre-push, 部署门禁 | < 30s |
+| 服务流程测试 | `tests/service_flows/` | pre-push, 部署门禁 | < 30s |
+| API 测试 | `tests/api/` | pre-push, 部署门禁 | < 30s |
 | 契约测试 | `tests/contracts/` | pre-push, 部署门禁 | < 30s |
 | 回归测试 | `tests/regression/` | 发布前 | < 60s |
 | 集成测试 | `tests/integration/` | CI 每次 PR | < 120s |
@@ -25,11 +25,11 @@
 cd backend && python3 -m pytest ../tests/unit/ -q
 
 # Push 前 — 服务 + API + 契约
-cd backend && python3 -m pytest ../tests/unit/ ../tests/services/ ../tests/routers/ ../tests/contracts/ -q
-node tests/frontend_smoke.js
+cd backend && python3 -m pytest ../tests/unit/ ../tests/service_flows/ ../tests/api/ ../tests/contracts/ -q
+node tests/frontend/frontend_smoke.js
 
 # CI / 部署前 — 全量（排除集成）
-cd backend && python3 -m pytest ../tests/ --ignore=../tests/integration -q
+cd backend && python3 -m pytest ../tests/unit/ ../tests/service_flows/ ../tests/api/ ../tests/contracts/ -q
 
 # 集成测试（需真实 PostgreSQL 测试库）
 TEST_DATABASE_URL=postgresql://... python3 -m pytest ../tests/integration/ -v
@@ -40,10 +40,10 @@ cd backend && python3 -m pytest ../tests/ -n auto --dist loadscope -q
 
 ## 测试数据工厂
 
-所有测试文件可以使用集中式数据工厂替代手写 dict（位于 `tests/factories.py`）：
+所有测试文件可以使用集中式数据工厂替代手写 dict（位于 `tests/support/factories.py`）：
 
 ```python
-from factories import UserFactory, CharacterFactory, MessageFactory
+from tests.support.factories import UserFactory, CharacterFactory, MessageFactory
 
 user = UserFactory.admin()
 char = CharacterFactory.intimate(name="露娜")

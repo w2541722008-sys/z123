@@ -4,7 +4,7 @@
 新 execute 创建新游标可正常 fetchone。这是此前线上 bug 的回归保护。
 """
 import pytest
-from conftest import FakeSequenceConn, FakeCursorConn, FakeRow, FakeQueryResult
+from tests.support.db import FakeCursorConn, FakeQueryResult, FakeRow, FakeSequenceConn
 
 
 class TestCursorInvalidationRegression:

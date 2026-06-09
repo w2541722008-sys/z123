@@ -54,7 +54,7 @@ def _db_engine():
     try:
         eng = pool.ThreadedConnectionPool(1, 5, url)
     except Exception as e:
-        pytest.skip(f"Cannot connect to test database: {e}")
+        pytest.fail(f"Cannot connect to configured TEST_DATABASE_URL: {e}")
         return
 
     yield eng

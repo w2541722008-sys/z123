@@ -429,6 +429,12 @@ def serve_admin():
     )
 
 
+@app.get("/admin", response_class=HTMLResponse)
+def serve_admin_short_path():
+    """返回后台管理页面，兼容部署文档中的 /admin 入口。"""
+    return serve_admin()
+
+
 @app.get("/forgot-password.html", response_class=HTMLResponse)
 def serve_forgot_password():
     """返回忘记密码页面 forgot-password.html。"""

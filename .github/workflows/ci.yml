@@ -29,24 +29,27 @@ jobs:
     - name: Run unit & contract tests with coverage
       run: |
         cd backend
-        python -m pytest ../tests/ -v \
-          --ignore=../tests/test_frontend_utils.js \
-          --ignore=../tests/check_admin_actions.js \
-          --ignore=../tests/integration \
+        python -m pytest ../tests/unit ../tests/service_flows ../tests/api ../tests/contracts -v \
           --cov=. \
           --cov-report=term-missing \
-          --cov-fail-under=50
+          --cov-report=json \
+          --cov-fail-under=0
+        python ../scripts/check_coverage.py
+        python ../scripts/test_quality_report.py
       env:
         DATABASE_URL: postgresql://test:test@localhost:5432/aifriend_test
 
     - name: Run integration tests (if DB available)
       run: |
         cd backend
-        python -m pytest ../tests/integration/ -v -m integration --timeout=60 || echo "Integration tests skipped (no DB)"
+        if [ -z "${TEST_DATABASE_URL:-}" ]; then
+          echo "TEST_DATABASE_URL not set; skipping integration tests."
+          exit 0
+        fi
+        python -m pytest ../tests/integration/ -v -m integration --timeout=60
       env:
         TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
         DATABASE_URL: postgresql://test:test@localhost:5432/aifriend_test
-      continue-on-error: true
 
   lint:
     name: Lint
@@ -69,6 +72,7 @@ jobs:
 
     - name: Run ruff linter
       run: |
+        cd backend
         ruff check .
 
     - name: Run mypy type check (strict modules only)
@@ -91,11 +95,11 @@ jobs:
 
     - name: Run frontend tests
       run: |
-        node tests/frontend_smoke.js
-        node tests/check_csp_onclick.js
-        node tests/test_frontend_security.js
-        node tests/check_admin_actions.js --strict --allow-list=tests/admin_action_allowlist.json
-        node tests/test_frontend_utils.js
+        node tests/frontend/frontend_smoke.js
+        node tests/frontend/check_csp_onclick.js
+        node tests/frontend/test_frontend_security.js
+        node tests/frontend/check_admin_actions.js --strict --allow-list=tests/frontend/admin_action_allowlist.json
+        node tests/frontend/test_frontend_utils.js
 
   deploy-check:
     name: Deploy Check
@@ -114,7 +118,7 @@ jobs:
         bash -n restart.sh
         bash -n rollback.sh
         bash -n deploy/backup_supabase.sh
-        python -m pytest tests/test_deploy_scripts.py -q
+        python -m pytest tests/ops/test_deploy_scripts.py -q
 
     - name: Check required files exist
       run: |

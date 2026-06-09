@@ -25,6 +25,7 @@ from services.character_affection import (
 from services.character_state import (
     _reset_daily_fields_if_needed,
     _sanitize_state_delta,
+    tick_passive_character_state,
 )
 from services.chat_send import (
     format_done_event,
@@ -36,6 +37,7 @@ from services.chat_send import (
     _persist_wi_state,
     _resolve_public_character_state,
 )
+from services.chat_query import ensure_opening_message
 from services.chat_retry import save_regenerated_version
 from services.memory_service import run_memory_summary_background
 from services.usage_guard import estimate_text_tokens, log_ai_request
@@ -68,15 +70,22 @@ def _persist_stream_result(
     message_id = None
     try:
         if user_message:
+            ensure_opening_message(save_conn, user_id, character_id, commit=False)
+        if user_message:
             store_user_message(save_conn, user_id, character_id, user_message, commit=False)
         message_id = save_assistant_message(save_conn, user_id, character_id, final_reply, commit=False)
         _log_successful_chat_request(
             save_conn, user_id=user_id, guest_ip=guest_ip, character_id=character_id,
             endpoint="/api/chat/stream", estimate=estimate, reply_text=final_reply,
         )
-        character_state = _resolve_public_character_state(
-            save_conn, user_id=user_id, character_id=character_id, delta=delta,
-        )
+        if delta:
+            character_state = _resolve_public_character_state(
+                save_conn, user_id=user_id, character_id=character_id, delta=delta,
+            )
+        else:
+            character_state = tick_passive_character_state(
+                save_conn, user_id=user_id, character_id=character_id, commit=False,
+            )
         if wi_state:
             _persist_wi_state(save_conn, user_id, character_id, wi_state)
         save_conn.commit()

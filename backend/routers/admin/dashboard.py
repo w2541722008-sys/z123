@@ -9,6 +9,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from core.auth import get_admin_user
+from core.config import (
+    configured_admin_emails,
+    email_service_configured,
+    env_has_value,
+    has_production_runtime,
+    has_safe_allowed_origins,
+)
 from core.database import ConnType, get_db_dep
 from services.db_monitor import get_stats, reset_stats
 from services.health_service import check_media_health
@@ -17,6 +24,67 @@ router = APIRouter(dependencies=[Depends(get_admin_user)], tags=["admin"])
 
 from ._helpers import _normalize_pagination, _validate_pagination_params
 from repositories import admin_dashboard_repository as dashboard_repo
+
+
+def _build_config_health_items() -> list[dict[str, Any]]:
+    email_ready = email_service_configured()
+    admin_emails = configured_admin_emails()
+    runtime_ready = has_production_runtime()
+    ai_model_ready = env_has_value("AIFRIEND_API_KEY")
+    cors_ready = has_safe_allowed_origins()
+
+    return [
+        {
+            "key": "runtime",
+            "label": "运行模式",
+            "status": "ready" if runtime_ready else "error",
+            "value": "生产模式" if runtime_ready else "未开启生产模式",
+            "hint": "生产环境需要 ENV=production 且 DEBUG=false。",
+        },
+        {
+            "key": "ai_model",
+            "label": "AI 模型",
+            "status": "ready" if ai_model_ready else "error",
+            "value": "已配置" if ai_model_ready else "未配置",
+            "hint": "未配置时聊天回复会失败。",
+        },
+        {
+            "key": "email",
+            "label": "邮件服务",
+            "status": "ready" if email_ready else "error",
+            "value": "已配置" if email_ready else "未配置",
+            "hint": "未配置时找回密码验证码无法发送。",
+        },
+        {
+            "key": "admin_access",
+            "label": "管理员入口",
+            "status": "ready" if admin_emails else "error",
+            "value": f"已配置 {len(admin_emails)} 个管理员" if admin_emails else "未配置",
+            "hint": "未配置时无法授予后台管理员权限。",
+        },
+        {
+            "key": "cors",
+            "label": "生产域名",
+            "status": "ready" if cors_ready else "error",
+            "value": "已配置真实域名" if cors_ready else "未配置真实域名",
+            "hint": "生产环境不能使用 * 或 localhost。",
+        },
+        {
+            "key": "payment",
+            "label": "支付网关",
+            "status": "warning",
+            "value": "支付网关未接入",
+            "hint": "当前只支持订单预留、查看和导出。",
+        },
+    ]
+
+
+def _summarize_config_health(items: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "ready_count": sum(1 for item in items if item["status"] == "ready"),
+        "warning_count": sum(1 for item in items if item["status"] == "warning"),
+        "error_count": sum(1 for item in items if item["status"] == "error"),
+    }
 
 
 def _parse_audit_detail(raw: Any) -> dict[str, Any]:
@@ -29,6 +97,19 @@ def _parse_audit_detail(raw: Any) -> dict[str, Any]:
         return json.loads(raw) if raw else {}
     except (json.JSONDecodeError, TypeError):
         return {}
+
+
+@router.get("/admin/config-health")
+def admin_config_health() -> dict[str, Any]:
+    """管理后台：只读配置健康检查，帮助定位上线前缺失项。"""
+    items = _build_config_health_items()
+    summary = _summarize_config_health(items)
+    return {
+        "ok": summary["error_count"] == 0 and summary["warning_count"] == 0,
+        "summary": summary,
+        "items": items,
+    }
+
 
 @router.get("/admin/db-stats")
 def get_db_stats() -> dict[str, Any]:

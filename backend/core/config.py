@@ -15,6 +15,8 @@ import os
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping
+from urllib.parse import urlparse
 
 
 def _int_env(name: str, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
@@ -31,6 +33,66 @@ def _int_env(name: str, default: int, *, minimum: int | None = None, maximum: in
     if maximum is not None and value > maximum:
         return default
     return value
+
+
+def _env_source(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
+    return env if env is not None else os.environ
+
+
+def env_has_value(name: str, env: Mapping[str, str] | None = None) -> bool:
+    """检查环境变量是否填写了非空值。"""
+    return bool(_env_source(env).get(name, "").strip())
+
+
+def csv_env_values(name: str, env: Mapping[str, str] | None = None) -> list[str]:
+    """读取逗号分隔的环境变量列表。"""
+    return [
+        item.strip()
+        for item in _env_source(env).get(name, "").split(",")
+        if item.strip()
+    ]
+
+
+def debug_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """读取 DEBUG 开关。"""
+    return _env_source(env).get("DEBUG", "false").strip().lower() in {"true", "1", "yes"}
+
+
+def has_production_runtime(env: Mapping[str, str] | None = None) -> bool:
+    """生产环境必须开启 production 并关闭 DEBUG。"""
+    source = _env_source(env)
+    return source.get("ENV", "development").strip().lower() == "production" and not debug_enabled(source)
+
+
+def configured_admin_emails(env: Mapping[str, str] | None = None) -> set[str]:
+    """读取管理员邮箱白名单。"""
+    return {item.lower() for item in csv_env_values("ADMIN_EMAILS", env)}
+
+
+def email_service_configured(env: Mapping[str, str] | None = None) -> bool:
+    """SMTP 或 Resend 至少配置一种，SMTP 必须含密码。"""
+    source = _env_source(env)
+    smtp_ready = env_has_value("SMTP_HOST", source) and env_has_value("SMTP_USER", source) and env_has_value("SMTP_PASSWORD", source)
+    return smtp_ready or env_has_value("RESEND_API_KEY", source)
+
+
+def _is_safe_allowed_origin(origin: str) -> bool:
+    normalized = origin.strip().lower()
+    if not normalized or normalized == "*":
+        return False
+
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+
+    host = parsed.hostname or ""
+    return not any(local_host in host for local_host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"))
+
+
+def has_safe_allowed_origins(env: Mapping[str, str] | None = None) -> bool:
+    """生产环境 CORS 必须全部是真实域名。"""
+    origins = csv_env_values("ALLOWED_ORIGINS", env)
+    return bool(origins) and all(_is_safe_allowed_origin(origin) for origin in origins)
 
 # ============================================================
 # 基础路径配置
@@ -153,11 +215,7 @@ SUMMARY_MAX_THREADS = _int_env("SUMMARY_MAX_THREADS", 5, minimum=1, maximum=20)
 # 认证与后台管理员配置
 # ============================================================
 # 管理后台管理员邮箱白名单，多个邮箱用英文逗号分隔
-ADMIN_EMAILS = {
-    item.strip().lower()
-    for item in os.environ.get("ADMIN_EMAILS", "").split(",")
-    if item.strip()
-}
+ADMIN_EMAILS = configured_admin_emails()
 
 # Token 默认有效 30 天。超过这个时间用户需要重新登录。
 # 可通过 .env 中的 TOKEN_EXPIRE_DAYS 覆盖。
@@ -282,7 +340,7 @@ def validate_production_config() -> list[str]:
     # 注意：DATABASE_URL 已在模块顶部检查，缺失时直接 raise RuntimeError，此处不再重复检查
     
     # 检查 DEBUG 模式（生产环境必须关闭）
-    if environment == "production" and DEBUG:
+    if environment == "production" and debug_enabled():
         missing.append("DEBUG - 生产环境必须关闭 DEBUG 模式（设置 DEBUG=false）")
     
     # 检查 AI 模型配置
@@ -290,18 +348,15 @@ def validate_production_config() -> list[str]:
         missing.append("AIFRIEND_API_KEY - AI 模型 API Key 未设置")
     
     # 检查 CORS 配置
-    origins = os.environ.get("ALLOWED_ORIGINS", "").strip()
-    if not origins or origins == "*" or "localhost" in origins.lower():
+    if not has_safe_allowed_origins():
         missing.append("ALLOWED_ORIGINS - 生产环境必须设置真实域名（不能是 * 或 localhost）")
     
     # 检查邮件服务配置（SMTP 或 Resend 至少一个）
-    smtp_configured = bool(os.environ.get("SMTP_HOST", "").strip() and os.environ.get("SMTP_USER", "").strip())
-    resend_configured = bool(os.environ.get("RESEND_API_KEY", "").strip())
-    if not smtp_configured and not resend_configured:
+    if not email_service_configured():
         missing.append("邮件服务未配置 - 需要设置 SMTP（SMTP_HOST+SMTP_USER+SMTP_PASSWORD）或 RESEND_API_KEY")
     
     # 检查管理员邮箱
-    if not ADMIN_EMAILS:
+    if not configured_admin_emails():
         missing.append("ADMIN_EMAILS - 管理员邮箱未设置")
     
     # 生产环境下，配置错误应该阻止启动
